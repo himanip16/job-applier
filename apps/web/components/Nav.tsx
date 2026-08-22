@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { api } from '../lib/api';
+import { useOverview } from '../lib/overview';
 
 /**
  * Navigation that explains itself.
@@ -22,21 +21,15 @@ const ITEMS = [
   { href: '/retro', label: 'Retrospective', hint: 'Recurring questions and recurring mistakes' },
   { href: '/profile', label: 'Profile', hint: 'You, your resume, your standing answers' },
   { href: '/answers', label: 'Answers', hint: 'Everything it has learned to answer for you' },
+  { href: '/settings', label: 'Settings', hint: 'API keys, model choice, and what each one turns on' },
 ] as const;
 
 export function Nav() {
   const pathname = usePathname();
-  const [badges, setBadges] = useState<{ runs: number; discover: number }>({ runs: 0, discover: 0 });
-
-  useEffect(() => {
-    const load = () =>
-      api<{ needsYou: { total: number }; counts: { leadsNew: number } }>('/api/overview')
-        .then((d) => setBadges({ runs: d.needsYou.total, discover: d.counts.leadsNew }))
-        .catch(() => {});
-    load();
-    const t = setInterval(load, 8000);
-    return () => clearInterval(t);
-  }, []);
+  // Shares one poller with whatever else on the page wants these numbers,
+  // rather than running a second interval against the same endpoint.
+  const { data } = useOverview();
+  const badges = { runs: data?.needsYou.total ?? 0, discover: data?.counts.leadsNew ?? 0 };
 
   return (
     <nav>

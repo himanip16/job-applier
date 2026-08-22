@@ -15,9 +15,12 @@ import { adapterFor } from './ats/registry.js';
 import { extractResumeText, assessResumeText } from './lib/resumeText.js';
 import { estimateActivityCosts, activeModels } from './llm/models.js';
 import { provider, isConfigured } from './llm/client.js';
-import { schemaProblem } from './lib/schemaCheck.js';
+import { schemaProblem, cachedSchemaProblem } from './lib/schemaCheck.js';
 import { matchCanonical, normalizeLabel, type RunEvent } from '@ja/shared';
 import { registerDiscoveryRoutes } from './routes/discovery.js';
+import { registerSettingsRoutes } from './routes/settings.js';
+import { registerJobDetailRoutes } from './routes/jobDetail.js';
+import { loadSettings } from './lib/secrets.js';
 import { isFirecrawlConfigured } from './discovery/firecrawl.js';
 import { registerTrackerRoutes } from './routes/tracker.js';
 import { registerResumeRoutes } from './routes/resume.js';
@@ -386,6 +389,8 @@ app.delete<{ Params: { id: string } }>('/api/answers/:id', async (req) => {
 registerDiscoveryRoutes(app, requireProfile);
 registerResumeRoutes(app, requireProfile);
 registerTrackerRoutes(app, requireProfile);
+registerSettingsRoutes(app);
+registerJobDetailRoutes(app);
 
 // ----------------------------------------------------------------- health ---
 
@@ -419,7 +424,19 @@ app.get('/api/overview', async () => {
   // install, so it has to survive one - a stale client or a missing table must
   // degrade a number to zero, not take the whole dashboard down with a
   // TypeError the user cannot act on.
-  const [companies, leadsNew, needsInput, needsHuman, inReview, submitted, upcomingRounds, lessons] =
+  const [
+    companies,
+    leadsNew,
+    needsInput,
+    needsHuman,
+    inReview,
+    submitted,
+    upcomingRounds,
+    lessons,
+    strongMatches,
+    leadsTotal,
+    shortlisted,
+  ] =
     await Promise.all([
       safeCount(() => prisma.company.count({ where: { enabled: true } })),
       profile
@@ -431,9 +448,18 @@ app.get('/api/overview', async () => {
       safeCount(() => prisma.application.count({ where: { status: 'SUBMITTED' } })),
       safeCount(() => prisma.interviewRound.count({ where: { status: 'SCHEDULED' } })),
       safeCount(() => prisma.lesson.count()),
+      // The headline numbers. "Strong" is the same threshold the lead cards
+      // colour green at, so the front page and the queue never disagree.
+      safeCount(() =>
+        profile
+          ? prisma.jobLead.count({ where: { profileId: profile.id, status: 'NEW', score: { gte: 70 } } })
+          : Promise.resolve(0),
+      ),
+      safeCount(() => (profile ? prisma.jobLead.count({ where: { profileId: profile.id } }) : Promise.resolve(0))),
+      safeCount(() => prisma.jobLead.count({ where: { status: 'SHORTLISTED' } })),
     ]);
 
-  const schema = await schemaProblem();
+  const schema = await cachedSchemaProblem();
 
   const standingAnswers = profile?.facts.length ?? 0;
 
@@ -452,8 +478,8 @@ app.get('/api/overview', async () => {
       done: isConfigured(),
       detail: isConfigured()
         ? `${activeModels().provider} · ${activeModels().writing}`
-        : 'Gemini has a free tier. Put GEMINI_API_KEY in .env and restart.',
-      href: null,
+        : 'Gemini has a free tier. Paste the key on the settings page — no restart needed.',
+      href: '/settings',
     },
     {
       id: 'profile',
@@ -489,8 +515,8 @@ app.get('/api/overview', async () => {
         ? companies > 0
           ? `Ready. ${companies} board(s) found so far.`
           : 'Ready. Hit "Find jobs for me" and it will go looking.'
-        : 'Put FIRECRAWL_API_KEY in .env so it can find openings without being told where to look.',
-      href: '/discover',
+        : 'Paste a Firecrawl key on the settings page and it will find openings on its own.',
+      href: '/settings',
     },
   ];
 
@@ -500,6 +526,9 @@ app.get('/api/overview', async () => {
     needsYou: { needsInput, inReview, needsHuman, total: needsInput + inReview + needsHuman },
     counts: {
       leadsNew,
+      leadsTotal,
+      strongMatches,
+      shortlisted,
       submitted,
       upcomingRounds,
       lessons,
@@ -554,6 +583,13 @@ async function requireProfile(reply: { code: (n: number) => { send: (b: unknown)
 // checklist with the command in it.
 const bootProblem = await schemaProblem();
 if (bootProblem) process.stderr.write(`\n${bootProblem}\n\n`);
+
+// Before anything reads a key. Keys saved from the settings page live in the
+// database, and config.ts reads them through an in-memory cache that this
+// fills - so a server that skipped this would quietly behave as though every
+// key you saved had been forgotten.
+const savedSettings = await loadSettings();
+if (savedSettings) process.stdout.write(`Loaded ${savedSettings} setting(s) saved from the UI.\n`);
 
 const recovered = await recoverInterruptedRuns();
 if (recovered) {

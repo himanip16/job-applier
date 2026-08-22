@@ -37,15 +37,40 @@ export async function getContext(): Promise<BrowserContext> {
           'Chromium you already have.',
       );
     }
-    if (/ProcessSingleton|already in use/i.test(msg)) {
+    if (/ProcessSingleton|already in use|SingletonLock/i.test(msg)) {
       throw new Error(
         `Another process is already using the browser profile at ${config.browserProfileDir}. ` +
           'Chromium allows one instance per profile, so the API server and a second run (or the ' +
           'test suite) cannot share one. Stop the other process, or point this one at its own ' +
-          'BROWSER_PROFILE_DIR.',
+          'BROWSER_PROFILE_DIR. If nothing else is running, a previous crash left a lock behind: ' +
+          `delete ${path.join(config.browserProfileDir, 'SingletonLock')} and try again.`,
       );
     }
-    throw err;
+    if (/missing dependencies|error while loading shared libraries|libnss3|libatk|libgbm/i.test(msg)) {
+      throw new Error(
+        'Chromium is installed but the system libraries it needs are not. Run:  ' +
+          'pnpm --filter @ja/server exec playwright install-deps chromium  ' +
+          '(needs sudo on most Linux distributions). ' +
+          `Original error: ${msg.split('\n')[0]}`,
+      );
+    }
+    if (/Timeout.*exceeded|Timed out/i.test(msg)) {
+      throw new Error(
+        `Chromium did not finish starting within the timeout, using the profile at ` +
+          `${config.browserProfileDir}. This is usually a profile left in a bad state by a crash: ` +
+          'move that directory aside and let it be recreated. ' +
+          `Original error: ${msg.split('\n')[0]}`,
+      );
+    }
+    // Anything else: at minimum say which profile and which binary, because
+    // the raw Playwright message names neither and both are configurable.
+    throw new Error(
+      `Could not start Chromium (profile: ${config.browserProfileDir}` +
+        `${config.chromiumExecutablePath ? `, binary: ${config.chromiumExecutablePath}` : ''}). ` +
+        `${msg.split('\n')[0]} ` +
+        '— if this persists, move the profile directory aside to rule it out, or set ' +
+        'CHROMIUM_EXECUTABLE_PATH to a Chromium you know works.',
+    );
   }
 
   // esbuild (which tsx uses) compiles arrow functions with `keepNames`, which
