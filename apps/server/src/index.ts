@@ -15,8 +15,10 @@ import { adapterFor } from './ats/registry.js';
 import { extractResumeText, assessResumeText } from './lib/resumeText.js';
 import { estimateActivityCosts, activeModels } from './llm/models.js';
 import { provider, isConfigured } from './llm/client.js';
+import { schemaProblem } from './lib/schemaCheck.js';
 import { matchCanonical, normalizeLabel, type RunEvent } from '@ja/shared';
 import { registerDiscoveryRoutes } from './routes/discovery.js';
+import { isFirecrawlConfigured } from './discovery/firecrawl.js';
 import { registerTrackerRoutes } from './routes/tracker.js';
 import { registerResumeRoutes } from './routes/resume.js';
 
@@ -390,6 +392,7 @@ registerTrackerRoutes(app, requireProfile);
 app.get('/api/health', async () => ({
   ok: true,
   llmConfigured: isConfigured(),
+  searchConfigured: isFirecrawlConfigured(),
   ...activeModels(),
   // Rough, local, and always an estimate - the real figure is on your console.
   estimatedCosts: estimateActivityCosts(),
@@ -397,6 +400,114 @@ app.get('/api/health', async () => ({
   requireReview: config.requireReview,
   activeRuns: activeRuns(),
 }));
+
+/**
+ * Everything the home page needs to explain itself.
+ *
+ * Two jobs. It reports what is still unconfigured, so a fresh install tells
+ * you what to do next instead of failing later with a stack trace. And it
+ * counts everything currently waiting on a human, across all four features,
+ * because "three things need you" is the one number worth putting at the top
+ * of a page.
+ */
+app.get('/api/overview', async () => {
+  const profile = await prisma.profile.findFirst({
+    include: { facts: true, resumes: true, _count: { select: { answers: true } } },
+  });
+
+  // Every count is guarded. This endpoint is the one that reports a broken
+  // install, so it has to survive one - a stale client or a missing table must
+  // degrade a number to zero, not take the whole dashboard down with a
+  // TypeError the user cannot act on.
+  const [companies, leadsNew, needsInput, needsHuman, inReview, submitted, upcomingRounds, lessons] =
+    await Promise.all([
+      safeCount(() => prisma.company.count({ where: { enabled: true } })),
+      profile
+        ? safeCount(() => prisma.jobLead.count({ where: { profileId: profile.id, status: 'NEW' } }))
+        : 0,
+      safeCount(() => prisma.application.count({ where: { status: 'NEEDS_INPUT' } })),
+      safeCount(() => prisma.application.count({ where: { status: 'NEEDS_HUMAN' } })),
+      safeCount(() => prisma.application.count({ where: { status: 'REVIEW' } })),
+      safeCount(() => prisma.application.count({ where: { status: 'SUBMITTED' } })),
+      safeCount(() => prisma.interviewRound.count({ where: { status: 'SCHEDULED' } })),
+      safeCount(() => prisma.lesson.count()),
+    ]);
+
+  const schema = await schemaProblem();
+
+  const standingAnswers = profile?.facts.length ?? 0;
+
+  // Ordered: each step is genuinely blocked by the one above it.
+  const setup = [
+    {
+      id: 'schema',
+      label: 'Sync the database',
+      done: schema === null,
+      detail: schema ?? 'Client, schema and tables all match.',
+      href: null,
+    },
+    {
+      id: 'model',
+      label: 'Connect a model',
+      done: isConfigured(),
+      detail: isConfigured()
+        ? `${activeModels().provider} · ${activeModels().writing}`
+        : 'Gemini has a free tier. Put GEMINI_API_KEY in .env and restart.',
+      href: null,
+    },
+    {
+      id: 'profile',
+      label: 'Fill in your profile',
+      done: Boolean(profile?.email && profile?.fullName),
+      detail: profile ? `${profile.fullName} · ${profile.email}` : 'Name, contact and links fill half of every form directly.',
+      href: '/profile',
+    },
+    {
+      id: 'resume',
+      label: 'Upload your resume',
+      done: (profile?.resumes.length ?? 0) > 0,
+      detail: profile?.resumes.length
+        ? `${profile.resumes.length} on file`
+        : 'Attached to applications, and the only thing claims can be grounded in.',
+      href: '/profile',
+    },
+    {
+      id: 'facts',
+      label: 'Answer the standing questions',
+      done: standingAnswers >= 5,
+      detail:
+        standingAnswers >= 5
+          ? `${standingAnswers} recorded`
+          : `${standingAnswers} of ~11 filled. Each one is a popup you will not see later.`,
+      href: '/profile',
+    },
+    {
+      id: 'search',
+      label: 'Turn on job search',
+      done: isFirecrawlConfigured(),
+      detail: isFirecrawlConfigured()
+        ? companies > 0
+          ? `Ready. ${companies} board(s) found so far.`
+          : 'Ready. Hit "Find jobs for me" and it will go looking.'
+        : 'Put FIRECRAWL_API_KEY in .env so it can find openings without being told where to look.',
+      href: '/discover',
+    },
+  ];
+
+  return {
+    setup,
+    ready: setup.slice(0, 4).every((s) => s.done),
+    needsYou: { needsInput, inReview, needsHuman, total: needsInput + inReview + needsHuman },
+    counts: {
+      leadsNew,
+      submitted,
+      upcomingRounds,
+      lessons,
+      answerBank: profile?._count.answers ?? 0,
+      companies,
+    },
+  };
+});
 
 /**
  * What this API key can actually reach.
@@ -414,6 +525,15 @@ app.get('/api/models', async () => {
   }
 });
 
+/** A count that reports zero rather than taking the page down. */
+async function safeCount(fn: () => Promise<number>): Promise<number> {
+  try {
+    return await fn();
+  } catch {
+    return 0;
+  }
+}
+
 async function requireProfile(reply: { code: (n: number) => { send: (b: unknown) => unknown } }) {
   const profile = await prisma.profile.findFirst();
   if (!profile) {
@@ -422,6 +542,18 @@ async function requireProfile(reply: { code: (n: number) => { send: (b: unknown)
   }
   return profile;
 }
+
+// Say it once at boot, loudly, rather than once per request. A stale generated
+// client produces "Cannot read properties of undefined" from whichever endpoint
+// hits the missing model first, which names neither the cause nor the fix.
+//
+// Deliberately not fatal. Most people only ever see this app through the
+// browser, and a process that refuses to start can only tell them "cannot
+// reach the server" - which is a worse message than the real one. So it keeps
+// serving, and /api/overview puts the same sentence at the top of the setup
+// checklist with the command in it.
+const bootProblem = await schemaProblem();
+if (bootProblem) process.stderr.write(`\n${bootProblem}\n\n`);
 
 const recovered = await recoverInterruptedRuns();
 if (recovered) {

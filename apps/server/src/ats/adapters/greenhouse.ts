@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import type { FormField } from '@ja/shared';
 import { extractFields } from '../../browser/extract.js';
+import { openApplicationForm } from '../../browser/openForm.js';
 import type { AtsAdapter, JobMeta } from '../types.js';
 
 /**
@@ -32,17 +33,10 @@ export const greenhouseAdapter: AtsAdapter = {
   },
 
   async openApplicationForm(page, url) {
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
-    // Some boards render the posting first with an "Apply" button that scrolls
-    // or routes to the form.
-    const form = page.locator('#application-form, form#application-form');
-    if (!(await form.count())) {
-      const apply = page.getByRole('button', { name: /^apply/i }).or(page.getByRole('link', { name: /^apply/i }));
-      if (await apply.count()) await apply.first().click().catch(() => {});
-    }
-    await page.locator('#application-form, form').first().waitFor({ state: 'visible', timeout: 20_000 });
-    // Custom question blocks mount after hydration.
-    await page.waitForTimeout(800);
+    await openApplicationForm(page, url, {
+      formSelectors: ['#application-form'],
+      applyPatterns: [/apply for this job/i],
+    });
   },
 
   async readJobMeta(page): Promise<JobMeta> {

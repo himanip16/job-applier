@@ -26,6 +26,21 @@ interface Lead {
   status: string;
 }
 
+interface SearchReport {
+  planSource: 'model' | 'profile';
+  roleTitles: string[];
+  queries: { query: string; hits: number }[];
+  creditsUsed: number;
+  boards: { ats: string; slug: string; company: string; openings: number; kept: number; error?: string }[];
+  jobsSeen: number;
+  newLeads: number;
+  skippedAlreadySeen: number;
+  deepScored: number;
+  companiesRegistered: number;
+  notes: string[];
+  errors: { where: string; error: string }[];
+}
+
 interface Company {
   id: string;
   name: string;
@@ -41,6 +56,8 @@ export default function DiscoverPage() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [sources, setSources] = useState<{ id: string; handleHint: string }[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
+  const [searchConfigured, setSearchConfigured] = useState(true);
+  const [report, setReport] = useState<SearchReport | null>(null);
   const [filter, setFilter] = useState('NEW');
   const [busy, setBusy] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
@@ -59,13 +76,37 @@ export default function DiscoverPage() {
 
   useEffect(() => {
     load().catch((e) => setError(e.message));
-    api<{ sources: { id: string; handleHint: string }[]; rejectCategories: string[] }>('/api/sources')
+    api<{
+      sources: { id: string; handleHint: string }[];
+      rejectCategories: string[];
+      searchConfigured: boolean;
+    }>('/api/sources')
       .then((d) => {
         setSources(d.sources);
         setCategories(d.rejectCategories);
+        setSearchConfigured(d.searchConfigured);
       })
       .catch(() => {});
   }, [load]);
+
+  async function find() {
+    setBusy('find');
+    setError(null);
+    setFlash(null);
+    setReport(null);
+    try {
+      const r = await api<{ report: SearchReport }>('/api/discovery/find', {
+        method: 'POST',
+        body: JSON.stringify({ deepScoreTop: 15 }),
+      });
+      setReport(r.report);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function crawl() {
     setBusy('crawl');
@@ -111,24 +152,46 @@ export default function DiscoverPage() {
     <>
       <div className="panel">
         <div className="spread">
-          <div>
+          <div style={{ minWidth: 0 }}>
             <h2>Find work</h2>
-            <p className="sub" style={{ margin: 0 }}>
-              Reads each company&apos;s board, scores every posting against your profile and your
-              past decisions, and puts the plausible ones in front of you.
+            <p className="sub" style={{ margin: 0, maxWidth: '46rem' }}>
+              Reads your resume, works out what to search for, and goes looking — you do not have
+              to name companies. Every posting it finds is on a board it can actually submit an
+              application to, scored against your profile and your past decisions.
             </p>
           </div>
-          <button className="primary" disabled={busy === 'crawl' || !companies.length} onClick={crawl}>
-            {busy === 'crawl' ? 'Crawling…' : 'Crawl now'}
-          </button>
+          <div className="row" style={{ flex: 'none', gap: '.5rem' }}>
+            <button
+              className="primary"
+              disabled={busy !== null || !searchConfigured}
+              onClick={find}
+              title="Search the web for openings that match your profile"
+            >
+              {busy === 'find' ? 'Searching…' : 'Find jobs for me'}
+            </button>
+            <button
+              disabled={busy !== null || !companies.length}
+              onClick={crawl}
+              title="Re-read the boards already on the list, without searching"
+            >
+              {busy === 'crawl' ? 'Re-checking…' : 'Re-check known boards'}
+            </button>
+          </div>
         </div>
-        {flash && <div className="notice good" style={{ marginTop: '.9rem' }}>{flash}</div>}
-        {error && <div className="notice bad" style={{ marginTop: '.9rem' }}>{error}</div>}
-        {!companies.length && (
+
+        {!searchConfigured && (
           <div className="notice" style={{ marginTop: '.9rem' }}>
-            Add a company below first. Nothing to crawl yet.
+            Searching needs a free Firecrawl key. Put <code>FIRECRAWL_API_KEY</code> in{' '}
+            <code>.env</code> and restart the server — get one at{' '}
+            <a href="https://firecrawl.dev" target="_blank" rel="noreferrer">
+              firecrawl.dev
+            </a>
+            . Until then you can add boards by hand below, or paste a job URL on the Runs page.
           </div>
         )}
+        {flash && <div className="notice good" style={{ marginTop: '.9rem' }}>{flash}</div>}
+        {error && <div className="notice bad" style={{ marginTop: '.9rem' }}>{error}</div>}
+        {report && <SearchReportPanel report={report} />}
       </div>
 
       <CompanyManager companies={companies} sources={sources} onChange={load} />
@@ -355,6 +418,90 @@ function RejectDialog({
   );
 }
 
+/**
+ * What the run actually did.
+ *
+ * A single "found 12 jobs" line hides the two things worth knowing: what it
+ * searched for on your behalf, and which companies it turned up. Both are
+ * shown, because the searches are the part you will want to correct — and the
+ * way to correct them is to reject a few leads, which the queue below makes
+ * one click.
+ */
+function SearchReportPanel({ report }: { report: SearchReport }) {
+  const boards = report.boards.filter((b) => b.kept > 0);
+  const nothing = report.newLeads === 0;
+
+  return (
+    <div className="notice" style={{ marginTop: '.9rem' }}>
+      <strong>
+        {nothing
+          ? 'No new jobs this time.'
+          : `${report.newLeads} new job${report.newLeads === 1 ? '' : 's'} from ${boards.length} compan${
+              boards.length === 1 ? 'y' : 'ies'
+            }.`}
+      </strong>{' '}
+      <span className="muted small">
+        Searched {report.queries.length} time{report.queries.length === 1 ? '' : 's'} ·{' '}
+        {report.jobsSeen} posting{report.jobsSeen === 1 ? '' : 's'} considered ·{' '}
+        {report.skippedAlreadySeen} already seen · {report.deepScored} read in full
+        {report.companiesRegistered > 0 &&
+          ` · ${report.companiesRegistered} new board${
+            report.companiesRegistered === 1 ? '' : 's'
+          } added to the watch list`}
+        {report.creditsUsed > 0 && ` · ${report.creditsUsed} search credits`}
+      </span>
+
+      <details style={{ marginTop: '.6rem' }}>
+        <summary className="small" style={{ cursor: 'pointer' }}>
+          What it searched for
+          {report.planSource === 'profile' && ' (derived from your profile, no model used)'}
+        </summary>
+        <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
+          {report.queries.map((q) => (
+            <li key={q.query}>
+              &ldquo;{q.query}&rdquo; — {q.hits} usable hit{q.hits === 1 ? '' : 's'}
+            </li>
+          ))}
+        </ul>
+        {report.roleTitles.length > 0 && (
+          <p className="small muted" style={{ margin: '.5rem 0 0' }}>
+            Kept other openings at those companies matching:{' '}
+            {report.roleTitles.map((t) => `“${t}”`).join(', ')}. Reject a few below and the next
+            search narrows.
+          </p>
+        )}
+      </details>
+
+      {boards.length > 0 && (
+        <details style={{ marginTop: '.35rem' }}>
+          <summary className="small" style={{ cursor: 'pointer' }}>
+            Companies it found
+          </summary>
+          <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
+            {boards.map((b) => (
+              <li key={`${b.ats}:${b.slug}`}>
+                {b.company} <span className="src">{b.ats}</span> — {b.kept} of {b.openings} opening
+                {b.openings === 1 ? '' : 's'} kept
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {report.notes.map((n) => (
+        <p key={n} className="small muted" style={{ margin: '.4rem 0 0' }}>
+          {n}
+        </p>
+      ))}
+      {report.errors.map((e) => (
+        <p key={e.where} className="small" style={{ margin: '.4rem 0 0', color: 'var(--bad)' }}>
+          {e.where}: {e.error}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function CompanyManager({
   companies,
   sources,
@@ -386,11 +533,13 @@ function CompanyManager({
 
   return (
     <div className="panel">
-      <h2>Where to look</h2>
+      <h2>Boards it watches</h2>
       <p className="sub">
-        Four of these read the board&apos;s own public postings API, which is what the platforms
-        publish for aggregators — structured, complete, and far more reliable than scraping.
-        &ldquo;careers-page&rdquo; is a real crawl, for companies that host their own.
+        Search adds companies here automatically as it finds them, so their future openings arrive
+        without spending another search. Add one by hand when you already know you want to watch
+        it. Four of these read the board&apos;s own public postings API — structured, complete, and
+        far more reliable than scraping. &ldquo;careers-page&rdquo; is a real crawl, for companies
+        that host their own.
       </p>
       <form onSubmit={add}>
         <div className="row">

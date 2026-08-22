@@ -1,5 +1,6 @@
 import type { AtsAdapter, JobMeta } from '../types.js';
 import { extractFields } from '../../browser/extract.js';
+import { openApplicationForm } from '../../browser/openForm.js';
 
 /**
  * Ashby (jobs.ashbyhq.com/<org>/<uuid>).
@@ -18,11 +19,14 @@ export const ashbyAdapter: AtsAdapter = {
   },
 
   async openApplicationForm(page, url) {
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
-    const apply = page.getByRole('button', { name: /apply for this job|^apply$/i });
-    if (await apply.count()) await apply.first().click().catch(() => {});
-    await page.locator('form').first().waitFor({ state: 'visible', timeout: 20_000 });
-    await page.waitForTimeout(800);
+    // Ashby is the board this flow exists for. Its job URL shows a
+    // description behind an Apply button, its application is React-rendered
+    // inputs with no <form> wrapper, and some tenants front the whole thing
+    // with Cloudflare. Waiting on locator('form') gets none of that right.
+    await openApplicationForm(page, url, {
+      applyPatterns: [/apply for this job/i],
+      formSelectors: ['[class*="_fieldEntry"]', '[class*="application"] input'],
+    });
   },
 
   async readJobMeta(page): Promise<JobMeta> {
@@ -59,6 +63,7 @@ export const ashbyAdapter: AtsAdapter = {
 
   notes: [
     'Generated DOM with unstable ids; matching is label-driven.',
-    'Cloudflare Turnstile appears on some tenants.',
+    'Cloudflare Turnstile fronts some tenants; the run waits it out and hands over if it does not clear.',
+    'The application mounts only after Apply is clicked, and has no <form> wrapper.',
   ],
 };

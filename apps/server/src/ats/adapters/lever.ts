@@ -1,5 +1,6 @@
 import type { AtsAdapter, JobMeta } from '../types.js';
 import { extractFields } from '../../browser/extract.js';
+import { openApplicationForm } from '../../browser/openForm.js';
 
 /**
  * Lever (jobs.lever.co/<org>/<posting-id>).
@@ -27,9 +28,10 @@ export const leverAdapter: AtsAdapter = {
   },
 
   async openApplicationForm(page, url) {
+    // Lever's form is its own URL, so this normally skips the Apply click
+    // entirely - but it still needs the interstitial wait.
     const applyUrl = /\/apply\/?$/.test(url) ? url : `${url.replace(/\/+$/, '')}/apply`;
-    await page.goto(applyUrl, { waitUntil: 'domcontentloaded' });
-    await page.locator('#application-form').waitFor({ state: 'visible', timeout: 20_000 });
+    await openApplicationForm(page, applyUrl, { formSelectors: ['#application-form'] });
   },
 
   async readJobMeta(page): Promise<JobMeta> {
