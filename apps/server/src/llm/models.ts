@@ -24,6 +24,8 @@ export type Task =
   | 'answerInference'
   /** Does this posting fit this candidate? */
   | 'fitScoring'
+  /** Turn a profile into the web searches that would surface its jobs. */
+  | 'searchPlanning'
   /** Sort a job's keywords into covered / grounded / unsupported. */
   | 'keywordAnalysis'
   /** Rewrite the resume within the allow-list. */
@@ -33,7 +35,7 @@ export type Task =
   /** Answer one short employer-specific question. */
   | 'essay';
 
-const CHEAP: Task[] = ['answerInference', 'fitScoring'];
+const CHEAP: Task[] = ['answerInference', 'fitScoring', 'searchPlanning'];
 
 /**
  * Keyword analysis sits on the expensive model deliberately. It is the step
@@ -71,6 +73,8 @@ export function effortFor(task: Task): 'low' | 'medium' | 'high' {
       return 'low';
     case 'fitScoring':
       return 'low';
+    case 'searchPlanning':
+      return 'medium';
     case 'essay':
       return 'medium';
     default:

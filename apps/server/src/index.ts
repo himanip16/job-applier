@@ -18,6 +18,7 @@ import { provider, isConfigured } from './llm/client.js';
 import { schemaProblem } from './lib/schemaCheck.js';
 import { matchCanonical, normalizeLabel, type RunEvent } from '@ja/shared';
 import { registerDiscoveryRoutes } from './routes/discovery.js';
+import { isFirecrawlConfigured } from './discovery/firecrawl.js';
 import { registerTrackerRoutes } from './routes/tracker.js';
 import { registerResumeRoutes } from './routes/resume.js';
 
@@ -391,6 +392,7 @@ registerTrackerRoutes(app, requireProfile);
 app.get('/api/health', async () => ({
   ok: true,
   llmConfigured: isConfigured(),
+  searchConfigured: isFirecrawlConfigured(),
   ...activeModels(),
   // Rough, local, and always an estimate - the real figure is on your console.
   estimatedCosts: estimateActivityCosts(),
@@ -480,10 +482,14 @@ app.get('/api/overview', async () => {
       href: '/profile',
     },
     {
-      id: 'companies',
-      label: 'Add companies to watch',
-      done: companies > 0,
-      detail: companies > 0 ? `${companies} board(s)` : 'Optional - you can also paste a job URL directly.',
+      id: 'search',
+      label: 'Turn on job search',
+      done: isFirecrawlConfigured(),
+      detail: isFirecrawlConfigured()
+        ? companies > 0
+          ? `Ready. ${companies} board(s) found so far.`
+          : 'Ready. Hit "Find jobs for me" and it will go looking.'
+        : 'Put FIRECRAWL_API_KEY in .env so it can find openings without being told where to look.',
       href: '/discover',
     },
   ];

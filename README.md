@@ -6,9 +6,10 @@ keeps a record of what happened.
 
 Four parts:
 
-1. **Find work** — crawls company boards, scores every posting, and puts the
-   plausible ones in a triage queue. Reject one and say why, and the ranking
-   moves; the sibling job two rows down re-ranks immediately.
+1. **Find work** — searches the web for openings that match your resume, with
+   no list of companies from you, and puts the plausible ones in a triage
+   queue. Reject one and say why, and the ranking moves; the sibling job two
+   rows down re-ranks immediately.
 2. **Apply** — drives the real form in a real browser, answers what it can, and
    **stops and asks you** when it cannot answer honestly. Your answer is
    remembered forever, at any company, however the next form words it.
@@ -29,7 +30,37 @@ required for very much is.
 
 ## Finding work
 
-Add the companies you care about and it reads their boards:
+Press **Find jobs for me**. You do not name any companies.
+
+It reads your resume, your stated preferences and — most usefully — the
+postings you have already shortlisted or rejected, turns that into a handful of
+web searches, and runs them **restricted to the job boards it can actually
+submit an application to**. A posting it cannot apply to is not a lead, it is a
+distraction.
+
+Then the part that makes this cheap and accurate. A search result is just a
+URL, but `job-boards.greenhouse.io/mercury/jobs/6118243004` says the posting is
+Greenhouse board `mercury`, and that is enough to call Greenhouse's own API and
+get *every* opening at that company with full descriptions, real locations and
+posting dates — free, structured, no parsing. So the flow is:
+
+```
+search  ->  recognise the board  ->  hydrate from the board's own API
+(paid)      (a regex)                (free, complete, and finds the siblings)
+```
+
+One search hit routinely becomes several leads, and each company found is added
+to the watch list below, so its *future* postings arrive through the ordinary
+crawl without costing another search.
+
+Hydrating a whole board is a gift for coverage and a hazard for a triage queue:
+Mercury has 56 openings and a backend engineer wants one of them. So postings
+the search actually matched are always kept, and their siblings have to look
+like a role the plan asked for — same distinctive words *and* the same kind of
+job, which is what stops a search for "payments" surfacing `Counsel, Product &
+Regulatory - Payments & AML`.
+
+### Boards it can read
 
 | Source | What it uses |
 |---|---|
@@ -43,8 +74,25 @@ Four of the five are the platforms' own public APIs, published so aggregators
 can read them. Structured JSON beats scraping a React page in every respect
 that matters here.
 
+Not every board answers: some Greenhouse boards 404 on the public API even
+though the posting is live. When that happens the posting search found is kept
+anyway, with the shorter description, and the run says so.
+
 Every posting gets a free lexical score; only the top slice gets read in full by
-Claude. A 400-job crawl therefore costs a handful of model calls, not 400.
+a model. A 400-job crawl therefore costs a handful of model calls, not 400.
+
+### What search costs
+
+Searching needs a [Firecrawl](https://firecrawl.dev) key in `FIRECRAWL_API_KEY`
+— the free tier is enough for a personal job hunt. A run is about two credits
+per query and six queries by default, so roughly a dozen credits; everything
+after the search is done by the boards' own free APIs.
+
+Without the key the rest of the app is unaffected: add companies by hand and
+crawl those, or paste a job URL straight into a run.
+
+Your queries are derived from your resume and sent to Firecrawl, which passes
+them to a web search provider. The resume itself is not sent.
 
 ### How the ranking learns
 
@@ -132,7 +180,7 @@ the information is not actually there.
 Requires Node 22+, pnpm, and Postgres 14+.
 
 ```bash
-cp .env.example .env          # fill in DATABASE_URL and one model API key
+cp .env.example .env          # DATABASE_URL, one model API key, and (to search) FIRECRAWL_API_KEY
 pnpm setup                    # install, push the schema, download Chromium
 pnpm --filter @ja/server seed # optional: a starter profile and standing answers
 ```
@@ -155,7 +203,8 @@ pnpm dev:web      # UI on :3000
 ```
 
 Then open <http://localhost:3000>, fill in your profile, upload your resume,
-and paste a job URL.
+and press **Find jobs for me** — or paste a job URL directly if you already
+have one in mind.
 
 ### Which model provider, and what it costs
 
@@ -272,7 +321,7 @@ packages/shared/     Zod field schema, canonical question rules, label matching
 apps/server/
   browser/           Playwright: extract, fill, verify, detect blockers
   ats/adapters/      Per-board knowledge for driving application forms
-  discovery/         Board APIs, careers-page crawler, scoring and learning
+  discovery/         Web search, board APIs, careers-page crawler, scoring and learning
   resume/            Keyword analysis, grounded rewrite, ATS docx/txt rendering
   engine/            Resolver, answer bank, run state machine, queue
   llm/               Claude: cover letters, essays, answer inference
@@ -284,7 +333,7 @@ fixtures/            Offline replicas of real Greenhouse and Lever DOM
 
 | Page | What it is for |
 |---|---|
-| `/discover` | Crawl boards, triage the queue, see what the ranking has learned |
+| `/discover` | Search for openings, triage the queue, see what the ranking has learned |
 | `/` | Live run view: log, screenshots, question popup, review gate |
 | `/resume` | Tailor for a job; the grounded / unsupported split |
 | `/tracker` | Outcomes, rounds, questions, lessons |

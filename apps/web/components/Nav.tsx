@@ -15,7 +15,7 @@ import { api } from '../lib/api';
  */
 const ITEMS = [
   { href: '/', label: 'Overview', hint: 'What this does, and what still needs setting up' },
-  { href: '/discover', label: 'Find work', hint: 'Crawl job boards and triage scored leads' },
+  { href: '/discover', label: 'Find work', hint: 'Search for openings that match you, then triage them' },
   { href: '/runs', label: 'Runs', hint: 'Applications being filled in, live' },
   { href: '/resume', label: 'Resume', hint: 'Tailor your CV for one job, ATS-safe' },
   { href: '/tracker', label: 'Tracker', hint: 'Outcomes, interview rounds, questions asked' },

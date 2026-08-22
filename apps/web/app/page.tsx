@@ -113,12 +113,17 @@ export default function Home() {
           step="1"
           title="Find work"
           href="/discover"
-          cta={ov?.counts.leadsNew ? `Triage ${ov.counts.leadsNew} lead${ov.counts.leadsNew === 1 ? '' : 's'}` : 'Add companies'}
+          cta={
+            ov?.counts.leadsNew
+              ? `Triage ${ov.counts.leadsNew} lead${ov.counts.leadsNew === 1 ? '' : 's'}`
+              : 'Find jobs for me'
+          }
           badge={ov?.counts.leadsNew || undefined}
         >
-          Reads company job boards and scores every posting against your profile. Reject one and say
-          why, and the ranking moves — the similar job further down re-ranks immediately.
-          {ov?.counts.companies ? ` Watching ${ov.counts.companies} board(s).` : ''}
+          Searches the web for openings that match your resume — you do not name the companies —
+          and keeps only postings on boards it can actually submit to. Reject one and say why, and
+          the ranking moves: the similar job further down re-ranks immediately.
+          {ov?.counts.companies ? ` ${ov.counts.companies} board(s) found so far.` : ''}
         </Feature>
 
         <Feature

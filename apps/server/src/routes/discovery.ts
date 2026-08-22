@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { prisma, type Prisma } from '../lib/db.js';
 import { API_SOURCES } from '../discovery/sources.js';
 import { crawlAll, rescore, rescoreLexically } from '../discovery/crawler.js';
+import { findJobs } from '../discovery/findJobs.js';
+import { isFirecrawlConfigured } from '../discovery/firecrawl.js';
 import { learnFromDecision, loadSignals } from '../discovery/scoring.js';
 import { adapterFor } from '../ats/registry.js';
 import { enqueue } from '../engine/queue.js';
@@ -35,6 +37,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       { id: 'careers-page', handleHint: 'full URL of the careers page to crawl' },
     ]),
     rejectCategories: REJECT_CATEGORIES,
+    searchConfigured: isFirecrawlConfigured(),
   }));
 
   app.get('/api/companies', async () => ({
@@ -72,6 +75,43 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       .parse(req.body ?? {});
     const report = await crawlAll(profile.id, { deepScoreTop, onlyCompanyId: companyId });
     return { report };
+  });
+
+  /**
+   * Find openings without being told where to look.
+   *
+   * The primary way in. `/crawl` re-reads boards you already know about;
+   * this one goes and finds them, so the first run needs nothing but a
+   * resume.
+   */
+  app.post('/api/discovery/find', async (req, reply) => {
+    const profile = await requireProfile(reply);
+    if (!profile) return;
+
+    if (!isFirecrawlConfigured()) {
+      return reply.code(400).send({
+        error:
+          'Job search needs a Firecrawl key. Get one free at firecrawl.dev, put ' +
+          'FIRECRAWL_API_KEY in .env, and restart the server. Everything else works without it.',
+      });
+    }
+
+    const body = z
+      .object({
+        maxQueries: z.number().min(1).max(12).optional(),
+        resultsPerQuery: z.number().min(1).max(30).optional(),
+        maxBoards: z.number().min(1).max(60).optional(),
+        deepScoreTop: z.number().min(0).max(60).default(15),
+      })
+      .parse(req.body ?? {});
+
+    try {
+      return { report: await findJobs(profile.id, body) };
+    } catch (err) {
+      // Everything reachable from here is a message written for a person -
+      // an empty profile, a rejected key, an exhausted balance.
+      return reply.code(400).send({ error: (err as Error).message });
+    }
   });
 
   app.post('/api/discovery/rescore', async (req, reply) => {

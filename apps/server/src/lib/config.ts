@@ -49,6 +49,19 @@ export const config = {
   geminiModel: process.env.GEMINI_MODEL ?? 'gemini-3.5-flash',
   geminiModelCheap: process.env.GEMINI_MODEL_CHEAP ?? 'gemini-3.5-flash',
 
+  /**
+   * Firecrawl, for finding openings without being told where to look.
+   *
+   * Optional. Without it the per-company crawler still works, you just have to
+   * name the companies yourself.
+   */
+  firecrawlApiKey: process.env.FIRECRAWL_API_KEY ?? '',
+  firecrawlBaseUrl: (process.env.FIRECRAWL_BASE_URL ?? 'https://api.firecrawl.dev').replace(/\/+$/, ''),
+  /** Queries per search run. Each costs roughly two Firecrawl credits. */
+  jobSearchQueries: num(process.env.JOB_SEARCH_QUERIES, 6),
+  /** Results requested per query. */
+  jobSearchResultsPerQuery: num(process.env.JOB_SEARCH_RESULTS_PER_QUERY, 10),
+
   headless: bool(process.env.HEADLESS, false),
   /**
    * Point at a Chromium you already have. Useful on images where Playwright's
