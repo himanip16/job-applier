@@ -11,7 +11,9 @@
     "apply": "tsx src/scripts/apply.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
-    "test": "DATABASE_URL=\"${TEST_DATABASE_URL:-$DATABASE_URL}\" vitest run"
+    "test": "DATABASE_URL=\"${TEST_DATABASE_URL:-$DATABASE_URL}\" vitest run",
+    "predev": "cd ../.. && prisma generate --silent",
+    "prestart": "cd ../.. && prisma generate --silent"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",

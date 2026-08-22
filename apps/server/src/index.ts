@@ -15,6 +15,7 @@ import { adapterFor } from './ats/registry.js';
 import { extractResumeText, assessResumeText } from './lib/resumeText.js';
 import { estimateActivityCosts, activeModels } from './llm/models.js';
 import { provider, isConfigured } from './llm/client.js';
+import { schemaProblem } from './lib/schemaCheck.js';
 import { matchCanonical, normalizeLabel, type RunEvent } from '@ja/shared';
 import { registerDiscoveryRoutes } from './routes/discovery.js';
 import { registerTrackerRoutes } from './routes/tracker.js';
@@ -412,22 +413,37 @@ app.get('/api/overview', async () => {
     include: { facts: true, resumes: true, _count: { select: { answers: true } } },
   });
 
+  // Every count is guarded. This endpoint is the one that reports a broken
+  // install, so it has to survive one - a stale client or a missing table must
+  // degrade a number to zero, not take the whole dashboard down with a
+  // TypeError the user cannot act on.
   const [companies, leadsNew, needsInput, needsHuman, inReview, submitted, upcomingRounds, lessons] =
     await Promise.all([
-      prisma.company.count({ where: { enabled: true } }),
-      profile ? prisma.jobLead.count({ where: { profileId: profile.id, status: 'NEW' } }) : 0,
-      prisma.application.count({ where: { status: 'NEEDS_INPUT' } }),
-      prisma.application.count({ where: { status: 'NEEDS_HUMAN' } }),
-      prisma.application.count({ where: { status: 'REVIEW' } }),
-      prisma.application.count({ where: { status: 'SUBMITTED' } }),
-      prisma.interviewRound.count({ where: { status: 'SCHEDULED' } }),
-      prisma.lesson.count(),
+      safeCount(() => prisma.company.count({ where: { enabled: true } })),
+      profile
+        ? safeCount(() => prisma.jobLead.count({ where: { profileId: profile.id, status: 'NEW' } }))
+        : 0,
+      safeCount(() => prisma.application.count({ where: { status: 'NEEDS_INPUT' } })),
+      safeCount(() => prisma.application.count({ where: { status: 'NEEDS_HUMAN' } })),
+      safeCount(() => prisma.application.count({ where: { status: 'REVIEW' } })),
+      safeCount(() => prisma.application.count({ where: { status: 'SUBMITTED' } })),
+      safeCount(() => prisma.interviewRound.count({ where: { status: 'SCHEDULED' } })),
+      safeCount(() => prisma.lesson.count()),
     ]);
+
+  const schema = await schemaProblem();
 
   const standingAnswers = profile?.facts.length ?? 0;
 
   // Ordered: each step is genuinely blocked by the one above it.
   const setup = [
+    {
+      id: 'schema',
+      label: 'Sync the database',
+      done: schema === null,
+      detail: schema ?? 'Client, schema and tables all match.',
+      href: null,
+    },
     {
       id: 'model',
       label: 'Connect a model',
@@ -474,7 +490,7 @@ app.get('/api/overview', async () => {
 
   return {
     setup,
-    ready: setup.slice(0, 3).every((s) => s.done),
+    ready: setup.slice(0, 4).every((s) => s.done),
     needsYou: { needsInput, inReview, needsHuman, total: needsInput + inReview + needsHuman },
     counts: {
       leadsNew,
@@ -503,6 +519,15 @@ app.get('/api/models', async () => {
   }
 });
 
+/** A count that reports zero rather than taking the page down. */
+async function safeCount(fn: () => Promise<number>): Promise<number> {
+  try {
+    return await fn();
+  } catch {
+    return 0;
+  }
+}
+
 async function requireProfile(reply: { code: (n: number) => { send: (b: unknown) => unknown } }) {
   const profile = await prisma.profile.findFirst();
   if (!profile) {
@@ -511,6 +536,18 @@ async function requireProfile(reply: { code: (n: number) => { send: (b: unknown)
   }
   return profile;
 }
+
+// Say it once at boot, loudly, rather than once per request. A stale generated
+// client produces "Cannot read properties of undefined" from whichever endpoint
+// hits the missing model first, which names neither the cause nor the fix.
+//
+// Deliberately not fatal. Most people only ever see this app through the
+// browser, and a process that refuses to start can only tell them "cannot
+// reach the server" - which is a worse message than the real one. So it keeps
+// serving, and /api/overview puts the same sentence at the top of the setup
+// checklist with the command in it.
+const bootProblem = await schemaProblem();
+if (bootProblem) process.stderr.write(`\n${bootProblem}\n\n`);
 
 const recovered = await recoverInterruptedRuns();
 if (recovered) {
