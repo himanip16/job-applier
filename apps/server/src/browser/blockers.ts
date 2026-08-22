@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { BlockerKind } from '@ja/shared';
+import { evaluatePage } from './evaluate.js';
 
 export interface Blocker {
   kind: BlockerKind;
@@ -29,7 +30,7 @@ export interface Blocker {
 export async function detectBlockers(page: Page): Promise<Blocker[]> {
   const found: Blocker[] = [];
 
-  const captcha = await page.evaluate(() => {
+  const captcha = await evaluatePage(page, () => {
     const hits: string[] = [];
     const q = (sel: string) => document.querySelector(sel);
 
@@ -63,7 +64,7 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
     });
   }
 
-  const signals = await page.evaluate(() => {
+  const signals = await evaluatePage(page, () => {
     const text = document.body?.innerText?.toLowerCase() ?? '';
     const has = (re: RegExp) => re.test(text);
     return {
@@ -143,7 +144,7 @@ export async function detectSubmissionOutcome(
 ): Promise<{ outcome: 'SUBMITTED' | 'VALIDATION_ERROR' | 'UNKNOWN'; detail: string }> {
   await page.waitForLoadState('networkidle', { timeout: 20_000 }).catch(() => {});
 
-  const state = await page.evaluate(() => {
+  const state = await evaluatePage(page, () => {
     const text = document.body?.innerText ?? '';
     const lower = text.toLowerCase();
     const errorNodes = Array.from(

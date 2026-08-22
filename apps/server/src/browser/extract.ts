@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import { matchCanonical, type FieldOption, type FormField } from '@ja/shared';
+import { evaluatePage } from './evaluate.js';
 
 /**
  * Raw, DOM-level description of one control, produced inside the page.
@@ -291,7 +292,7 @@ export async function extractFields(
   page: Page,
   opts: { harvestComboboxOptions?: boolean; maxOptions?: number } = {},
 ): Promise<FormField[]> {
-  const raw = (await page.evaluate(EXTRACTOR)) as RawField[];
+  const raw = (await evaluatePage(page, EXTRACTOR)) as RawField[];
   const fields: FormField[] = [];
 
   for (const r of raw) {
