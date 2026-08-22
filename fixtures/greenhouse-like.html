@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta property="og:title" content="Job Application for Staff Backend Engineer at Northwind">
+<title>Job Application for Staff Backend Engineer at Northwind</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 700px; margin: 2rem auto; }
+  .field-wrapper { margin: 1rem 0; }
+  label { display: block; font-weight: 600; margin-bottom: .25rem; }
+  input[type=text], input[type=tel], textarea { width: 100%; padding: .4rem; }
+  .select-shell { position: relative; }
+  .select__control { border: 1px solid #999; padding: .3rem; display: flex; }
+  .select__input { border: 0; outline: 0; flex: 1; font: inherit; }
+  .select__menu { position: absolute; z-index: 10; background: #fff; border: 1px solid #999;
+                  width: 100%; max-height: 200px; overflow: auto; }
+  .select__option { padding: .35rem .5rem; cursor: pointer; }
+  .select__option:hover { background: #eef; }
+  #resume { position: absolute; width: 0; height: 0; opacity: 0; }
+</style>
+</head>
+<body>
+<!--
+  Offline stand-in for a Greenhouse job board.
+
+  This is not a guess at the markup. It reproduces the structural contract read
+  off a live job-boards.greenhouse.io posting in August 2026:
+    - form#application-form
+    - stable core ids: first_name, last_name, email, phone, country,
+      candidate-location, resume
+    - custom questions as #question_<numeric id>, with a [] suffix on
+      multi-selects
+    - dropdowns as react-select: role="combobox" input, options rendered into
+      a .select__menu as .select__option / role="option" only once open
+    - a hidden input[type=file] behind a styled Attach button
+    - a g-recaptcha-response textarea
+  A test that passes here exercises the same code paths the real board does.
+-->
+<h1>Staff Backend Engineer</h1>
+<div id="content">
+  <p>Northwind is hiring a Staff Backend Engineer to own our payments platform.
+  You will design distributed systems in Go and Postgres, and mentor a team of six.</p>
+</div>
+
+<form id="application-form" class="application--form" novalidate>
+  <div class="field-wrapper">
+    <label for="first_name">First Name<span aria-hidden="true">*</span></label>
+    <input type="text" id="first_name" aria-label="First Name" required>
+  </div>
+  <div class="field-wrapper">
+    <label for="last_name">Last Name<span aria-hidden="true">*</span></label>
+    <input type="text" id="last_name" aria-label="Last Name" required>
+  </div>
+  <div class="field-wrapper">
+    <label for="email">Email<span aria-hidden="true">*</span></label>
+    <input type="text" id="email" aria-label="Email" required>
+  </div>
+  <div class="field-wrapper">
+    <label for="phone">Phone<span aria-hidden="true">*</span></label>
+    <input type="tel" id="phone" aria-label="Phone" required>
+  </div>
+  <div class="field-wrapper">
+    <label for="candidate-location">Location (City)<span aria-hidden="true">*</span></label>
+    <input type="text" id="candidate-location" required>
+  </div>
+
+  <div class="field-wrapper">
+    <label for="resume">Resume/CV<span aria-hidden="true">*</span></label>
+    <button type="button" id="resume-attach">Attach</button>
+    <input type="file" id="resume" accept=".pdf,.doc,.docx,.txt,.rtf">
+    <span id="resume-name"></span>
+  </div>
+
+  <div class="field-wrapper">
+    <label for="question_1001">LinkedIn Profile<span aria-hidden="true">*</span></label>
+    <input type="text" id="question_1001" aria-label="LinkedIn Profile" required>
+  </div>
+
+  <div class="field-wrapper" data-select data-options="Yes|No">
+    <label id="question_1002-label" for="question_1002">Are you legally authorized to work in the United States?<span aria-hidden="true">*</span></label>
+  </div>
+
+  <div class="field-wrapper" data-select data-options="Yes|No">
+    <label id="question_1003-label" for="question_1003">Will you now or in the future require visa sponsorship?<span aria-hidden="true">*</span></label>
+  </div>
+
+  <div class="field-wrapper" data-select data-multi data-options="Go|Rust|TypeScript|Python|Java|Ruby">
+    <label id="question_1004[]-label" for="question_1004[]">Which programming languages do you use professionally?<span aria-hidden="true">*</span></label>
+  </div>
+
+  <div class="field-wrapper">
+    <label for="question_1005">How many years of professional software engineering experience do you have?<span aria-hidden="true">*</span></label>
+    <input type="text" id="question_1005" required>
+  </div>
+
+  <div class="field-wrapper">
+    <label for="question_1006">What are your salary expectations for this role?<span aria-hidden="true">*</span></label>
+    <input type="text" id="question_1006" required>
+  </div>
+
+  <div class="field-wrapper">
+    <label for="question_1007">Why do you want to join Northwind?<span aria-hidden="true">*</span></label>
+    <textarea id="question_1007" rows="5" aria-label="Why do you want to join Northwind?" required></textarea>
+  </div>
+
+  <div class="field-wrapper" data-select data-options="Immediately|2 weeks|1 month|3 months">
+    <label id="question_1008-label" for="question_1008">What is your notice period?<span aria-hidden="true">*</span></label>
+  </div>
+
+  <div class="field-wrapper" data-select data-options="Male|Female|Non-binary|Decline To Self Identify">
+    <label id="gender-label" for="gender">Gender</label>
+  </div>
+
+  <textarea name="g-recaptcha-response" id="g-recaptcha-response-100000" style="display:none"></textarea>
+  <button type="submit">Submit application</button>
+</form>
+
+<div id="confirmation" hidden><h2>Thank you for applying</h2><p>Your application has been received.</p></div>
+
+<script>
+// Minimal react-select clone: same DOM + ARIA contract, no framework.
+document.querySelectorAll('[data-select]').forEach((wrapper) => {
+  const label = wrapper.querySelector('label');
+  const id = label.getAttribute('for');
+  const multi = wrapper.hasAttribute('data-multi');
+  const options = wrapper.dataset.options.split('|');
+
+  const shell = document.createElement('div');
+  shell.className = 'select-shell';
+  shell.innerHTML =
+    '<div class="select__control">' +
+      '<div class="select__value-container' + (multi ? ' select__value-container--is-multi' : '') + '">' +
+        '<span class="chosen"></span>' +
+        '<div class="select__input-container">' +
+          '<input class="select__input" type="text" role="combobox" aria-autocomplete="list" ' +
+                 'aria-expanded="false" aria-haspopup="true" aria-labelledby="' + id + '-label" ' +
+                 'aria-required="' + (label.textContent.includes('*')) + '" autocomplete="off">' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  const input = shell.querySelector('input');
+  input.id = id;
+  const chosen = shell.querySelector('.chosen');
+  const selected = [];
+  let menu = null;
+
+  const render = () => { chosen.textContent = selected.join(', '); };
+
+  const close = () => { menu?.remove(); menu = null; input.setAttribute('aria-expanded', 'false'); };
+
+  const open = () => {
+    close();
+    menu = document.createElement('div');
+    menu.className = 'select__menu';
+    menu.setAttribute('role', 'listbox');
+    const filter = input.value.trim().toLowerCase();
+    options
+      .filter((o) => !filter || o.toLowerCase().includes(filter))
+      .filter((o) => !selected.includes(o))
+      .forEach((o) => {
+        const item = document.createElement('div');
+        item.className = 'select__option';
+        item.setAttribute('role', 'option');
+        item.textContent = o;
+        item.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          if (multi) selected.push(o); else selected.splice(0, 1, o);
+          input.value = '';
+          render();
+          close();
+        });
+        menu.appendChild(item);
+      });
+    shell.appendChild(menu);
+    input.setAttribute('aria-expanded', 'true');
+  };
+
+  input.addEventListener('focus', open);
+  input.addEventListener('click', open);
+  input.addEventListener('input', open);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  wrapper.appendChild(shell);
+});
+
+document.getElementById('resume-attach').addEventListener('click', () => document.getElementById('resume').click());
+document.getElementById('resume').addEventListener('change', (e) => {
+  document.getElementById('resume-name').textContent = e.target.files[0]?.name ?? '';
+});
+
+document.getElementById('application-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const missing = [];
+  document.querySelectorAll('#application-form input[required], #application-form textarea[required]').forEach((el) => {
+    const isCombo = el.getAttribute('role') === 'combobox';
+    const filled = isCombo
+      ? el.closest('.select-shell').querySelector('.chosen').textContent.trim().length > 0
+      : el.value.trim().length > 0;
+    if (!filled) missing.push(el.id);
+  });
+  if (missing.length) {
+    const err = document.createElement('div');
+    err.setAttribute('role', 'alert');
+    err.className = 'error';
+    err.textContent = 'Missing required fields: ' + missing.join(', ');
+    document.getElementById('application-form').prepend(err);
+    return;
+  }
+  document.getElementById('application-form').hidden = true;
+  document.getElementById('confirmation').hidden = false;
+});
+</script>
+</body>
+</html>

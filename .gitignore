@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.next/
+.env
+.env.local
+storage/artifacts/*
+storage/resumes/*
+!storage/**/.gitkeep
+# Belt and braces: runtime output must never be committed, wherever it lands.
+**/storage/artifacts/
+**/storage/resumes/
+*.log
+.playwright-profile*/
+generated/
+next-env.d.ts
+.tsbuildinfo
+*.tsbuildinfo

@@ -1,0 +1,292 @@
+// Job Applier — data model
+//
+// Design notes that matter:
+//  * AnswerBank is the long-term memory. Every question a human answers is
+//    stored here and reused forever. It is keyed two ways: by a canonical
+//    key (when a deterministic rule recognised the question) and by the raw
+//    normalised label + embedding (for everything else).
+//  * PendingQuestion is what makes a run *block*. A run cannot submit while
+//    one is open. That is the whole "pop up and ask" mechanism.
+//  * ApplicationEvent is an append-only audit log; the UI replays it.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Profile {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  fullName  String
+  firstName String
+  lastName  String
+  phone     String?
+  // Structured location so adapters can fill city/state/country separately.
+  city      String?
+  region    String?
+  country   String?
+  countryCode String?  // ISO-2, for phone/country comboboxes
+  linkedin  String?
+  github    String?
+  website   String?
+  portfolio String?
+
+  // Free-form narrative used to ground cover letters and answer inference.
+  summary   String?  @db.Text
+  // Full plain-text of the resume. Extracted once at upload; the LLM reads
+  // this, never the raw PDF bytes.
+  resumeText String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  facts        ProfileFact[]
+  resumes      ResumeFile[]
+  answers      Answer[]
+  applications Application[]
+
+  @@map("profiles")
+}
+
+/// Atomic, checkable facts about the candidate. The LLM may only answer a
+/// form question if the answer is derivable from these + resumeText.
+model ProfileFact {
+  id        String   @id @default(cuid())
+  profileId String
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  key       String   // e.g. "work_authorization.us"
+  label     String   // human-readable question this fact answers
+  value     String   @db.Text
+  kind      FactKind @default(TEXT)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([profileId, key])
+  @@map("profile_facts")
+}
+
+enum FactKind {
+  TEXT
+  BOOLEAN
+  NUMBER
+  DATE
+  ENUM
+  LIST
+}
+
+model ResumeFile {
+  id        String   @id @default(cuid())
+  profileId String
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  label     String   // "Default", "Backend-focused", ...
+  filename  String
+  mimeType  String
+  path      String   // on-disk path under storage/resumes
+  bytes     Int
+  isDefault Boolean  @default(false)
+  text      String?  @db.Text
+  createdAt DateTime @default(now())
+
+  @@map("resume_files")
+}
+
+/// The persistent answer bank — the thing that makes application #2 faster
+/// than application #1.
+model Answer {
+  id        String   @id @default(cuid())
+  profileId String
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  /// Canonical key when a rule matched (e.g. "visa.sponsorship_required"),
+  /// otherwise null and matching falls back to label similarity.
+  canonicalKey String?
+  /// Normalised question text, used for exact-hash and fuzzy matching.
+  normalizedLabel String
+  /// The exact label as it appeared, for display.
+  rawLabel       String  @db.Text
+  /// Sparse lexical vector for similarity search, stored as {term: weight}.
+  vector         Json
+
+  /// The answer itself. `value` is the canonical machine value; `displayValue`
+  /// is what gets typed/selected in a form.
+  value        Json
+  displayValue String  @db.Text
+
+  fieldKind   FieldKind
+  /// Option set this answer was given against, if any. Reusing an answer
+  /// requires the new field's options to be compatible.
+  options     Json?
+
+  source      AnswerSource
+  confidence  Float        @default(1)
+  /// PER_COMPANY answers (essays like "why do you want to work here") are
+  /// never reused verbatim across companies.
+  scope       AnswerScope  @default(GLOBAL)
+  companyKey  String?
+
+  timesUsed   Int      @default(0)
+  lastUsedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([profileId, canonicalKey])
+  @@index([profileId, normalizedLabel])
+  @@map("answers")
+}
+
+enum AnswerSource {
+  USER        // a human typed it. Highest trust, never overwritten silently.
+  PROFILE     // read straight off the structured profile
+  INFERRED    // LLM derived it from profile/resume with high confidence
+}
+
+enum AnswerScope {
+  GLOBAL
+  PER_COMPANY
+}
+
+enum FieldKind {
+  TEXT
+  TEXTAREA
+  EMAIL
+  PHONE
+  URL
+  NUMBER
+  DATE
+  SELECT
+  MULTISELECT
+  RADIO
+  CHECKBOX
+  CHECKBOX_GROUP
+  FILE
+  UNKNOWN
+}
+
+model Job {
+  id        String   @id @default(cuid())
+  url       String   @unique
+  ats       String   // greenhouse | lever | ashby | workable | generic
+  company   String
+  title     String
+  location  String?
+  descriptionText String? @db.Text
+  discoveredAt DateTime @default(now())
+
+  applications Application[]
+
+  @@map("jobs")
+}
+
+model Application {
+  id        String   @id @default(cuid())
+  profileId String
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  jobId     String
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  status    AppStatus @default(QUEUED)
+  /// Set when status = NEEDS_INPUT / BLOCKED so the UI can explain itself.
+  blockedReason String?  @db.Text
+
+  /// Snapshot of every field we discovered plus what we filled. This is the
+  /// audit trail — you can prove exactly what was submitted on your behalf.
+  fieldPlan Json?
+  coverLetter String? @db.Text
+  resumeFileId String?
+
+  requiresReview Boolean @default(true)
+  submittedAt   DateTime?
+  confirmation  String?  @db.Text
+
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events   ApplicationEvent[]
+  pending  PendingQuestion[]
+  artifacts Artifact[]
+
+  @@unique([profileId, jobId])
+  @@index([status])
+  @@map("applications")
+}
+
+enum AppStatus {
+  QUEUED
+  PREPARING      // fetching page, parsing form, writing cover letter
+  FILLING
+  NEEDS_INPUT    // blocked on a human answering a question
+  NEEDS_HUMAN    // blocked on captcha / login / email verification
+  REVIEW         // filled and waiting for the human's go-ahead
+  SUBMITTING
+  SUBMITTED
+  FAILED
+  CANCELLED
+}
+
+/// An open question the run is blocked on. Answering it writes to Answer.
+model PendingQuestion {
+  id            String   @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  /// The run-scoped handle the runner addresses this control by.
+  fieldId       String
+  fieldSelector String
+  rawLabel      String   @db.Text
+  helpText      String?  @db.Text
+  fieldKind     FieldKind
+  options       Json?
+  required      Boolean  @default(true)
+
+  /// Why we are asking rather than answering: NO_MATCH | LOW_CONFIDENCE | POLICY
+  reason        String
+  /// The LLM's best guess, shown as a prefill the human can accept or correct.
+  suggestion    Json?
+  suggestionRationale String? @db.Text
+
+  answeredAt    DateTime?
+  answerValue   Json?
+  /// Whether the human wants this remembered for future applications.
+  remember      Boolean  @default(true)
+
+  createdAt     DateTime @default(now())
+
+  @@index([applicationId, answeredAt])
+  @@map("pending_questions")
+}
+
+model ApplicationEvent {
+  id            String   @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  type      String   // STATUS | LOG | FIELD_FILLED | QUESTION_ASKED | ...
+  message   String   @db.Text
+  data      Json?
+  createdAt DateTime @default(now())
+
+  @@index([applicationId, createdAt])
+  @@map("application_events")
+}
+
+model Artifact {
+  id            String   @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  kind      String   // screenshot | dom | payload
+  label     String
+  path      String
+  createdAt DateTime @default(now())
+
+  @@index([applicationId, createdAt])
+  @@map("artifacts")
+}

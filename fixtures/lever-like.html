@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta property="og:title" content="Contoso - Senior Platform Engineer">
+<title>Contoso - Senior Platform Engineer</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 700px; margin: 2rem auto; }
+  .application-question { margin: 1rem 0; }
+  .application-label { display: block; font-weight: 600; margin-bottom: .25rem; }
+  input[type=text], input[type=email], select, textarea { width: 100%; padding: .4rem; }
+  fieldset { margin: 1rem 0; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+<!--
+  Offline stand-in for a Lever application form.
+
+  Mirrors the structure read off a live jobs.lever.co/<org>/<id>/apply page in
+  August 2026: a real multipart form with stable, human-readable field names,
+  native <select> elements, and custom questions under cards[<uuid>][fieldN].
+  Native controls throughout is exactly why Lever is the most reliable board to
+  drive - this fixture proves the non-combobox code path.
+-->
+<h2>Senior Platform Engineer</h2>
+
+<form id="application-form" enctype="multipart/form-data" method="POST" novalidate>
+  <div class="application-question">
+    <label class="application-label" for="name">Full name<span>✱</span></label>
+    <input type="text" name="name" id="name" required>
+  </div>
+  <div class="application-question">
+    <label class="application-label" for="email">Email<span>✱</span></label>
+    <input type="email" name="email" id="email" required>
+  </div>
+  <div class="application-question">
+    <label class="application-label" for="phone">Phone<span>✱</span></label>
+    <input type="text" name="phone" id="phone" required>
+  </div>
+  <div class="application-question">
+    <label class="application-label" for="location">Current location<span>✱</span></label>
+    <input type="text" name="location" id="location" required>
+  </div>
+  <div class="application-question">
+    <label class="application-label" for="org">Current company</label>
+    <input type="text" name="org" id="org">
+  </div>
+  <div class="application-question">
+    <label class="application-label" for="urls-linkedin">LinkedIn URL<span>✱</span></label>
+    <input type="text" name="urls[LinkedIn]" id="urls-linkedin" required>
+  </div>
+  <div class="application-question">
+    <label class="application-label" for="resume">Resume/CV<span>✱</span></label>
+    <input type="file" name="resume" id="resume">
+  </div>
+
+  <div class="application-question">
+    <label class="application-label" for="card-f0">Are you legally authorised to work in the United Kingdom?<span>✱</span></label>
+    <select name="cards[c3308324-8db9][field0]" id="card-f0" required>
+      <option value="">Select...</option>
+      <option value="yes">Yes</option>
+      <option value="no">No</option>
+    </select>
+  </div>
+
+  <div class="application-question">
+    <label class="application-label" for="card-f1">What is your notice period?<span>✱</span></label>
+    <select name="cards[c3308324-8db9][field1]" id="card-f1" required>
+      <option value="">Select...</option>
+      <option value="immediate">Immediately available</option>
+      <option value="2w">2 weeks</option>
+      <option value="1m">1 month</option>
+      <option value="3m">3 months</option>
+    </select>
+  </div>
+
+  <fieldset>
+    <legend>Which best describes your working preference?</legend>
+    <label><input type="radio" name="cards[c5d2d21f][field0]" value="remote" required> Fully remote</label>
+    <label><input type="radio" name="cards[c5d2d21f][field0]" value="hybrid"> Hybrid</label>
+    <label><input type="radio" name="cards[c5d2d21f][field0]" value="onsite"> Fully on-site</label>
+  </fieldset>
+
+  <div class="application-question">
+    <label class="application-label" for="comments">Additional information</label>
+    <textarea name="comments" id="comments" rows="4"></textarea>
+  </div>
+
+  <textarea name="h-captcha-response" style="display:none"></textarea>
+  <button type="submit" id="btn-submit">Submit application</button>
+</form>
+
+<div id="confirmation" hidden><h2>Thank you</h2><p>Your application was submitted.</p></div>
+
+<script>
+document.getElementById('application-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const missing = [];
+  form.querySelectorAll('[required]').forEach((el) => {
+    if (el.type === 'radio') {
+      if (!form.querySelector('input[name="' + el.name + '"]:checked')) missing.push(el.name);
+    } else if (el.type !== 'file' && !el.value.trim()) {
+      missing.push(el.name);
+    }
+  });
+  if (missing.length) {
+    const err = document.createElement('div');
+    err.setAttribute('role', 'alert');
+    err.textContent = 'Missing: ' + [...new Set(missing)].join(', ');
+    form.prepend(err);
+    return;
+  }
+  form.hidden = true;
+  document.getElementById('confirmation').hidden = false;
+});
+</script>
+</body>
+</html>
