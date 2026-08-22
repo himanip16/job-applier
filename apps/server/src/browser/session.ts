@@ -27,6 +27,16 @@ export async function getContext(): Promise<BrowserContext> {
     ctx = await launch();
   } catch (err) {
     const msg = (err as Error).message;
+    if (/Executable doesn't exist|playwright install/i.test(msg)) {
+      throw new Error(
+        'Chromium is not downloaded yet. Playwright ships the library but not the browser. ' +
+          'Run:  pnpm --filter @ja/server exec playwright install chromium  ' +
+          '(the bare `npx playwright install` resolves a different copy of Playwright in a ' +
+          'workspace and installs browsers the wrong version expects). ' +
+          'If the download is blocked on your network, point CHROMIUM_EXECUTABLE_PATH at a ' +
+          'Chromium you already have.',
+      );
+    }
     if (/ProcessSingleton|already in use/i.test(msg)) {
       throw new Error(
         `Another process is already using the browser profile at ${config.browserProfileDir}. ` +

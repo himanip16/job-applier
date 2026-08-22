@@ -12,7 +12,9 @@
     "dev:web": "pnpm --filter @ja/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm --filter @ja/server test"
+    "test": "pnpm --filter @ja/server test",
+    "setup": "pnpm install && pnpm db:push && pnpm browser:install",
+    "browser:install": "pnpm --filter @ja/server exec playwright install chromium"
   },
   "devDependencies": {
     "prisma": "^6.1.0",

@@ -29,18 +29,8 @@ vi.mock('../src/llm/coverLetter.js', () => ({
   generateCoverLetter: (...args: unknown[]) => coverLetterMock(...args),
 }));
 
-// This suite truncates tables. Refuse to run against anything that is not
-// obviously a throwaway database - pointing vitest at a dev DATABASE_URL by
-// accident should not delete a real answer bank.
-const dbUrl = process.env.DATABASE_URL ?? '';
-const dbName = dbUrl.split('/').pop()?.split('?')[0] ?? '';
-if (!/_test$/.test(dbName)) {
-  throw new Error(
-    `Refusing to run destructive tests against database "${dbName}". ` +
-      'Point DATABASE_URL at a database whose name ends in _test ' +
-      '(for example: createdb job_applier_test && DATABASE_URL=...job_applier_test pnpm test).',
-  );
-}
+const { requireTestDatabase } = await import('./testDb.js');
+requireTestDatabase();
 
 const { prisma } = await import('../src/lib/db.js');
 const { runApplication, submitAnswers, decideReview } = await import('../src/engine/runner.js');

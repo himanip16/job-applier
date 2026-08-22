@@ -13,7 +13,12 @@ import { submitAnswers, decideReview } from './engine/runner.js';
 import { rememberAnswer } from './engine/answerBank.js';
 import { adapterFor } from './ats/registry.js';
 import { extractResumeText, assessResumeText } from './lib/resumeText.js';
+import { estimateActivityCosts, activeModels } from './llm/models.js';
+import { provider, isConfigured } from './llm/client.js';
 import { matchCanonical, normalizeLabel, type RunEvent } from '@ja/shared';
+import { registerDiscoveryRoutes } from './routes/discovery.js';
+import { registerTrackerRoutes } from './routes/tracker.js';
+import { registerResumeRoutes } from './routes/resume.js';
 
 const app = Fastify({ logger: { level: 'warn' } });
 await app.register(cors, { origin: true });
@@ -21,6 +26,12 @@ await app.register(multipart, { limits: { fileSize: 15 * 1024 * 1024 } });
 await mkdir(artifactsDir, { recursive: true });
 await mkdir(resumesDir, { recursive: true });
 await app.register(fastifyStatic, { root: artifactsDir, prefix: '/artifacts/' });
+// Tailored resumes are downloadable from the UI.
+await app.register(fastifyStatic, {
+  root: resumesDir,
+  prefix: '/files/resumes/',
+  decorateReply: false,
+});
 
 // --------------------------------------------------------------- profile ---
 
@@ -368,16 +379,40 @@ app.delete<{ Params: { id: string } }>('/api/answers/:id', async (req) => {
   return { ok: true };
 });
 
+// ------------------------------------------------- discovery, resume, tracker ---
+
+registerDiscoveryRoutes(app, requireProfile);
+registerResumeRoutes(app, requireProfile);
+registerTrackerRoutes(app, requireProfile);
+
 // ----------------------------------------------------------------- health ---
 
 app.get('/api/health', async () => ({
   ok: true,
-  llmConfigured: Boolean(config.anthropicApiKey),
-  model: config.anthropicModel,
+  llmConfigured: isConfigured(),
+  ...activeModels(),
+  // Rough, local, and always an estimate - the real figure is on your console.
+  estimatedCosts: estimateActivityCosts(),
   headless: config.headless,
   requireReview: config.requireReview,
   activeRuns: activeRuns(),
 }));
+
+/**
+ * What this API key can actually reach.
+ *
+ * Model ids move — Gemini has renamed and deprecated several inside a year —
+ * so rather than trusting a hard-coded default, ask the provider and let the
+ * UI show real options.
+ */
+app.get('/api/models', async () => {
+  try {
+    const p = provider();
+    return { provider: p.id, models: await p.listModels(), active: activeModels() };
+  } catch (err) {
+    return { provider: null, models: [], error: (err as Error).message };
+  }
+});
 
 async function requireProfile(reply: { code: (n: number) => { send: (b: unknown) => unknown } }) {
   const profile = await prisma.profile.findFirst();
