@@ -1,4 +1,4 @@
-import { config } from '../lib/config.js';
+import { activeProvider, config } from '../lib/config.js';
 
 /**
  * Which model runs which task.
@@ -42,7 +42,23 @@ const CHEAP: Task[] = ['answerInference', 'fitScoring'];
  * save a cent.
  */
 export function modelFor(task: Task): string {
-  return CHEAP.includes(task) ? config.cheapModel : config.anthropicModel;
+  const cheap = CHEAP.includes(task);
+  return activeProvider() === 'gemini'
+    ? cheap
+      ? config.geminiModelCheap
+      : config.geminiModel
+    : cheap
+      ? config.anthropicModelCheap
+      : config.anthropicModel;
+}
+
+/** The two slots in use, for display. */
+export function activeModels(): { writing: string; judgement: string; provider: string } {
+  return {
+    provider: activeProvider(),
+    writing: modelFor('coverLetter'),
+    judgement: modelFor('answerInference'),
+  };
 }
 
 /**
@@ -76,9 +92,27 @@ const RATES: Record<string, { input: number; output: number }> = {
   'claude-fable-5': { input: 10, output: 50 },
 };
 
+/**
+ * Gemini's free tier bills nothing, so a spend estimate for it would be
+ * theatre. What actually constrains a free key is requests per minute and per
+ * day, which is a different unit and is reported separately.
+ */
+const FREE_TIER_MODELS = /^gemini-.*(flash|lite)/i;
+
+export function isFreeTier(model: string): boolean {
+  return activeProvider() === 'gemini' && FREE_TIER_MODELS.test(model);
+}
+
 export function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
-  const rate = RATES[model] ?? RATES['claude-opus-5']!;
-  return (inputTokens / 1_000_000) * rate.input + (outputTokens / 1_000_000) * rate.output;
+  if (isFreeTier(model)) return 0;
+  const rate = RATES[model];
+  if (rate) {
+    return (inputTokens / 1_000_000) * rate.input + (outputTokens / 1_000_000) * rate.output;
+  }
+  // Unknown model: fall back to the most expensive rate we know, so an
+  // estimate is never rosier than reality.
+  const top = RATES['claude-fable-5']!;
+  return (inputTokens / 1_000_000) * top.input + (outputTokens / 1_000_000) * top.output;
 }
 
 /** Rough per-activity cost, for the settings page. */
@@ -86,9 +120,9 @@ export function estimateActivityCosts(): {
   perApplication: number;
   perTailoring: number;
   perDeepScoredLead: number;
+  free: boolean;
 } {
-  const cheap = config.cheapModel;
-  const good = config.anthropicModel;
+  const { writing: good, judgement: cheap } = activeModels();
   return {
     // ~4 inferred fields, plus a cover letter and one essay.
     perApplication:
@@ -98,5 +132,6 @@ export function estimateActivityCosts(): {
     // Analysis then rewrite, both on long inputs.
     perTailoring: estimateCost(good, 11000, 2500) + estimateCost(good, 12000, 4000),
     perDeepScoredLead: estimateCost(cheap, 8000, 900),
+    free: isFreeTier(good) && isFreeTier(cheap),
   };
 }

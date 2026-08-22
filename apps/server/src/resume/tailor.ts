@@ -1,8 +1,6 @@
 import { z } from 'zod';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { normalizeLabel } from '@ja/shared';
-import { llm, describeLlmError } from '../llm/client.js';
-import { modelFor, effortFor } from '../llm/models.js';
+import { generate, describeLlmError } from '../llm/client.js';
 
 /**
  * Rewriting a resume for one job, without lying on it.
@@ -137,16 +135,10 @@ export async function analyseKeywords(args: {
   jobDescription: string;
 }): Promise<KeywordAnalysis> {
   try {
-    const res = await llm().messages.parse({
-      model: modelFor('keywordAnalysis'),
-      max_tokens: 8000,
+    const parsed = await generate({
+      task: 'keywordAnalysis',
       system: ANALYSIS_SYSTEM,
-      thinking: { type: 'adaptive' },
-      output_config: { effort: effortFor('keywordAnalysis'), format: zodOutputFormat(KeywordAnalysisSchema) },
-      messages: [
-        {
-          role: 'user',
-          content: `${args.candidateContext}
+      prompt: `${args.candidateContext}
 
 <current_resume>
 ${args.resumeText.slice(0, 20000)}
@@ -160,10 +152,9 @@ ${args.jobDescription.slice(0, 15000)}
 </job>
 
 Sort this job's keywords into the three buckets.`,
-        },
-      ],
+      schema: KeywordAnalysisSchema,
+      maxTokens: 8000,
     });
-    const parsed = res.parsed_output;
     if (!parsed) throw new Error('Keyword analysis returned no parseable output.');
     return parsed;
   } catch (err) {
@@ -237,16 +228,10 @@ export async function tailorResume(args: {
 
   if (allowList.length > 0 || analysis.atsIssues.length > 0) {
     try {
-      const res = await llm().messages.parse({
-        model: modelFor('resumeRewrite'),
-        max_tokens: 16000,
+      const parsed = await generate({
+        task: 'resumeRewrite',
         system: REWRITE_SYSTEM,
-        thinking: { type: 'adaptive' },
-        output_config: { effort: effortFor('resumeRewrite'), format: zodOutputFormat(RewriteSchema) },
-        messages: [
-          {
-            role: 'user',
-            content: `<original_resume>
+        prompt: `<original_resume>
 ${args.resumeText.slice(0, 20000)}
 </original_resume>
 
@@ -276,10 +261,9 @@ ${analysis.atsIssues.join('\n') || 'none'}
 </ats_issues_to_fix>
 
 Rewrite the resume.`,
-          },
-        ],
+        schema: RewriteSchema,
+        maxTokens: 16000,
       });
-      const parsed = res.parsed_output;
       if (parsed?.text) {
         text = parsed.text;
         changes = parsed.changes;

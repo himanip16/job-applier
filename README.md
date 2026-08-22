@@ -132,7 +132,7 @@ the information is not actually there.
 Requires Node 22+, pnpm, and Postgres 14+.
 
 ```bash
-cp .env.example .env          # fill in DATABASE_URL and ANTHROPIC_API_KEY first
+cp .env.example .env          # fill in DATABASE_URL and one model API key
 pnpm setup                    # install, push the schema, download Chromium
 pnpm --filter @ja/server seed # optional: a starter profile and standing answers
 ```
@@ -157,37 +157,51 @@ pnpm dev:web      # UI on :3000
 Then open <http://localhost:3000>, fill in your profile, upload your resume,
 and paste a job URL.
 
-### What it costs to run
+### Which model provider, and what it costs
 
-The Anthropic API is billed separately from a Claude.ai Pro or Max
-subscription — Pro does not include API credits. You need a key from
-[console.anthropic.com](https://console.anthropic.com), on pay-as-you-go.
+Two backends. Set one key and go — `LLM_PROVIDER` is inferred from whichever
+is present.
 
-It is less than you would guess, because most fields never reach a model at
-all: name, contact and links come straight off your profile, the recurring
-twenty questions come from your stated facts, and anything you have answered
-before comes from the answer bank. The model is the last resort, not the first.
+**Gemini** — free. Get a key at
+[aistudio.google.com/apikey](https://aistudio.google.com/apikey). The free tier
+is limited by requests per minute and per day rather than by spend, so a normal
+day of applying costs nothing.
 
-Work also splits by kind, and the two get different models by default:
+> One thing to know before you paste your resume in: on the **free** tier
+> Google may use your API data to improve their products, and this app sends
+> your resume, your work history and your answers. Enabling billing on the
+> Google Cloud project excludes your data from that. If neither suits you, use
+> Anthropic.
 
-| | Model | Used for |
-|---|---|---|
-| `ANTHROPIC_MODEL` | `claude-opus-5` | Anything that produces text you submit: cover letters, essay answers, the resume rewrite, and the grounded-vs-unsupported keyword decision |
-| `ANTHROPIC_MODEL_CHEAP` | `claude-haiku-4-5` | High-volume judgement: "is this question answerable from the resume?", "does this posting fit?" |
+**Anthropic** — pay-as-you-go from the first token. A Claude.ai Pro or Max
+subscription does **not** include API credits; the API is a separate product at
+[console.anthropic.com](https://console.anthropic.com).
 
-Rough figures, shown live on the dashboard:
+Either way it is cheaper than you would guess, because most fields never reach
+a model: name, contact and links come off your profile, the recurring twenty
+questions come from your stated facts, and anything you have answered before
+comes from the answer bank. The model is the last resort, not the first.
 
-| | Opus + Haiku (default) | Sonnet + Haiku |
-|---|---|---|
-| One application | ~$0.11 | ~$0.07 |
-| Tailoring a resume | ~$0.28 | ~$0.17 |
-| One lead read in full | ~$0.013 | ~$0.013 |
-| **100 applications** | **~$11** | **~$7** |
+Work splits into two kinds and gets two model slots:
 
-Set both variables to the same value to opt out of the split. The keyword
-analysis stays on the strong model whatever else you change — it is the step
-that decides what may go on your resume, and that is not the place to save a
-cent.
+| Slot | Used for |
+|---|---|
+| `GEMINI_MODEL` / `ANTHROPIC_MODEL` | Anything producing text you submit: cover letters, essay answers, the resume rewrite, and the grounded-vs-unsupported keyword decision |
+| `GEMINI_MODEL_CHEAP` / `ANTHROPIC_MODEL_CHEAP` | High-volume judgement: "is this answerable from the resume?", "does this posting fit?" |
+
+| | Gemini free tier | Opus + Haiku | Sonnet + Haiku |
+|---|---|---|---|
+| One application | $0 | ~$0.11 | ~$0.07 |
+| Tailoring a resume | $0 | ~$0.28 | ~$0.17 |
+| **100 applications** | **$0** | **~$11** | **~$7** |
+
+Shown live on the dashboard. Set both slots to the same value to opt out of the
+split. The keyword analysis stays on the stronger slot whatever else you
+change — it decides what may go on your resume, and that is not the place to
+save a cent.
+
+Model ids move, especially on Gemini. `GET /api/models` reports what your key
+can actually reach, rather than trusting the defaults in `.env.example`.
 
 ---
 
@@ -271,7 +285,7 @@ The integration suite truncates tables, so it refuses to run unless the
 database name ends in `_test` — set `TEST_DATABASE_URL` in your `.env` and the
 test script picks it up automatically.
 
-42 tests, no network and no API key required. They run the real extractor and
+63 tests, no network and no API key required. They run the real extractor and
 the real fill engine against `fixtures/`, which reproduce the DOM contracts read
 off live Greenhouse and Lever forms in August 2026 — react-select comboboxes,
 hidden file inputs, radio groups, captcha markers and all. `endToEnd.test.ts`

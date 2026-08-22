@@ -13,7 +13,8 @@ import { submitAnswers, decideReview } from './engine/runner.js';
 import { rememberAnswer } from './engine/answerBank.js';
 import { adapterFor } from './ats/registry.js';
 import { extractResumeText, assessResumeText } from './lib/resumeText.js';
-import { estimateActivityCosts } from './llm/models.js';
+import { estimateActivityCosts, activeModels } from './llm/models.js';
+import { provider, isConfigured } from './llm/client.js';
 import { matchCanonical, normalizeLabel, type RunEvent } from '@ja/shared';
 import { registerDiscoveryRoutes } from './routes/discovery.js';
 import { registerTrackerRoutes } from './routes/tracker.js';
@@ -388,15 +389,30 @@ registerTrackerRoutes(app, requireProfile);
 
 app.get('/api/health', async () => ({
   ok: true,
-  llmConfigured: Boolean(config.anthropicApiKey),
-  model: config.anthropicModel,
-  cheapModel: config.cheapModel,
+  llmConfigured: isConfigured(),
+  ...activeModels(),
   // Rough, local, and always an estimate - the real figure is on your console.
   estimatedCosts: estimateActivityCosts(),
   headless: config.headless,
   requireReview: config.requireReview,
   activeRuns: activeRuns(),
 }));
+
+/**
+ * What this API key can actually reach.
+ *
+ * Model ids move — Gemini has renamed and deprecated several inside a year —
+ * so rather than trusting a hard-coded default, ask the provider and let the
+ * UI show real options.
+ */
+app.get('/api/models', async () => {
+  try {
+    const p = provider();
+    return { provider: p.id, models: await p.listModels(), active: activeModels() };
+  } catch (err) {
+    return { provider: null, models: [], error: (err as Error).message };
+  }
+});
 
 async function requireProfile(reply: { code: (n: number) => { send: (b: unknown) => unknown } }) {
   const profile = await prisma.profile.findFirst();

@@ -1,9 +1,7 @@
 import { z } from 'zod';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { normalizeLabel, tokenize } from '@ja/shared';
 import { prisma, type Prisma } from '../lib/db.js';
-import { llm, describeLlmError } from '../llm/client.js';
-import { modelFor, effortFor } from '../llm/models.js';
+import { generate, describeLlmError } from '../llm/client.js';
 import type { DiscoveredJob } from './sources.js';
 
 /**
@@ -206,16 +204,10 @@ export async function assessFit(args: {
   job: Pick<DiscoveredJob, 'title' | 'companyName' | 'location' | 'descriptionText' | 'remote'>;
 }): Promise<FitAssessment | null> {
   try {
-    const res = await llm().messages.parse({
-      model: modelFor('fitScoring'),
-      max_tokens: 3000,
+    return await generate({
+      task: 'fitScoring',
       system: FIT_SYSTEM,
-      thinking: { type: 'adaptive' },
-      output_config: { effort: effortFor('fitScoring'), format: zodOutputFormat(FitSchema) },
-      messages: [
-        {
-          role: 'user',
-          content: `${args.candidateContext}
+      prompt: `${args.candidateContext}
 
 <stated_preferences>
 ${args.preferences || 'None recorded.'}
@@ -234,10 +226,9 @@ ${args.job.descriptionText.slice(0, 12000)}
 </posting>
 
 Assess the fit.`,
-        },
-      ],
+      schema: FitSchema,
+      maxTokens: 3000,
     });
-    return res.parsed_output ?? null;
   } catch (err) {
     throw new Error(describeLlmError(err));
   }

@@ -1,7 +1,5 @@
 import { z } from 'zod';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { llm, describeLlmError } from './client.js';
-import { modelFor, effortFor } from './models.js';
+import { generate, describeLlmError } from './client.js';
 import type { FormField } from '@ja/shared';
 
 /**
@@ -84,19 +82,14 @@ required: ${field.required}${optionBlock}
 Answer the question above using only the candidate context.`;
 
   try {
-    const res = await llm().messages.parse({
-      model: modelFor('answerInference'),
-      max_tokens: 2000,
+    const parsed = await generate({
+      task: 'answerInference',
       system: SYSTEM,
-      thinking: { type: 'adaptive' },
-      output_config: {
-        effort: effortFor('answerInference'),
-        format: zodOutputFormat(InferenceSchema),
-      },
-      messages: [{ role: 'user', content: userContent }],
+      prompt: userContent,
+      schema: InferenceSchema,
+      maxTokens: 2000,
     });
 
-    const parsed = res.parsed_output;
     if (!parsed) {
       return blank('The model returned no parseable answer.');
     }

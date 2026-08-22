@@ -268,8 +268,13 @@ export async function runApplication(applicationId: string): Promise<void> {
         : adapter.id === 'generic'
           ? 'Unrecognised site, so this always goes through review.'
           : 'Filled and ready. Check it over, then approve.';
+      // Register the waiter BEFORE announcing the status. Anything watching the
+      // run - the UI, the CLI, a test - can observe REVIEW and answer within
+      // microseconds, and if the parked promise does not exist yet that reply
+      // is dropped and the run waits forever.
+      const decisionPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
       await setStatus(applicationId, 'REVIEW', reason, { blockers, plan });
-      const decision = await park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
+      const decision = await decisionPromise;
       if (!decision.approved) {
         await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
         return;
@@ -295,12 +300,13 @@ export async function runApplication(applicationId: string): Promise<void> {
     }
 
     if (outcome.outcome === 'VALIDATION_ERROR') {
+      const retryPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
       await setStatus(
         applicationId,
         'REVIEW',
         `The form rejected the submission: ${outcome.detail}. It is still open in the browser - fix it there and approve, or cancel.`,
       );
-      const retry = await park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
+      const retry = await retryPromise;
       if (!retry.approved) {
         await setStatus(applicationId, 'CANCELLED', retry.note ?? 'Cancelled after a validation error.');
         return;
@@ -367,6 +373,13 @@ async function askHuman(
 ): Promise<Map<string, ResolvedAnswer>> {
   const byId = new Map(fields.map((f) => [f.id, f]));
 
+  // Same ordering rule as the review gate: park first, announce second. The
+  // questions are written to the database before the status changes, so a
+  // client that reacts instantly still finds them.
+  const replyPromise = park<Array<{ fieldId: string; value: string | string[]; remember: boolean }>>(
+    questionsKey(applicationId),
+  );
+
   await prisma.pendingQuestion.createMany({
     data: gaps.map((g) => {
       const f = byId.get(g.fieldId)!;
@@ -402,9 +415,7 @@ async function askHuman(
     })),
   });
 
-  const replies = await park<Array<{ fieldId: string; value: string | string[]; remember: boolean }>>(
-    questionsKey(applicationId),
-  );
+  const replies = await replyPromise;
 
   const out = new Map<string, ResolvedAnswer>();
   for (const reply of replies) {

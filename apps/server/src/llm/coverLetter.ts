@@ -1,7 +1,5 @@
 import { z } from 'zod';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { llm } from './client.js';
-import { modelFor, effortFor } from './models.js';
+import { generate } from './client.js';
 
 const CoverLetterSchema = z.object({
   body: z.string().describe('The cover letter body. No date, no letterhead, no placeholder brackets.'),
@@ -41,16 +39,10 @@ export interface CoverLetterInput {
 
 export async function generateCoverLetter(input: CoverLetterInput): Promise<GeneratedCoverLetter> {
   const wordCap = input.maxWords ? `\nHard limit: ${input.maxWords} words.` : '';
-  const res = await llm().messages.parse({
-    model: modelFor('coverLetter'),
-    max_tokens: 8000,
+  const parsed = await generate({
+    task: 'coverLetter',
     system: SYSTEM,
-    thinking: { type: 'adaptive' },
-    output_config: { effort: effortFor('coverLetter'), format: zodOutputFormat(CoverLetterSchema) },
-    messages: [
-      {
-        role: 'user',
-        content: `${input.candidateContext}
+    prompt: `${input.candidateContext}
 
 <job>
 company: ${input.companyName}
@@ -60,11 +52,10 @@ ${input.jobDescription.slice(0, 15000)}
 </job>
 ${input.emphasis ? `\n<candidate_instructions>\n${input.emphasis}\n</candidate_instructions>\n` : ''}
 Write the cover letter.${wordCap}`,
-      },
-    ],
+    schema: CoverLetterSchema,
+    maxTokens: 8000,
   });
 
-  const parsed = res.parsed_output;
   if (!parsed) throw new Error('Cover letter generation returned no parseable output.');
   return parsed;
 }
@@ -89,18 +80,12 @@ export async function generateEssayAnswer(args: {
   maxChars?: number;
 }): Promise<string> {
   const cap = args.maxChars ?? 900;
-  const res = await llm().messages.parse({
-    model: modelFor('essay'),
-    max_tokens: 4000,
+  const parsed = await generate({
+    task: 'essay',
     system: `${SYSTEM}
 
 You are answering one short application question, not writing a full letter. Answer the question directly in ${Math.max(60, Math.floor(cap / 8))} words or fewer. No greeting, no sign-off.`,
-    thinking: { type: 'adaptive' },
-    output_config: { effort: effortFor('essay'), format: zodOutputFormat(EssaySchema) },
-    messages: [
-      {
-        role: 'user',
-        content: `${args.candidateContext}
+    prompt: `${args.candidateContext}
 
 <job>
 company: ${args.companyName}
@@ -110,9 +95,9 @@ ${args.jobDescription.slice(0, 12000)}
 </job>
 
 <question>${args.question}</question>`,
-      },
-    ],
+    schema: EssaySchema,
+    maxTokens: 4000,
   });
-  const answer = res.parsed_output?.answer ?? '';
+  const answer = parsed?.answer ?? '';
   return answer.length > cap ? `${answer.slice(0, cap - 1).trimEnd()}…` : answer;
 }

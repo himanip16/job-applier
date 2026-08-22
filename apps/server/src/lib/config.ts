@@ -26,15 +26,28 @@ export const config = {
   port: num(process.env.PORT, 8787),
   databaseUrl: process.env.DATABASE_URL ?? '',
 
+  /** 'anthropic' | 'gemini', or unset to infer from whichever key is present. */
+  llmProvider: (process.env.LLM_PROVIDER as 'anthropic' | 'gemini' | undefined) || undefined,
+
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
-  /** Writing that goes out under your name: letters, essays, resume rewrites. */
-  anthropicModel: process.env.ANTHROPIC_MODEL ?? 'claude-opus-5',
+  geminiApiKey: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? '',
+
   /**
-   * High-volume judgement calls: "is this answerable?", "does this job fit?".
-   * These run many times per application and do not need the top model. Set it
-   * to the same value as ANTHROPIC_MODEL to opt out of the split.
+   * Model slots, per provider.
+   *
+   * `*_MODEL` writes what goes out under your name and makes the
+   * grounded-vs-unsupported call on resume keywords. `*_MODEL_CHEAP` handles
+   * the high-volume judgement calls. Set both to the same value to opt out of
+   * the split.
+   *
+   * Ids change - Gemini in particular has renamed and deprecated several
+   * within a year - so these are configurable and GET /api/models reports what
+   * your key can actually reach rather than trusting the defaults.
    */
-  cheapModel: process.env.ANTHROPIC_MODEL_CHEAP ?? 'claude-haiku-4-5',
+  anthropicModel: process.env.ANTHROPIC_MODEL ?? 'claude-opus-5',
+  anthropicModelCheap: process.env.ANTHROPIC_MODEL_CHEAP ?? 'claude-haiku-4-5',
+  geminiModel: process.env.GEMINI_MODEL ?? 'gemini-3.5-flash',
+  geminiModelCheap: process.env.GEMINI_MODEL_CHEAP ?? 'gemini-3.5-flash',
 
   headless: bool(process.env.HEADLESS, false),
   /**
@@ -58,11 +71,7 @@ export const config = {
 export const artifactsDir = path.join(config.storageDir, 'artifacts');
 export const resumesDir = path.join(config.storageDir, 'resumes');
 
-export function assertLlmConfigured() {
-  if (!config.anthropicApiKey) {
-    throw new Error(
-      'ANTHROPIC_API_KEY is not set. Cover letters and answer inference need it. ' +
-        'Copy .env.example to .env and fill it in.',
-    );
-  }
+/** Which provider will actually be used, given the config. */
+export function activeProvider(): 'anthropic' | 'gemini' {
+  return config.llmProvider ?? (config.geminiApiKey ? 'gemini' : 'anthropic');
 }
