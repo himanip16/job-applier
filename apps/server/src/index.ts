@@ -14,6 +14,9 @@ import { rememberAnswer } from './engine/answerBank.js';
 import { adapterFor } from './ats/registry.js';
 import { extractResumeText, assessResumeText } from './lib/resumeText.js';
 import { matchCanonical, normalizeLabel, type RunEvent } from '@ja/shared';
+import { registerDiscoveryRoutes } from './routes/discovery.js';
+import { registerTrackerRoutes } from './routes/tracker.js';
+import { registerResumeRoutes } from './routes/resume.js';
 
 const app = Fastify({ logger: { level: 'warn' } });
 await app.register(cors, { origin: true });
@@ -21,6 +24,12 @@ await app.register(multipart, { limits: { fileSize: 15 * 1024 * 1024 } });
 await mkdir(artifactsDir, { recursive: true });
 await mkdir(resumesDir, { recursive: true });
 await app.register(fastifyStatic, { root: artifactsDir, prefix: '/artifacts/' });
+// Tailored resumes are downloadable from the UI.
+await app.register(fastifyStatic, {
+  root: resumesDir,
+  prefix: '/files/resumes/',
+  decorateReply: false,
+});
 
 // --------------------------------------------------------------- profile ---
 
@@ -367,6 +376,12 @@ app.delete<{ Params: { id: string } }>('/api/answers/:id', async (req) => {
   await prisma.answer.delete({ where: { id: req.params.id } });
   return { ok: true };
 });
+
+// ------------------------------------------------- discovery, resume, tracker ---
+
+registerDiscoveryRoutes(app, requireProfile);
+registerResumeRoutes(app, requireProfile);
+registerTrackerRoutes(app, requireProfile);
 
 // ----------------------------------------------------------------- health ---
 

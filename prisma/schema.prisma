@@ -209,9 +209,23 @@ model Application {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // ---- tracker -----------------------------------------------------------
+  /// Where this stands with the employer, as opposed to `status`, which is
+  /// where the automation got to. A run can be SUBMITTED and the outcome
+  /// REJECTED; they are different facts and conflating them loses both.
+  outcome      Outcome  @default(IN_PROGRESS)
+  outcomeAt    DateTime?
+  outcomeNote  String?  @db.Text
+  /// The tailored resume that actually went out, if one did.
+  tailoredResumeId String?
+  /// Free-form notes: recruiter name, referral, salary discussed.
+  notes        String?  @db.Text
+
   events   ApplicationEvent[]
   pending  PendingQuestion[]
   artifacts Artifact[]
+  rounds   InterviewRound[]
+  lessons  Lesson[]
 
   @@unique([profileId, jobId])
   @@index([status])
@@ -289,4 +303,212 @@ model Artifact {
 
   @@index([applicationId, createdAt])
   @@map("artifacts")
+}
+
+// ---------------------------------------------------------------------------
+// Discovery
+// ---------------------------------------------------------------------------
+
+/// A company whose board we watch. Most of these have a public, unauthenticated
+/// postings API - the boards publish them so aggregators can read them - which
+/// is far kinder and far more reliable than scraping the rendered page.
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  /// greenhouse | lever | ashby | workable | careers-page
+  source    String
+  /// Board slug for API sources, or the careers-page URL for crawling.
+  handle    String
+  enabled   Boolean  @default(true)
+  lastCrawledAt DateTime?
+  lastCrawlNote String? @db.Text
+  createdAt DateTime @default(now())
+
+  leads     JobLead[]
+
+  @@unique([source, handle])
+  @@map("companies")
+}
+
+/// A discovered posting, before you have decided anything about it.
+model JobLead {
+  id        String   @id @default(cuid())
+  profileId String
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  url       String
+  ats       String
+  title     String
+  companyName String
+  location  String?
+  remote    Boolean  @default(false)
+  descriptionText String? @db.Text
+  postedAt  DateTime?
+
+  /// 0-100. Lexical prior blended with the model's read of the description.
+  score     Float    @default(0)
+  /// Short human-readable reasons behind the score, good and bad.
+  scoreReasons Json?
+  scoredAt  DateTime?
+  /// True once a model has looked at it; false means lexical score only.
+  deepScored Boolean @default(false)
+
+  status    LeadStatus @default(NEW)
+  /// Free-text reason the candidate gave when rejecting. Optional by design -
+  /// a forced reason produces noise, and noise trains the scorer badly.
+  rejectReason String? @db.Text
+  /// Coarse bucket the reason maps to, used as a training signal.
+  rejectCategory String?
+  decidedAt DateTime?
+
+  /// Set once this lead turns into a real application.
+  applicationId String?
+
+  discoveredAt DateTime @default(now())
+
+  @@unique([profileId, url])
+  @@index([profileId, status, score])
+  @@map("job_leads")
+}
+
+enum LeadStatus {
+  NEW
+  SHORTLISTED
+  REJECTED
+  APPLIED
+  EXPIRED
+}
+
+/// What the candidate's accept/reject history has taught us.
+///
+/// Kept as explicit, inspectable rows rather than opaque weights: you can read
+/// why a job was ranked down, and delete a signal that has gone stale.
+model PreferenceSignal {
+  id        String   @id @default(cuid())
+  profileId String
+
+  /// A term, phrase or attribute, e.g. "on-site", "series a", "php".
+  term      String
+  /// Positive = the candidate leans toward this, negative = away from it.
+  weight    Float
+  /// LEXICAL (derived from decisions) or STATED (the candidate said so).
+  origin    String   @default("LEXICAL")
+  /// How many decisions contributed.
+  evidence  Int      @default(1)
+  updatedAt DateTime @updatedAt
+
+  @@unique([profileId, term])
+  @@index([profileId, weight])
+  @@map("preference_signals")
+}
+
+// ---------------------------------------------------------------------------
+// Resume tailoring
+// ---------------------------------------------------------------------------
+
+/// A resume rewritten for one specific job.
+///
+/// The only interesting field is `insertions`: every keyword this version adds
+/// that the base resume did not contain, together with the evidence that let
+/// us add it. Nothing lands in a tailored resume without a line in there.
+model TailoredResume {
+  id        String   @id @default(cuid())
+  profileId String
+  jobId     String?
+  baseResumeId String
+
+  label     String
+  text      String   @db.Text
+  /// Paths to the generated files, relative to the storage dir.
+  txtPath   String?
+  docxPath  String?
+
+  /// [{ keyword, evidence, sourceField }]
+  insertions Json
+  /// Keywords the job wants that could NOT be grounded, and so were left out.
+  /// Surfaced to the candidate as honest gaps, never written into the resume.
+  unsupported Json
+  /// [{ keyword, where }] - already present before tailoring.
+  covered   Json
+  /// 0-100 estimate of keyword coverage against the job description.
+  coverage  Float @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([profileId, createdAt])
+  @@map("tailored_resumes")
+}
+
+// ---------------------------------------------------------------------------
+// Tracker
+// ---------------------------------------------------------------------------
+
+enum Outcome {
+  IN_PROGRESS
+  REJECTED
+  GHOSTED
+  WITHDRAWN
+  OFFER
+  ACCEPTED
+  DECLINED
+}
+
+model InterviewRound {
+  id        String   @id @default(cuid())
+  applicationId String
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  name      String   // "Recruiter screen", "Technical", "Onsite", ...
+  sequence  Int      @default(0)
+  scheduledAt DateTime?
+  completedAt DateTime?
+  /// SCHEDULED | PASSED | FAILED | CANCELLED | PENDING_RESULT
+  status    String   @default("SCHEDULED")
+  interviewers String?
+  format    String?  // phone, video, onsite, take-home
+  notes     String?  @db.Text
+
+  questions InterviewQuestion[]
+  lessons   Lesson[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([applicationId, sequence])
+  @@map("interview_rounds")
+}
+
+/// A question you were actually asked. Worth recording twice over: it tells you
+/// what this company probes for, and the good answers become reusable material.
+model InterviewQuestion {
+  id        String   @id @default(cuid())
+  roundId   String
+  round     InterviewRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  question  String   @db.Text
+  myAnswer  String?  @db.Text
+  /// How it went, in your own judgement: GOOD | OK | POOR
+  selfRating String?
+  category  String?  // behavioural, system-design, coding, culture, ...
+  createdAt DateTime @default(now())
+
+  @@index([roundId])
+  @@map("interview_questions")
+}
+
+/// "What I think I got wrong." The most useful table in here after six months.
+model Lesson {
+  id        String   @id @default(cuid())
+  applicationId String
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  roundId   String?
+  round     InterviewRound? @relation(fields: [roundId], references: [id], onDelete: SetNull)
+
+  text      String   @db.Text
+  category  String?  // preparation, communication, technical, fit, logistics
+  createdAt DateTime @default(now())
+
+  @@index([applicationId])
+  @@map("lessons")
 }

@@ -14,9 +14,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <div className="inner">
             <strong>Job Applier</strong>
             <nav>
-              <a href="/">Applications</a>
+              <a href="/discover">Find work</a>
+              <a href="/">Runs</a>
+              <a href="/tracker">Tracker</a>
+              <a href="/resume">Resume</a>
+              <a href="/retro">Retrospective</a>
               <a href="/profile">Profile</a>
-              <a href="/answers">Answer bank</a>
+              <a href="/answers">Answers</a>
             </nav>
           </div>
         </header>

@@ -66,6 +66,10 @@ export function normalizeLabel(raw: string): string {
 export function tokenize(normalized: string): string[] {
   return normalized
     .split(/[^a-z0-9'+#.]+/)
+    // Interior dots are load-bearing ("node.js", ".net", "asp.net"); leading
+    // and trailing ones are just sentence punctuation, and leaving them on
+    // splits "commute" and "commute." into two unrelated signals.
+    .map((t) => t.replace(/^[.'-]+/, '').replace(/[.'-]+$/, ''))
     .filter((t) => t.length > 1 && !STOPWORDS.has(t));
 }
 
