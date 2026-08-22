@@ -1,5 +1,6 @@
 import type { AtsAdapter, JobMeta } from '../types.js';
 import { extractFields } from '../../browser/extract.js';
+import { openApplicationForm } from '../../browser/openForm.js';
 
 /**
  * Workable (apply.workable.com/<org>/j/<id>).
@@ -16,13 +17,7 @@ export const workableAdapter: AtsAdapter = {
   },
 
   async openApplicationForm(page, url) {
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
-    const apply = page.getByRole('link', { name: /apply for this job/i }).or(
-      page.getByRole('button', { name: /apply/i }),
-    );
-    if (await apply.count()) await apply.first().click().catch(() => {});
-    await page.locator('form').first().waitFor({ state: 'visible', timeout: 20_000 });
-    await page.waitForTimeout(600);
+    await openApplicationForm(page, url, { applyPatterns: [/apply for this job/i] });
   },
 
   async readJobMeta(page): Promise<JobMeta> {

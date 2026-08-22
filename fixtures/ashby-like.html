@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta property="og:title" content="Senior Backend Engineer @ Contoso">
+<title>Senior Backend Engineer @ Contoso</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; }
+  #challenge { text-align: center; padding: 4rem 1rem; }
+  ._fieldEntry { margin: 1rem 0; }
+  ._fieldEntry label { display: block; font-weight: 600; margin-bottom: .25rem; }
+  input[type=text], input[type=email], textarea { width: 100%; padding: .4rem; }
+  #application { display: none; }
+</style>
+</head>
+<body>
+<!--
+  Offline stand-in for an Ashby posting, reproducing the three things that
+  broke the real run:
+
+    1. A Cloudflare-style interstitial renders FIRST and replaces the page.
+       Waiting for a form during it waits for something that does not exist.
+    2. The application only mounts after "Apply for this job" is clicked.
+    3. The application has NO <form> element - Ashby renders bare React
+       inputs - so locator('form') never becomes visible even once it is up.
+
+  Query params drive the variants:
+    ?challenge=<ms>  how long the interstitial stays up (default 1500)
+    ?stuck=1         interstitial never clears, as when a real challenge needs
+                     a human
+-->
+<div id="challenge">
+  <h1>Just a moment...</h1>
+  <p>Verifying you are human. This will take a few seconds.</p>
+  <div class="cf-turnstile"></div>
+</div>
+
+<div id="content" hidden>
+  <h1>Senior Backend Engineer</h1>
+  <p>Contoso is hiring a backend engineer to work on Go and Postgres services.
+  You will own the settlement pipeline end to end.</p>
+  <button type="button" id="apply-btn">Apply for this job</button>
+
+  <!-- Deliberately NOT a <form>. This is the shape Ashby actually renders. -->
+  <div id="application" role="region" aria-label="Application">
+    <div class="_fieldEntry">
+      <label for="_systemfield_name">Name<span aria-hidden="true">*</span></label>
+      <input type="text" id="_systemfield_name" required>
+    </div>
+    <div class="_fieldEntry">
+      <label for="_systemfield_email">Email<span aria-hidden="true">*</span></label>
+      <input type="email" id="_systemfield_email" required>
+    </div>
+    <div class="_fieldEntry">
+      <label for="_systemfield_resume">Resume<span aria-hidden="true">*</span></label>
+      <input type="file" id="_systemfield_resume">
+    </div>
+    <div class="_fieldEntry">
+      <label for="q_notice">What is your notice period?<span aria-hidden="true">*</span></label>
+      <input type="text" id="q_notice" required>
+    </div>
+    <div class="_fieldEntry">
+      <label for="q_why">Why Contoso?</label>
+      <textarea id="q_why" rows="4"></textarea>
+    </div>
+    <button type="button" id="submit-btn">Submit Application</button>
+  </div>
+</div>
+
+<div id="confirmation" hidden><h2>Thank you</h2><p>Your application was submitted.</p></div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const stuck = params.get('stuck') === '1';
+const delay = Number(params.get('challenge') ?? 1500);
+
+if (!stuck) {
+  setTimeout(() => {
+    document.getElementById('challenge').remove();
+    document.getElementById('content').hidden = false;
+  }, delay);
+}
+
+document.addEventListener('click', (e) => {
+  const t = e.target;
+  if (t && t.id === 'apply-btn') {
+    // Mounts after a beat, as a React app would.
+    setTimeout(() => { document.getElementById('application').style.display = 'block'; }, 400);
+  }
+  if (t && t.id === 'submit-btn') {
+    const missing = [];
+    document.querySelectorAll('#application [required]').forEach((el) => {
+      if (el.type !== 'file' && !el.value.trim()) missing.push(el.id);
+    });
+    if (missing.length) {
+      const err = document.createElement('div');
+      err.setAttribute('role', 'alert');
+      err.textContent = 'Missing required fields: ' + missing.join(', ');
+      document.getElementById('application').prepend(err);
+      return;
+    }
+    document.getElementById('content').hidden = true;
+    document.getElementById('confirmation').hidden = false;
+  }
+});
+</script>
+</body>
+</html>

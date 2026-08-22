@@ -14,6 +14,7 @@ import { bus } from '../lib/events.js';
 import { newPage, screenshot, saveDom } from '../browser/session.js';
 import { fillField, attachFile, verifyFilled, FillError } from '../browser/fill.js';
 import { detectBlockers, detectSubmissionOutcome, type Blocker } from '../browser/blockers.js';
+import { NeedsHumanError, NoFormError, describeDiagnosis } from '../browser/openForm.js';
 import { adapterFor } from '../ats/registry.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
 import { generateCoverLetter } from '../llm/coverLetter.js';
@@ -61,13 +62,49 @@ export async function runApplication(applicationId: string): Promise<void> {
     }
 
     page = await newPage();
-    await adapter.openApplicationForm(page, app.job.url);
+    try {
+      await adapter.openApplicationForm(page, app.job.url);
+    } catch (err) {
+      // Reaching the form is its own failure mode, and both named cases mean
+      // a person is needed rather than the run being broken. Screenshot first
+      // so there is something to look at.
+      await artifact(applicationId, 'screenshot', 'could-not-open', await screenshot(page, applicationId, 'could-not-open')).catch(() => {});
+
+      if (err instanceof NeedsHumanError) {
+        await handOffToHuman(applicationId, page, {
+          kind: err.kind,
+          detail: err.message,
+          humanCanClear: true,
+        });
+        return;
+      }
+      if (err instanceof NoFormError) {
+        await bus.emitEvent(applicationId, 'ERROR', describeDiagnosis(err.diagnosis));
+        await handOffToHuman(applicationId, page, {
+          kind: 'UNKNOWN',
+          detail:
+            `${err.message} ${describeDiagnosis(err.diagnosis)} ` +
+            'The browser is still open on it - if you can see an application form there, the selectors need updating for this site.',
+          humanCanClear: true,
+        });
+        return;
+      }
+      throw err;
+    }
     await artifact(applicationId, 'screenshot', 'form-opened', await screenshot(page, applicationId, 'form-opened'));
 
     // ---- Anything that stops us before we even start? --------------------
     const earlyBlockers = await detectBlockers(page);
     const hardBlocker = earlyBlockers.find(
-      (b) => b.kind === 'LOGIN_REQUIRED' || b.kind === 'ACCOUNT_CREATION' || b.kind === 'EMAIL_VERIFICATION',
+      (b) =>
+        b.kind === 'LOGIN_REQUIRED' ||
+        b.kind === 'ACCOUNT_CREATION' ||
+        b.kind === 'EMAIL_VERIFICATION' ||
+        // A challenge visibly on screen before we have filled anything means
+        // the page never rendered. Pressing on just times out somewhere less
+        // informative. (A captcha merely *armed* on a form is normal and is
+        // handled later, at the review gate.)
+        (b.kind === 'CAPTCHA' && /on screen/i.test(b.detail)),
     );
     if (hardBlocker) {
       await handOffToHuman(applicationId, page, hardBlocker);

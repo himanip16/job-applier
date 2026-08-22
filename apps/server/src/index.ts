@@ -399,6 +399,95 @@ app.get('/api/health', async () => ({
 }));
 
 /**
+ * Everything the home page needs to explain itself.
+ *
+ * Two jobs. It reports what is still unconfigured, so a fresh install tells
+ * you what to do next instead of failing later with a stack trace. And it
+ * counts everything currently waiting on a human, across all four features,
+ * because "three things need you" is the one number worth putting at the top
+ * of a page.
+ */
+app.get('/api/overview', async () => {
+  const profile = await prisma.profile.findFirst({
+    include: { facts: true, resumes: true, _count: { select: { answers: true } } },
+  });
+
+  const [companies, leadsNew, needsInput, needsHuman, inReview, submitted, upcomingRounds, lessons] =
+    await Promise.all([
+      prisma.company.count({ where: { enabled: true } }),
+      profile ? prisma.jobLead.count({ where: { profileId: profile.id, status: 'NEW' } }) : 0,
+      prisma.application.count({ where: { status: 'NEEDS_INPUT' } }),
+      prisma.application.count({ where: { status: 'NEEDS_HUMAN' } }),
+      prisma.application.count({ where: { status: 'REVIEW' } }),
+      prisma.application.count({ where: { status: 'SUBMITTED' } }),
+      prisma.interviewRound.count({ where: { status: 'SCHEDULED' } }),
+      prisma.lesson.count(),
+    ]);
+
+  const standingAnswers = profile?.facts.length ?? 0;
+
+  // Ordered: each step is genuinely blocked by the one above it.
+  const setup = [
+    {
+      id: 'model',
+      label: 'Connect a model',
+      done: isConfigured(),
+      detail: isConfigured()
+        ? `${activeModels().provider} · ${activeModels().writing}`
+        : 'Gemini has a free tier. Put GEMINI_API_KEY in .env and restart.',
+      href: null,
+    },
+    {
+      id: 'profile',
+      label: 'Fill in your profile',
+      done: Boolean(profile?.email && profile?.fullName),
+      detail: profile ? `${profile.fullName} · ${profile.email}` : 'Name, contact and links fill half of every form directly.',
+      href: '/profile',
+    },
+    {
+      id: 'resume',
+      label: 'Upload your resume',
+      done: (profile?.resumes.length ?? 0) > 0,
+      detail: profile?.resumes.length
+        ? `${profile.resumes.length} on file`
+        : 'Attached to applications, and the only thing claims can be grounded in.',
+      href: '/profile',
+    },
+    {
+      id: 'facts',
+      label: 'Answer the standing questions',
+      done: standingAnswers >= 5,
+      detail:
+        standingAnswers >= 5
+          ? `${standingAnswers} recorded`
+          : `${standingAnswers} of ~11 filled. Each one is a popup you will not see later.`,
+      href: '/profile',
+    },
+    {
+      id: 'companies',
+      label: 'Add companies to watch',
+      done: companies > 0,
+      detail: companies > 0 ? `${companies} board(s)` : 'Optional - you can also paste a job URL directly.',
+      href: '/discover',
+    },
+  ];
+
+  return {
+    setup,
+    ready: setup.slice(0, 3).every((s) => s.done),
+    needsYou: { needsInput, inReview, needsHuman, total: needsInput + inReview + needsHuman },
+    counts: {
+      leadsNew,
+      submitted,
+      upcomingRounds,
+      lessons,
+      answerBank: profile?._count.answers ?? 0,
+      companies,
+    },
+  };
+});
+
+/**
  * What this API key can actually reach.
  *
  * Model ids move — Gemini has renamed and deprecated several inside a year —

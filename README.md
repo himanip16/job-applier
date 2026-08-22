@@ -224,12 +224,33 @@ can actually reach, rather than trusting the defaults in `.env.example`.
 |---|---|---|
 | `greenhouse` | `job-boards.greenhouse.io`, `boards.greenhouse.io`, embeds | Dropdowns are react-select comboboxes, not `<select>`. reCAPTCHA present. |
 | `lever` | `jobs.lever.co` | Native HTML form throughout — the most reliable to drive. hCaptcha present. |
-| `ashby` | `jobs.ashbyhq.com` | Generated DOM, unstable ids; matched by label. |
+| `ashby` | `jobs.ashbyhq.com` | Application mounts only after Apply and has **no `<form>` wrapper**; Cloudflare fronts some tenants. |
 | `workable` | `apply.workable.com` | Drop-zone resume upload over a hidden file input. |
 | `generic` | anything else | No site knowledge; labels only. Always routed through review. |
 
 Adding one means implementing five methods in `apps/server/src/ats/types.ts`.
 The generic extractor and fill engine do the heavy lifting.
+
+### Getting to the form
+
+Every adapter opens its form through `browser/openForm.ts`, because the naive
+route — navigate, wait for `<form>`, fill — is wrong on most modern boards in
+three separate ways:
+
+1. **An interstitial may render instead of the page.** Cloudflare's managed
+   challenge replaces the document. Waiting for a form during one waits for
+   something that does not exist. The flow waits it out (they usually clear
+   themselves on a warmed-up profile) and hands you the open browser if it
+   does not.
+2. **The form usually sits behind an Apply button.** The job URL shows a
+   description; the application mounts on click.
+3. **`<form>` is the wrong thing to wait for.** Ashby renders bare React
+   inputs with no form element at all, so readiness is measured in *visible
+   fillable controls*, not tags.
+
+When it still cannot find a form it reports what it actually saw — input
+count, whether a form tag exists, which apply controls were on the page, and
+the page's opening text — rather than the name of a locator that timed out.
 
 ---
 
@@ -285,7 +306,7 @@ The integration suite truncates tables, so it refuses to run unless the
 database name ends in `_test` — set `TEST_DATABASE_URL` in your `.env` and the
 test script picks it up automatically.
 
-63 tests, no network and no API key required. They run the real extractor and
+71 tests, no network and no API key required. They run the real extractor and
 the real fill engine against `fixtures/`, which reproduce the DOM contracts read
 off live Greenhouse and Lever forms in August 2026 — react-select comboboxes,
 hidden file inputs, radio groups, captcha markers and all. `endToEnd.test.ts`
