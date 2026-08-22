@@ -132,12 +132,20 @@ the information is not actually there.
 Requires Node 22+, pnpm, and Postgres 14+.
 
 ```bash
-pnpm install
-cp .env.example .env          # then fill in DATABASE_URL and ANTHROPIC_API_KEY
-pnpm db:push
+cp .env.example .env          # fill in DATABASE_URL and ANTHROPIC_API_KEY first
+pnpm setup                    # install, push the schema, download Chromium
 pnpm --filter @ja/server seed # optional: a starter profile and standing answers
-npx playwright install chromium
 ```
+
+`pnpm setup` runs the browser download as
+`pnpm --filter @ja/server exec playwright install chromium`. Use that form
+rather than a bare `npx playwright install` — Playwright lives in the server
+package, so `npx` fetches a *different* copy from the registry and downloads
+browsers for whatever version that happens to be, leaving the one you actually
+run still missing its Chromium.
+
+If the download is blocked on your network, set `CHROMIUM_EXECUTABLE_PATH` to a
+Chromium you already have and skip it.
 
 Run the two processes:
 
