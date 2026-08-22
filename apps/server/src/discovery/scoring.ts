@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { normalizeLabel, tokenize } from '@ja/shared';
 import { prisma, type Prisma } from '../lib/db.js';
-import { llm, MODEL, describeLlmError } from '../llm/client.js';
+import { llm, describeLlmError } from '../llm/client.js';
+import { modelFor, effortFor } from '../llm/models.js';
 import type { DiscoveredJob } from './sources.js';
 
 /**
@@ -206,11 +207,11 @@ export async function assessFit(args: {
 }): Promise<FitAssessment | null> {
   try {
     const res = await llm().messages.parse({
-      model: MODEL,
+      model: modelFor('fitScoring'),
       max_tokens: 3000,
       system: FIT_SYSTEM,
       thinking: { type: 'adaptive' },
-      output_config: { effort: 'medium', format: zodOutputFormat(FitSchema) },
+      output_config: { effort: effortFor('fitScoring'), format: zodOutputFormat(FitSchema) },
       messages: [
         {
           role: 'user',

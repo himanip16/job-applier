@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { normalizeLabel } from '@ja/shared';
-import { llm, MODEL, describeLlmError } from '../llm/client.js';
+import { llm, describeLlmError } from '../llm/client.js';
+import { modelFor, effortFor } from '../llm/models.js';
 
 /**
  * Rewriting a resume for one job, without lying on it.
@@ -137,11 +138,11 @@ export async function analyseKeywords(args: {
 }): Promise<KeywordAnalysis> {
   try {
     const res = await llm().messages.parse({
-      model: MODEL,
+      model: modelFor('keywordAnalysis'),
       max_tokens: 8000,
       system: ANALYSIS_SYSTEM,
       thinking: { type: 'adaptive' },
-      output_config: { effort: 'high', format: zodOutputFormat(KeywordAnalysisSchema) },
+      output_config: { effort: effortFor('keywordAnalysis'), format: zodOutputFormat(KeywordAnalysisSchema) },
       messages: [
         {
           role: 'user',
@@ -237,11 +238,11 @@ export async function tailorResume(args: {
   if (allowList.length > 0 || analysis.atsIssues.length > 0) {
     try {
       const res = await llm().messages.parse({
-        model: MODEL,
+        model: modelFor('resumeRewrite'),
         max_tokens: 16000,
         system: REWRITE_SYSTEM,
         thinking: { type: 'adaptive' },
-        output_config: { effort: 'high', format: zodOutputFormat(RewriteSchema) },
+        output_config: { effort: effortFor('resumeRewrite'), format: zodOutputFormat(RewriteSchema) },
         messages: [
           {
             role: 'user',

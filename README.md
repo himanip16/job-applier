@@ -157,6 +157,40 @@ pnpm dev:web      # UI on :3000
 Then open <http://localhost:3000>, fill in your profile, upload your resume,
 and paste a job URL.
 
+### What it costs to run
+
+The Anthropic API is billed separately from a Claude.ai Pro or Max
+subscription — Pro does not include API credits. You need a key from
+[console.anthropic.com](https://console.anthropic.com), on pay-as-you-go.
+
+It is less than you would guess, because most fields never reach a model at
+all: name, contact and links come straight off your profile, the recurring
+twenty questions come from your stated facts, and anything you have answered
+before comes from the answer bank. The model is the last resort, not the first.
+
+Work also splits by kind, and the two get different models by default:
+
+| | Model | Used for |
+|---|---|---|
+| `ANTHROPIC_MODEL` | `claude-opus-5` | Anything that produces text you submit: cover letters, essay answers, the resume rewrite, and the grounded-vs-unsupported keyword decision |
+| `ANTHROPIC_MODEL_CHEAP` | `claude-haiku-4-5` | High-volume judgement: "is this question answerable from the resume?", "does this posting fit?" |
+
+Rough figures, shown live on the dashboard:
+
+| | Opus + Haiku (default) | Sonnet + Haiku |
+|---|---|---|
+| One application | ~$0.11 | ~$0.07 |
+| Tailoring a resume | ~$0.28 | ~$0.17 |
+| One lead read in full | ~$0.013 | ~$0.013 |
+| **100 applications** | **~$11** | **~$7** |
+
+Set both variables to the same value to opt out of the split. The keyword
+analysis stays on the strong model whatever else you change — it is the step
+that decides what may go on your resume, and that is not the place to save a
+cent.
+
+---
+
 ### Settings that matter
 
 | Variable | Default | Why you care |

@@ -19,7 +19,13 @@ export default function Dashboard() {
   const [review, setReview] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [health, setHealth] = useState<{ llmConfigured: boolean; headless: boolean; model: string } | null>(null);
+  const [health, setHealth] = useState<{
+    llmConfigured: boolean;
+    headless: boolean;
+    model: string;
+    cheapModel: string;
+    estimatedCosts: { perApplication: number; perTailoring: number; perDeepScoredLead: number };
+  } | null>(null);
 
   const load = () =>
     api<{ applications: AppRow[] }>('/api/applications')
@@ -61,6 +67,25 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+      {health?.llmConfigured && (
+        <div className="panel">
+          <div className="spread">
+            <div>
+              <h2>Running cost</h2>
+              <p className="sub" style={{ margin: 0 }}>
+                {health.model} writes what goes out under your name; {health.cheapModel} handles the
+                high-volume judgement calls. Estimated locally — your console has the real figure.
+              </p>
+            </div>
+            <div className="row" style={{ gap: '1.5rem' }}>
+              <Cost label="per application" value={health.estimatedCosts.perApplication} />
+              <Cost label="per resume tailor" value={health.estimatedCosts.perTailoring} />
+              <Cost label="per lead read fully" value={health.estimatedCosts.perDeepScoredLead} />
+            </div>
+          </div>
+        </div>
+      )}
+
       {health?.headless && (
         <div className="panel">
           <div className="notice">
@@ -142,5 +167,16 @@ export default function Dashboard() {
         )}
       </div>
     </>
+  );
+}
+
+function Cost({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <div style={{ fontSize: '1.15rem', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+        ${value.toFixed(3)}
+      </div>
+      <div className="muted small">{label}</div>
+    </div>
   );
 }

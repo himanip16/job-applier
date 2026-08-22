@@ -13,6 +13,7 @@ import { submitAnswers, decideReview } from './engine/runner.js';
 import { rememberAnswer } from './engine/answerBank.js';
 import { adapterFor } from './ats/registry.js';
 import { extractResumeText, assessResumeText } from './lib/resumeText.js';
+import { estimateActivityCosts } from './llm/models.js';
 import { matchCanonical, normalizeLabel, type RunEvent } from '@ja/shared';
 import { registerDiscoveryRoutes } from './routes/discovery.js';
 import { registerTrackerRoutes } from './routes/tracker.js';
@@ -389,6 +390,9 @@ app.get('/api/health', async () => ({
   ok: true,
   llmConfigured: Boolean(config.anthropicApiKey),
   model: config.anthropicModel,
+  cheapModel: config.cheapModel,
+  // Rough, local, and always an estimate - the real figure is on your console.
+  estimatedCosts: estimateActivityCosts(),
   headless: config.headless,
   requireReview: config.requireReview,
   activeRuns: activeRuns(),

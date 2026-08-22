@@ -27,7 +27,14 @@ export const config = {
   databaseUrl: process.env.DATABASE_URL ?? '',
 
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
+  /** Writing that goes out under your name: letters, essays, resume rewrites. */
   anthropicModel: process.env.ANTHROPIC_MODEL ?? 'claude-opus-5',
+  /**
+   * High-volume judgement calls: "is this answerable?", "does this job fit?".
+   * These run many times per application and do not need the top model. Set it
+   * to the same value as ANTHROPIC_MODEL to opt out of the split.
+   */
+  cheapModel: process.env.ANTHROPIC_MODEL_CHEAP ?? 'claude-haiku-4-5',
 
   headless: bool(process.env.HEADLESS, false),
   /**

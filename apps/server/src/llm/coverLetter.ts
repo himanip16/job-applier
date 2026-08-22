@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { llm, MODEL } from './client.js';
+import { llm } from './client.js';
+import { modelFor, effortFor } from './models.js';
 
 const CoverLetterSchema = z.object({
   body: z.string().describe('The cover letter body. No date, no letterhead, no placeholder brackets.'),
@@ -41,11 +42,11 @@ export interface CoverLetterInput {
 export async function generateCoverLetter(input: CoverLetterInput): Promise<GeneratedCoverLetter> {
   const wordCap = input.maxWords ? `\nHard limit: ${input.maxWords} words.` : '';
   const res = await llm().messages.parse({
-    model: MODEL,
+    model: modelFor('coverLetter'),
     max_tokens: 8000,
     system: SYSTEM,
     thinking: { type: 'adaptive' },
-    output_config: { effort: 'high', format: zodOutputFormat(CoverLetterSchema) },
+    output_config: { effort: effortFor('coverLetter'), format: zodOutputFormat(CoverLetterSchema) },
     messages: [
       {
         role: 'user',
@@ -89,13 +90,13 @@ export async function generateEssayAnswer(args: {
 }): Promise<string> {
   const cap = args.maxChars ?? 900;
   const res = await llm().messages.parse({
-    model: MODEL,
+    model: modelFor('essay'),
     max_tokens: 4000,
     system: `${SYSTEM}
 
 You are answering one short application question, not writing a full letter. Answer the question directly in ${Math.max(60, Math.floor(cap / 8))} words or fewer. No greeting, no sign-off.`,
     thinking: { type: 'adaptive' },
-    output_config: { effort: 'medium', format: zodOutputFormat(EssaySchema) },
+    output_config: { effort: effortFor('essay'), format: zodOutputFormat(EssaySchema) },
     messages: [
       {
         role: 'user',

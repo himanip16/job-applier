@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { llm, MODEL, describeLlmError } from './client.js';
+import { llm, describeLlmError } from './client.js';
+import { modelFor, effortFor } from './models.js';
 import type { FormField } from '@ja/shared';
 
 /**
@@ -84,12 +85,12 @@ Answer the question above using only the candidate context.`;
 
   try {
     const res = await llm().messages.parse({
-      model: MODEL,
+      model: modelFor('answerInference'),
       max_tokens: 2000,
       system: SYSTEM,
       thinking: { type: 'adaptive' },
       output_config: {
-        effort: 'medium',
+        effort: effortFor('answerInference'),
         format: zodOutputFormat(InferenceSchema),
       },
       messages: [{ role: 'user', content: userContent }],

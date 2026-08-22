@@ -9,8 +9,6 @@ export function llm(): Anthropic {
   return cached;
 }
 
-export const MODEL = config.anthropicModel;
-
 /** Turn SDK errors into something a run log can show a human. */
 export function describeLlmError(err: unknown): string {
   if (err instanceof Anthropic.AuthenticationError) return 'Anthropic API key rejected.';
