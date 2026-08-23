@@ -408,6 +408,25 @@ app.delete<{ Params: { id: string } }>('/api/answers/:id', async (req) => {
 
 // ------------------------------------------------- discovery, resume, tracker ---
 
+/**
+ * An empty body is not a malformed body.
+ *
+ * Fastify's default JSON parser rejects `Content-Type: application/json` with
+ * no payload, which is a reasonable reading of the spec and a hostile one for
+ * a client that sets the header once for every request. Several endpoints here
+ * take no body at all, so treat empty as `{}` and let the route's own schema
+ * decide what is required.
+ */
+app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+  const text = typeof body === 'string' ? body.trim() : '';
+  if (!text) return done(null, {});
+  try {
+    done(null, JSON.parse(text));
+  } catch (err) {
+    done(err as Error, undefined);
+  }
+});
+
 registerDiscoveryRoutes(app, requireProfile);
 registerResumeRoutes(app, requireProfile);
 registerTrackerRoutes(app, requireProfile);

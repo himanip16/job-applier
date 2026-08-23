@@ -345,3 +345,97 @@ describe('being handed off to an identity provider', () => {
     await page.close();
   }, 60_000);
 });
+
+describe('Apply navigates, then redirects again', () => {
+  /**
+   * The live Google Careers failure, reproduced.
+   *
+   * A real run against a Google job died with "page.evaluate: Execution
+   * context was destroyed, most likely because of a navigation". Its Apply
+   * link navigates and the landing page immediately redirects to a sign-in, so
+   * the first read of the step loop happened between two navigations.
+   */
+  it('does not blow up reading a page mid-redirect', async () => {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/redirect-to-signin.html`, { waitUntil: 'domcontentloaded' });
+
+    // Click and read immediately, with no wait at all — the race, deliberately.
+    await page.click('a');
+    const sig = await pageSignature(page);
+    const progress = await readStepProgress(page);
+
+    expect(typeof sig).toBe('string');
+    expect(progress).toBeTruthy();
+    await page.close();
+  }, 60_000);
+
+  it('reports the sign-in as a wall to clear, not as a missing form', async () => {
+    // The other half. Before this, openApplicationForm ended the run with
+    // "Could not reach an application form on this page." — true, useless, and
+    // not resumable. A wall is resumable.
+    const { openApplicationForm, NeedsHumanError: NHE } = await import('../src/browser/openForm.js');
+    const page = await browser.newPage();
+
+    const err = await openApplicationForm(page, `${baseUrl}/redirect-to-signin.html`).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(NHE);
+    expect((err as InstanceType<typeof NHE>).kind).toBe('LOGIN_REQUIRED');
+    expect((err as Error).message).toMatch(/sign in|signed in/i);
+    // And it did follow the Apply link rather than giving up on the job page.
+    expect(page.url()).toMatch(/signin-identifier/);
+    await page.close();
+  }, 60_000);
+
+  it('settles a redirect chain before reading', async () => {
+    const { settle } = await import('../src/browser/steps.js');
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/apply-redirect.html`, { waitUntil: 'domcontentloaded' });
+
+    await settle(page);
+    expect(page.url()).toMatch(/signin-identifier/);
+    expect(await pageSignature(page)).toMatch(/signin-identifier/);
+    await page.close();
+  }, 60_000);
+});
+
+describe('a resume widget is not an autofill prompt', () => {
+  /**
+   * A real run against a Postman posting on Greenhouse burned all twelve of
+   * its steps clicking "Enter manually" — part of the resume field's
+   * Attach / Dropbox / Google Drive / Enter manually widget, not an offer to
+   * fill the application from a resume.
+   */
+  it('ignores Greenhouse’s "Enter manually" button', async () => {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/greenhouse-like.html`, { waitUntil: 'domcontentloaded' });
+
+    // The button really is there, so this is not passing by accident.
+    expect(await page.locator('#resume-manual').count()).toBe(1);
+    expect(await detectAutofillPrompt(page)).toBeNull();
+    await page.close();
+  }, 60_000);
+
+  it('still sees a real prompt, which offers to do the filling', async () => {
+    const page = await openAt('?signedin=1');
+    const prompt = await detectAutofillPrompt(page);
+    expect(prompt?.autofillSelector).toBeTruthy();
+    await page.close();
+  }, 60_000);
+
+  it('never reports a prompt with no autofill side', async () => {
+    // The guard, stated directly: there is no choice to make unless the site
+    // has offered to do the filling.
+    const page = await browser.newPage();
+    await page.route('**/manual-only', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<html><body><h1>Apply</h1><button>Enter manually</button><button>Apply manually</button></body></html>',
+      }),
+    );
+    await page.goto(`${baseUrl}/manual-only`);
+    expect(await detectAutofillPrompt(page)).toBeNull();
+    await page.close();
+  }, 60_000);
+});

@@ -18,10 +18,12 @@ import { NeedsHumanError, NoFormError, describeDiagnosis } from '../browser/open
 import {
   detectAutofillPrompt,
   findAdvanceControl,
+  isNavigationRace,
   looksLikeAGate,
   pageSignature,
   readStepProgress,
   readValidationErrors,
+  settle,
   waitForStepChange,
 } from '../browser/steps.js';
 import { adapterFor } from '../ats/registry.js';
@@ -160,6 +162,12 @@ export async function runApplication(applicationId: string): Promise<void> {
     // because on those screens the fields we want do not exist yet.
     let step = 0;
     let stuckSignature: string | null = null;
+    let navigationRetries = 0;
+    // Answering a question about how to fill the form should happen once. A
+    // detector that fires on something which is not really that question would
+    // otherwise burn the whole step budget clicking it, which is precisely
+    // what a stray "Enter manually" button did.
+    const handledPrompts = new Set<string>();
 
     for (;;) {
       step++;
@@ -169,6 +177,15 @@ export async function runApplication(applicationId: string): Promise<void> {
             'than expected (raise MAX_APPLICATION_STEPS) or the run is going in circles.',
         );
       }
+
+      // Before reading anything. Arriving at a step is frequently a redirect
+      // chain rather than a single navigation - Google Careers' Apply link
+      // navigates, then bounces to accounts.google.com - and reading the page
+      // between the two hops is how the run used to die with "Execution
+      // context was destroyed".
+      await settle(page);
+
+      try {
 
       const signature = await pageSignature(page);
 
@@ -191,13 +208,24 @@ export async function runApplication(applicationId: string): Promise<void> {
       }
 
       // ---- "Autofill with your resume?" --------------------------------------
-      const prompt = await detectAutofillPrompt(page);
+      const prompt = handledPrompts.has(signature) ? null : await detectAutofillPrompt(page);
       if (prompt) {
+        handledPrompts.add(signature);
         const target = await chooseAutofill(applicationId, prompt, Boolean(resume));
         if (target) {
-          await page.click(target);
-          await waitForStepChange(page, signature, 20_000);
-          continue;
+          await page.click(target).catch(() => {});
+          // If answering it did not change the page, it was not really a
+          // question - carry straight on and treat what is here as the form,
+          // rather than looping back and finding the same control again.
+          if (await waitForStepChange(page, signature, 20_000)) {
+            step--;
+            continue;
+          }
+          await bus.emitEvent(
+            applicationId,
+            'LOG',
+            'That choice did not change the page; carrying on with the form as it is.',
+          );
         }
       }
 
@@ -397,6 +425,22 @@ export async function runApplication(applicationId: string): Promise<void> {
       }
 
       stuckSignature = null;
+      navigationRetries = 0;
+      } catch (err) {
+        // The page moved while we were working on it. That is a wizard doing
+        // its job, not a failure - look at wherever it landed instead. Bounded,
+        // because a page that navigates on a timer would otherwise spin here
+        // forever without ever making progress.
+        if (!isNavigationRace(err) || navigationRetries >= 4) throw err;
+        navigationRetries++;
+        step--;
+        await bus.emitEvent(
+          applicationId,
+          'LOG',
+          `The page navigated while it was being read; looking at where it landed (${navigationRetries}/4).`,
+        );
+        continue;
+      }
     }
 
     const fillable = allFields.filter((f) => f.kind !== 'FILE');

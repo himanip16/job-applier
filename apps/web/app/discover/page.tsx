@@ -63,6 +63,10 @@ export default function DiscoverPage() {
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<Lead | null>(null);
+  // Keyed by lead. An error from a card has to appear on that card: the shared
+  // banner at the top of the page is often a screen away from the button that
+  // was pressed, which makes a failed click look like a dead button.
+  const [leadErrors, setLeadErrors] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     const [l, c] = await Promise.all([
@@ -140,6 +144,11 @@ export default function DiscoverPage() {
 
   async function decide(lead: Lead, action: 'apply' | 'shortlist') {
     setBusy(lead.id);
+    setLeadErrors((prev) => {
+      const next = { ...prev };
+      delete next[lead.id];
+      return next;
+    });
     try {
       if (action === 'apply') {
         const r = await api<{ applicationId: string }>(`/api/leads/${lead.id}/apply`, { method: 'POST' });
@@ -149,7 +158,7 @@ export default function DiscoverPage() {
       await api(`/api/leads/${lead.id}/shortlist`, { method: 'POST' });
       await load();
     } catch (e) {
-      setError((e as Error).message);
+      setLeadErrors((prev) => ({ ...prev, [lead.id]: (e as Error).message }));
     } finally {
       setBusy(null);
     }
@@ -235,6 +244,7 @@ export default function DiscoverPage() {
               key={lead.id}
               lead={lead}
               busy={busy === lead.id}
+              error={leadErrors[lead.id]}
               onApply={() => decide(lead, 'apply')}
               onShortlist={() => decide(lead, 'shortlist')}
               onReject={() => setRejecting(lead)}
@@ -271,6 +281,7 @@ export default function DiscoverPage() {
               key={lead.id}
               lead={lead}
               busy={busy === lead.id}
+              error={leadErrors[lead.id]}
               onApply={() => decide(lead, 'apply')}
               onShortlist={() => decide(lead, 'shortlist')}
               onReject={() => setRejecting(lead)}
@@ -309,12 +320,14 @@ export default function DiscoverPage() {
 function LeadCard({
   lead,
   busy,
+  error,
   onApply,
   onShortlist,
   onReject,
 }: {
   lead: Lead;
   busy: boolean;
+  error?: string;
   onApply: () => void;
   onShortlist: () => void;
   onReject: () => void;
@@ -396,6 +409,12 @@ function LeadCard({
           )}
         </div>
       </div>
+
+      {error && (
+        <div className="notice bad" style={{ marginTop: '.5rem' }}>
+          {error}
+        </div>
+      )}
 
       <button
         className="small"
