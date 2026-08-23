@@ -13,9 +13,17 @@ const { requireTestDatabase } = await import('./testDb.js');
 requireTestDatabase();
 
 const { prisma } = await import('../src/lib/db.js');
-const { loadSettings, setSetting, clearSetting, secret, secretOrigin, maskSecret } = await import(
-  '../src/lib/secrets.js'
-);
+const {
+  loadSettings,
+  setSetting,
+  clearSetting,
+  secret,
+  secretOrigin,
+  maskSecret,
+  readNamedApiKeys,
+  saveNamedApiKey,
+  setActiveApiKey,
+} = await import('../src/lib/secrets.js');
 const { config } = await import('../src/lib/config.js');
 const { registerJobDetailRoutes } = await import('../src/routes/jobDetail.js');
 const Fastify = (await import('fastify')).default;
@@ -85,6 +93,19 @@ describe('keys saved from the UI', () => {
     await loadSettings();
     expect(secret('GEMINI_API_KEY', 'GOOGLE_API_KEY')).toBe('goog-123');
     delete process.env.GOOGLE_API_KEY;
+  });
+
+  it('supports multiple named Anthropic keys and lets the active one win', async () => {
+    await saveNamedApiKey('anthropic', { id: 'work', name: 'Work', value: 'anth-work-123' });
+    await saveNamedApiKey('anthropic', { id: 'personal', name: 'Personal', value: 'anth-personal-456' });
+    await setActiveApiKey('anthropic', 'personal');
+
+    expect(readNamedApiKeys('anthropic')).toHaveLength(2);
+    expect(secret('ANTHROPIC_API_KEY')).toBe('anth-personal-456');
+    expect(secretOrigin('ANTHROPIC_API_KEY')).toBe('saved');
+
+    await clearSetting('ANTHROPIC_API_KEY');
+    expect(secret('ANTHROPIC_API_KEY')).toBe('anth-personal-456');
   });
 });
 
