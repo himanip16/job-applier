@@ -94,6 +94,7 @@ interface SearchReport {
   jobsSeen: number;
   newLeads: number;
   skippedAlreadySeen: number;
+  skippedOffDomain: number;
   deepScored: number;
   companiesRegistered: number;
   rerankedExisting: number;
@@ -1027,7 +1028,9 @@ function SearchReportPanel({ report }: { report: SearchReport }) {
         <span className="muted small">
           Searched {report.queries.length} time{report.queries.length === 1 ? '' : 's'} ·{' '}
           {report.jobsSeen} posting{report.jobsSeen === 1 ? '' : 's'} considered ·{' '}
-          {report.skippedAlreadySeen} already seen · {report.deepScored} read in full
+          {report.skippedAlreadySeen} already seen ·{' '}
+          {report.skippedOffDomain > 0 && `${report.skippedOffDomain} in other professions dropped · `}
+          {report.deepScored} read in full
           {report.companiesRegistered > 0 &&
             ` · ${report.companiesRegistered} new board${
               report.companiesRegistered === 1 ? '' : 's'

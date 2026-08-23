@@ -17,7 +17,7 @@ import {
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
-import { applyHardRules, candidateConstraints } from './hardRules.js';
+import { applyHardRules, candidateConstraints, offDomainVerdict } from './hardRules.js';
 import { rescoreLeads, rescoreLexically } from './rescoreLeads.js';
 
 export interface CrawlReport {
@@ -25,6 +25,8 @@ export interface CrawlReport {
   jobsSeen: number;
   newLeads: number;
   skippedAlreadyDecided: number;
+  /** Postings dropped outright as another profession's job. */
+  skippedOffDomain: number;
   deepScored: number;
   /** Leads already in the queue whose cheap score was recomputed afterwards. */
   rerankedExisting: number;
@@ -53,6 +55,7 @@ export async function crawlAll(
     jobsSeen: 0,
     newLeads: 0,
     skippedAlreadyDecided: 0,
+    skippedOffDomain: 0,
     deepScored: 0,
     rerankedExisting: 0,
     errors: [],
@@ -106,6 +109,15 @@ export async function crawlAll(
         // queue unusable.
         if (existing) {
           report.skippedAlreadyDecided++;
+          continue;
+        }
+
+        // Somebody else's profession never enters the queue. Scoring it low
+        // would still leave it there to be paged past; a board of fifty-five
+        // openings has maybe fifteen this person could do, and the other forty
+        // are not a ranking problem.
+        if (offDomainVerdict(job.title)) {
+          report.skippedOffDomain++;
           continue;
         }
 

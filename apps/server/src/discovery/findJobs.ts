@@ -12,7 +12,7 @@ import {
 import { firecrawlSearch, isFirecrawlConfigured, type SearchHit } from './firecrawl.js';
 import { buildSearchPlan, titleMatchesPlan, type SearchPlan } from './searchQueries.js';
 import { rescoreLexically } from './rescoreLeads.js';
-import { applyHardRules, candidateConstraints } from './hardRules.js';
+import { applyHardRules, candidateConstraints, offDomainVerdict } from './hardRules.js';
 import {
   assessFit,
   blendScores,
@@ -72,6 +72,8 @@ export interface JobSearchReport {
   jobsSeen: number;
   newLeads: number;
   skippedAlreadySeen: number;
+  /** Postings dropped outright as another profession's job. */
+  skippedOffDomain: number;
   deepScored: number;
   companiesRegistered: number;
   /** Leads already in the queue whose cheap score was recomputed afterwards. */
@@ -134,6 +136,7 @@ export async function findJobs(
     jobsSeen: 0,
     newLeads: 0,
     skippedAlreadySeen: 0,
+    skippedOffDomain: 0,
     deepScored: 0,
     companiesRegistered: 0,
     notes: [],
@@ -278,6 +281,14 @@ export async function findJobs(
       // like a role the plan asked for.
       const wanted = matchedUrls.has(canonical) || titleMatchesPlan(job.title, plan.roleTitles);
       if (!wanted) continue;
+
+      // Even a direct search hit can be another profession's job - "Talent
+      // Acquisition Partner - Engineering" matches an engineering query on the
+      // one word it shares with it.
+      if (offDomainVerdict(job.title)) {
+        report.skippedOffDomain++;
+        continue;
+      }
 
       report.jobsSeen++;
       if (existing.has(canonical)) {
