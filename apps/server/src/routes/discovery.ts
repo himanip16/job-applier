@@ -197,26 +197,33 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
   // ----------------------------------------------------------------- leads ---
 
-  app.get<{ Querystring: { status?: string; limit?: string } }>('/api/leads', async (req, reply) => {
+  app.get<{ Querystring: { status?: string; limit?: string; page?: string; pageSize?: string } }>('/api/leads', async (req, reply) => {
     const profile = await requireProfile(reply);
     if (!profile) return;
     const requested = req.query.status ?? 'NEW';
     const statusFilter: Prisma.JobLeadWhereInput =
       requested === 'ALL' ? {} : { status: requested as Prisma.JobLeadWhereInput['status'] };
+    const page = Math.max(1, Number(req.query.page ?? 1));
+    const pageSize = Math.min(200, Math.max(10, Number(req.query.pageSize ?? req.query.limit ?? 60)));
+    const where = { profileId: profile.id, ...statusFilter } as Prisma.JobLeadWhereInput;
+
+    const [total, counts] = await Promise.all([
+      prisma.jobLead.count({ where }),
+      prisma.jobLead.groupBy({ by: ['status'], where: { profileId: profile.id }, _count: true }),
+    ]);
+
     const leads = await prisma.jobLead.findMany({
-      where: { profileId: profile.id, ...statusFilter },
+      where,
       orderBy: [{ score: 'desc' }, { discoveredAt: 'desc' }],
-      take: Number(req.query.limit ?? 60),
+      skip: (page - 1) * pageSize,
+      take: pageSize,
     });
-    const counts = await prisma.jobLead.groupBy({
-      by: ['status'],
-      where: { profileId: profile.id },
-      _count: true,
-    });
+
     return {
       // The description is large and the list view never shows it in full.
       leads: leads.map((l) => ({ ...l, descriptionText: l.descriptionText?.slice(0, 600) ?? null })),
       counts: Object.fromEntries(counts.map((c) => [c.status, c._count])),
+      pagination: { page, pageSize, total, totalPages: Math.ceil(total / pageSize) },
     };
   });
 
@@ -240,18 +247,10 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
     const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
     if (!lead) return reply.code(404).send({ error: 'Not found' });
-
-    await prisma.jobLead.update({
-      where: { id: lead.id },
-      data: {
-        status: 'REJECTED',
-        rejectReason: reason ?? null,
-        rejectCategory: category ?? null,
-        decidedAt: new Date(),
-      },
-    });
-
-    const { moved } = await learnFromDecision({
+    // Learn from the candidate's decision, then permanently remove the
+    // lead from the queue. This keeps the triage queue focused and avoids
+    // re-offering things they've explicitly rejected.
+    await learnFromDecision({
       profileId: profile.id,
       job: {
         title: lead.title,
@@ -259,23 +258,13 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
         location: lead.location ?? undefined,
       },
       accepted: false,
-      // Category and free text are both useful; the category alone still
-      // carries a lot ("Location or commute" is a strong term).
       reason: [category, reason].filter(Boolean).join('. ') || undefined,
     });
 
-    // Re-rank what is still in the queue so the effect is visible now, not
-    // after the next crawl.
+    await prisma.jobLead.delete({ where: { id: lead.id } });
+    // Re-rank what remains so the effect of the decision is visible now.
     const reranked = await rescoreLexically(profile.id);
-
-    return {
-      ok: true,
-      learned: moved,
-      reranked,
-      message: moved.length
-        ? `Noted. ${reranked} remaining lead${reranked === 1 ? '' : 's'} re-ranked; postings mentioning ${moved.slice(0, 3).join(', ')} now score lower.`
-        : `Noted. ${reranked} remaining lead${reranked === 1 ? '' : 's'} re-ranked.`,
-    };
+    return { ok: true, reranked, message: `Removed lead and re-ranked ${reranked} remaining lead(s).` };
   });
 
   app.post<{ Params: { id: string } }>('/api/leads/:id/shortlist', async (req, reply) => {

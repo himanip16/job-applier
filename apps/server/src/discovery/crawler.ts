@@ -259,6 +259,16 @@ export async function rescoreLexically(profileId: string): Promise<number> {
       },
       signals,
     );
+    // Permanently remove very poor lexical matches so the queue stays useful.
+    if (lex.score < 45) {
+      try {
+        await prisma.jobLead.delete({ where: { id: lead.id } });
+      } catch {
+        // If deletion fails for some reason, skip and continue.
+      }
+      continue;
+    }
+
     await prisma.jobLead.update({
       where: { id: lead.id },
       data: {
