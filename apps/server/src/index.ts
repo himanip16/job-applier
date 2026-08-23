@@ -563,6 +563,7 @@ app.get('/api/overview', async (req) => {
     leadsTotal,
     shortlisted,
     runsInFlight,
+    notApplied,
   ] =
     await Promise.all([
       safeCount(() => prisma.company.count({ where: { enabled: true } })),
@@ -600,7 +601,45 @@ app.get('/api/overview', async (req) => {
           },
         }),
       ),
+      // The number the front page is actually about: matches still waiting on
+      // a decision. Everything else on that page is either history or
+      // machinery.
+      safeCount(() =>
+        profile
+          ? prisma.jobLead.count({
+              where: { profileId: profile.id, status: { in: ['NEW', 'SHORTLISTED'] } },
+            })
+          : Promise.resolve(0),
+      ),
     ]);
+
+  /**
+   * The best few jobs you have not applied to yet.
+   *
+   * Sent with the overview rather than fetched separately, because it is the
+   * one thing the front page exists to show and a second round trip would let
+   * it arrive after everything less important.
+   */
+  const topMatches = profile
+    ? await prisma.jobLead
+        .findMany({
+          where: { profileId: profile.id, status: { in: ['NEW', 'SHORTLISTED'] } },
+          orderBy: [{ score: 'desc' }, { discoveredAt: 'desc' }],
+          take: 6,
+          select: {
+            id: true,
+            title: true,
+            companyName: true,
+            location: true,
+            remote: true,
+            score: true,
+            deepScored: true,
+            status: true,
+            url: true,
+          },
+        })
+        .catch(() => [])
+    : [];
 
   const schema = await cachedSchemaProblem();
 
@@ -704,7 +743,9 @@ app.get('/api/overview', async (req) => {
       answerBank: profile?._count.answers ?? 0,
       runsInFlight,
       companies,
+      notApplied,
     },
+    topMatches,
   };
 });
 

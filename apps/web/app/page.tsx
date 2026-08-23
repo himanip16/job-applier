@@ -60,6 +60,8 @@ export default function Home() {
     <>
       <Hero ov={ov} />
 
+      <NotAppliedYet ov={ov} />
+
       {ov && !ov.ready && <SetupPanel setup={ov.setup} />}
 
       <details className="panel">
@@ -170,6 +172,72 @@ export default function Home() {
  *
  * Every number is a link, because a number you cannot act on is decoration.
  */
+/**
+ * The one list worth putting first.
+ *
+ * The front page used to open on five counters and a "how it works"
+ * accordion, which describes the tool rather than the job search. The useful
+ * question on opening it is "which companies match me that I have not applied
+ * to yet" - so that is the list, by name, with the buttons on it.
+ *
+ * Everything already applied to is deliberately not here. It is history, and
+ * history belongs in the tracker.
+ */
+function NotAppliedYet({ ov }: { ov: Overview | null }) {
+  const matches = ov?.topMatches ?? [];
+  if (!ov || matches.length === 0) return null;
+  const total = ov.counts.notApplied;
+
+  return (
+    <div className="panel">
+      <div className="spread">
+        <div>
+          <h2 style={{ margin: 0 }}>Matches you have not applied to</h2>
+          <p className="sub" style={{ margin: '.2rem 0 0' }}>
+            {total} waiting on a decision. Best {matches.length} first.
+          </p>
+        </div>
+        <a href="/discover">
+          <button className="primary">See all {total}</button>
+        </a>
+      </div>
+
+      <div style={{ marginTop: '.6rem' }}>
+        {matches.map((m) => {
+          const score = Math.round(m.score);
+          const tone = score >= 70 ? 'var(--good)' : score >= 45 ? 'var(--warn)' : 'var(--bad)';
+          return (
+            <div
+              key={m.id}
+              className="spread"
+              style={{ borderTop: '1px solid var(--border)', padding: '.55rem 0' }}
+            >
+              <div className="row" style={{ gap: '.5rem', minWidth: 0 }}>
+                <strong style={{ color: tone, fontVariantNumeric: 'tabular-nums' }}>{score}</strong>
+                <a href={`/jobs/${m.id}`}>
+                  <strong>{m.title}</strong>
+                </a>
+                <span className="muted small">· {m.companyName}</span>
+                {m.remote && <span className="src">remote</span>}
+                {m.location && <span className="muted small">{m.location}</span>}
+                {m.status === 'SHORTLISTED' && <span className="src">saved</span>}
+                {!m.deepScored && (
+                  <span className="src" title="Ranked on keywords only, not read in full">
+                    quick score
+                  </span>
+                )}
+              </div>
+              <a href={`/jobs/${m.id}`} style={{ flex: 'none' }}>
+                <button>Open</button>
+              </a>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Hero({ ov }: { ov: Overview | null }) {
   const c = ov?.counts;
   const y = ov?.needsYou;
@@ -204,7 +272,18 @@ function Hero({ ov }: { ov: Overview | null }) {
             marginTop: '1.1rem',
           }}
         >
-          <Big href="/discover" value={c?.leadsTotal ?? 0} label="jobs found" />
+          {/*
+            Ordered by what you can do something about. "Not applied yet" is
+            first because it is the only number that is a to-do list; the ones
+            after it are progress, and "submitted" is history - which is why it
+            links away to the tracker rather than living here.
+          */}
+          <Big
+            href="/discover"
+            value={c?.notApplied ?? 0}
+            label="not applied yet"
+            tone={(c?.notApplied ?? 0) > 0 ? 'var(--accent)' : undefined}
+          />
           <Big
             href="/discover"
             value={c?.strongMatches ?? 0}
@@ -218,7 +297,7 @@ function Hero({ ov }: { ov: Overview | null }) {
             label="waiting for you"
             tone={outstanding > 0 ? 'var(--warn)' : undefined}
           />
-          <Big href="/tracker" value={c?.submitted ?? 0} label="submitted" />
+          <Big href="/tracker" value={c?.submitted ?? 0} label="already applied" />
         </div>
       )}
 

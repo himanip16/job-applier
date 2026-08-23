@@ -233,7 +233,7 @@ export default function DiscoverPage() {
     }
   }
 
-  async function decide(lead: Lead, action: 'apply' | 'shortlist') {
+  async function decide(lead: Lead, action: 'apply' | 'shortlist' | 'applied') {
     setBusy(lead.id);
     setLeadErrors((prev) => {
       const next = { ...prev };
@@ -247,7 +247,14 @@ export default function DiscoverPage() {
         window.location.href = `/applications/${r.applicationId}`;
         return;
       }
-      await api(`/api/leads/${lead.id}/shortlist`, { method: 'POST' });
+      await api(`/api/leads/${lead.id}/${action === 'applied' ? 'applied' : 'shortlist'}`, {
+        method: 'POST',
+      });
+      if (action === 'applied') {
+        setFlash(
+          `Marked "${lead.title}" as applied. It is in the tracker now, and out of the queue.`,
+        );
+      }
       await load();
     } catch (e) {
       setLeadErrors((prev) => ({ ...prev, [lead.id]: (e as Error).message }));
@@ -320,6 +327,7 @@ export default function DiscoverPage() {
     onPick: () => togglePicked(lead.id),
     onApply: () => decide(lead, 'apply'),
     onShortlist: () => decide(lead, 'shortlist'),
+    onApplied: () => decide(lead, 'applied'),
     onReject: () => setRejecting(lead),
   });
 
@@ -727,6 +735,7 @@ function LeadCard({
   onPick,
   onApply,
   onShortlist,
+  onApplied,
   onReject,
 }: {
   lead: Lead;
@@ -736,6 +745,7 @@ function LeadCard({
   onPick: () => void;
   onApply: () => void;
   onShortlist: () => void;
+  onApplied: () => void;
   onReject: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -808,6 +818,13 @@ function LeadCard({
               </button>
               <button disabled={busy} onClick={onShortlist}>
                 Save
+              </button>
+              <button
+                disabled={busy}
+                onClick={onApplied}
+                title="You applied to this one yourself — record it and take it out of the queue"
+              >
+                Applied
               </button>
               <button className="danger" disabled={busy} onClick={onReject}>
                 Not for me
