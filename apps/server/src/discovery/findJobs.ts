@@ -16,6 +16,7 @@ import {
   buildPreferences,
   buildRejectionHistory,
   loadSignals,
+  scoreExperienceFit,
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
@@ -369,15 +370,29 @@ async function deepScore(
         job: entry.job,
       });
       if (!fit) continue;
+
+      const expPenalty = scoreExperienceFit(candidateContext, entry.job.descriptionText ?? entry.job.title);
+      const adjustedFit = expPenalty
+        ? {
+            ...fit,
+            score: Math.max(0, Math.min(100, fit.score + expPenalty.scoreDelta)),
+            againstIt: expPenalty.scoreDelta < 0
+              ? [...new Set([...(fit.againstIt ?? []), expPenalty.reason])]
+              : fit.againstIt,
+            verdict:
+              expPenalty.scoreDelta < -30 ? 'MISMATCH' : fit.verdict,
+          }
+        : fit;
+
       const lex = scoreLexically(entry.job, signals);
-      const blended = fit.dealbreaker
-        ? Math.min(fit.score, 15)
-        : 0.7 * fit.score + 0.3 * lex.score;
+      const blended = adjustedFit.dealbreaker
+        ? Math.min(adjustedFit.score, 15)
+        : 0.7 * adjustedFit.score + 0.3 * lex.score;
       await prisma.jobLead.update({
         where: { id: entry.id },
         data: {
           score: blended,
-          scoreReasons: serialiseReasons(lex, fit) as Prisma.InputJsonValue,
+          scoreReasons: serialiseReasons(lex, adjustedFit) as Prisma.InputJsonValue,
           deepScored: true,
           scoredAt: new Date(),
         },

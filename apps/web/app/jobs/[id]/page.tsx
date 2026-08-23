@@ -82,10 +82,23 @@ export default function JobPage() {
   const params = useParams<{ id: string }>();
   const [d, setD] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rescoreBusy, setRescoreBusy] = useState(false);
 
   const load = useCallback(async () => {
     setD(await api<Detail>(`/api/jobs/${params.id}`));
   }, [params.id]);
+
+  const handleRescore = useCallback(async () => {
+    setRescoreBusy(true);
+    try {
+      await api(`/api/leads/${params.id}/rescore`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRescoreBusy(false);
+    }
+  }, [load]);
 
   useEffect(() => {
     load().catch((e) => setError((e as Error).message));
@@ -104,7 +117,7 @@ export default function JobPage() {
   return (
     <>
       <Header d={d} />
-      <MatchPanel d={d} />
+      <MatchPanel d={d} busy={rescoreBusy} onRescore={handleRescore} />
       <ApplicationPanel d={d} />
       <InterviewPanel d={d} />
       <OutcomePanel d={d} />
@@ -144,51 +157,7 @@ function Header({ d }: { d: Detail }) {
   );
 }
 
-function MatchPanel({ d }: { d: Detail }) {
-  const params = useParams<{ id: string }>();
-  const [scoring, setScoring] = useState(false);
-  const [scoreError, setScoreError] = useState<string | null>(null);
-
-  function ReadItProperly() {
-    return (
-      <div className="notice" style={{ marginTop: '.7rem' }}>
-        <div className="spread" style={{ gap: '.8rem' }}>
-          <div>
-            <strong className="small">Counted, not read.</strong>{' '}
-            <span className="small muted">
-              A crawl only sends its most promising finds to a model, so this score comes from words
-              the posting and your profile have in common — which is a weak signal and can be
-              flattered by boilerplate.
-            </span>
-          </div>
-          <button
-            className="primary"
-            style={{ flex: 'none' }}
-            disabled={scoring}
-            onClick={async () => {
-              setScoring(true);
-              setScoreError(null);
-              try {
-                await api(`/api/leads/${params.id}/rescore`, { method: 'POST' });
-                window.location.reload();
-              } catch (e) {
-                setScoreError((e as Error).message);
-                setScoring(false);
-              }
-            }}
-          >
-            {scoring ? 'Reading…' : 'Read it properly'}
-          </button>
-        </div>
-        {scoreError && (
-          <div className="notice bad" style={{ marginTop: '.5rem' }}>
-            {scoreError}
-          </div>
-        )}
-      </div>
-    );
-  }
-
+function MatchPanel({ d, busy, onRescore }: { d: Detail; busy: boolean; onRescore: () => void }) {
   if (!d.match) return null;
   const m = d.match;
   const tone = m.score >= 70 ? 'var(--good)' : m.score >= 45 ? 'var(--warn)' : 'var(--bad)';
@@ -214,7 +183,22 @@ function MatchPanel({ d }: { d: Detail }) {
         </div>
       )}
 
-      {!m.deepScored && <ReadItProperly />}
+      {!m.deepScored && (
+        <div className="notice" style={{ marginTop: '.7rem' }}>
+          <strong className="small">Counted, not read.</strong>{' '}
+          <span className="small muted">
+            A crawl only sends its most promising finds to a model, so this score comes from words
+            the posting and your profile have in common — a weak signal, and one that boilerplate
+            flatters. Rescore to have it actually read.
+          </span>
+        </div>
+      )}
+
+      <div style={{ marginTop: '.8rem' }}>
+        <button className="primary" disabled={busy} onClick={onRescore}>
+          {busy ? 'Rescoring…' : 'Rescore'}
+        </button>
+      </div>
 
       <div className="grid2" style={{ marginTop: '.8rem' }}>
         <Points title="Why it fits" items={m.forIt} marker="✓" colour="var(--good)" fallbackTerms={m.likedTerms} />

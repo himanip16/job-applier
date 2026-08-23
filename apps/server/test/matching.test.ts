@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { matchCanonical, normalizeLabel, vectorize, cosine, optionsCompatible } from '@ja/shared';
 import { matchOption, findDeclineOption } from '../src/engine/optionMatch.js';
+import { scoreExperienceFit } from '../src/discovery/scoring.js';
 
 describe('canonical question matching', () => {
   it('recognises the same question across wordings and spellings', () => {
@@ -73,6 +74,28 @@ describe('label similarity', () => {
       normalizeLabel('Are you legally authorized to work?'),
     );
     expect(normalizeLabel('E-mail (required)')).toBe(normalizeLabel('Email'));
+  });
+});
+
+describe('experience fit', () => {
+  it('heavily penalises years-of-experience mismatches', () => {
+    const result = scoreExperienceFit(
+      '[experience.years_total] Years of professional experience: 4',
+      'We need a senior engineer with 8+ years of backend experience building distributed systems.',
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.scoreDelta).toBeLessThan(-25);
+    expect(result!.reason.toLowerCase()).toMatch(/8\+|8 years|4 years|experience/);
+  });
+
+  it('allows a close match to pass without a penalty', () => {
+    const result = scoreExperienceFit(
+      '[experience.years_total] Years of professional experience: 8',
+      'We need a senior engineer with 8+ years of backend experience.',
+    );
+
+    expect(result?.scoreDelta ?? 0).toBeGreaterThanOrEqual(0);
   });
 });
 

@@ -2,11 +2,16 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
   EDITABLE_SETTINGS,
+  clearNamedApiKey,
   clearSetting,
   isSettingKey,
   maskSecret,
+  namedProviderState,
+  readNamedApiKeys,
+  saveNamedApiKey,
   secret,
   secretOrigin,
+  setActiveApiKey,
   setSetting,
   type SettingKey,
 } from '../lib/secrets.js';
@@ -27,6 +32,10 @@ import { firecrawlSearch, isFirecrawlConfigured } from '../discovery/firecrawl.j
 export function registerSettingsRoutes(app: FastifyInstance) {
   app.get('/api/settings', async () => ({
     settings: (Object.keys(EDITABLE_SETTINGS) as SettingKey[]).map((key) => describe(key)),
+    namedKeys: {
+      anthropic: namedProviderState('anthropic'),
+      gemini: namedProviderState('gemini'),
+    },
     // What the current combination actually gets you, so the page can say
     // which features are live rather than leaving you to work it out.
     effect: {
@@ -35,6 +44,37 @@ export function registerSettingsRoutes(app: FastifyInstance) {
       ...activeModels(),
     },
   }));
+
+  app.post<{ Params: { provider: string } }>('/api/settings/keys/:provider', async (req, reply) => {
+    const provider = z.enum(['anthropic', 'gemini']).parse(req.params.provider);
+    const body = z
+      .object({
+        id: z.string().optional(),
+        name: z.string().min(1),
+        value: z.string().min(1),
+      })
+      .parse(req.body ?? {});
+
+    const saved = await saveNamedApiKey(provider, body);
+    resetProvider();
+    return { key: saved, provider };
+  });
+
+  app.put<{ Params: { provider: string } }>('/api/settings/keys/:provider/active', async (req, reply) => {
+    const provider = z.enum(['anthropic', 'gemini']).parse(req.params.provider);
+    const body = z.object({ id: z.string().min(1) }).parse(req.body ?? {});
+    await setActiveApiKey(provider, body.id);
+    resetProvider();
+    return { provider, activeId: body.id };
+  });
+
+  app.delete<{ Params: { provider: string; id: string } }>('/api/settings/keys/:provider/:id', async (req, reply) => {
+    const provider = z.enum(['anthropic', 'gemini']).parse(req.params.provider);
+    const id = z.string().min(1).parse(req.params.id);
+    await clearNamedApiKey(provider, id);
+    resetProvider();
+    return { provider, id };
+  });
 
   /**
    * Save one key and immediately prove it works.
