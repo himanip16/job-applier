@@ -12,8 +12,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "test": "DATABASE_URL=\"${TEST_DATABASE_URL:-$DATABASE_URL}\" vitest run",
-    "predev": "cd ../.. && prisma generate --silent",
-    "prestart": "cd ../.. && prisma generate --silent"
+    "predev": "cd ../.. && prisma generate",
+    "prestart": "cd ../.. && prisma generate"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",
