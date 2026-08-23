@@ -12,6 +12,7 @@ import {
 import { firecrawlSearch, isFirecrawlConfigured, type SearchHit } from './firecrawl.js';
 import { buildSearchPlan, titleMatchesPlan, type SearchPlan } from './searchQueries.js';
 import { rescoreLexically } from './rescoreLeads.js';
+import { applyHardRules, candidateConstraints } from './hardRules.js';
 import {
   assessFit,
   blendScores,
@@ -19,7 +20,6 @@ import {
   buildRejectionHistory,
   loadScoringContext,
   type ScoringContext,
-  scoreExperienceFit,
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
@@ -367,6 +367,7 @@ async function deepScore(
   if (!profile) return 0;
 
   const candidateContext = renderCandidateContext(profile, profile.resumeText);
+  const constraints = candidateConstraints(profile);
   const preferences = await buildPreferences(profileId);
   const rejectionHistory = await buildRejectionHistory(profileId);
 
@@ -382,18 +383,11 @@ async function deepScore(
       });
       if (!fit) continue;
 
-      const expPenalty = scoreExperienceFit(candidateContext, entry.job.descriptionText ?? entry.job.title);
-      const adjustedFit = expPenalty
-        ? {
-            ...fit,
-            score: Math.max(0, Math.min(100, fit.score + expPenalty.scoreDelta)),
-            againstIt: expPenalty.scoreDelta < 0
-              ? [...new Set([...(fit.againstIt ?? []), expPenalty.reason])]
-              : fit.againstIt,
-            verdict:
-              expPenalty.scoreDelta < -30 ? 'MISMATCH' : fit.verdict,
-          }
-        : fit;
+      // Both hard rules, on the same path every other scorer uses. This used
+      // to be the only place the experience check ran, and it subtracted from
+      // the score rather than blocking - so a model's 90 became a 33 and still
+      // outranked jobs that were genuinely open.
+      const adjustedFit = applyHardRules(fit, { ...constraints, job: entry.job });
 
       const lex = scoreLexically(entry.job, scoring);
       const blended = blendScores(adjustedFit, lex);
