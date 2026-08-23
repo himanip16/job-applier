@@ -11,7 +11,7 @@ requireTestDatabase();
 
 const { prisma } = await import('../src/lib/db.js');
 const { greenhouseSource, leverSource, ashbySource } = await import('../src/discovery/sources.js');
-const { scoreLexically, learnFromDecision, loadSignals, jobTerms } = await import(
+const { scoreLexically, learnFromDecision, loadSignals, loadScoringContext, jobTerms } = await import(
   '../src/discovery/scoring.js'
 );
 
@@ -146,16 +146,17 @@ describe('learning from what you turn down', () => {
   };
 
   it('pushes a rejected job down and a shortlisted one up', async () => {
-    const before = scoreLexically(onsitePhp, await loadSignals(profileId));
-    // No history yet, so everything sits at the neutral midpoint.
+    const before = scoreLexically(onsitePhp, await loadScoringContext(profileId));
+    // No resume and no history, so there is nothing to judge against and
+    // the honest answer is the neutral midpoint.
     expect(before.score).toBeCloseTo(50, 0);
 
     await learnFromDecision({ profileId, job: onsitePhp, accepted: false, reason: 'php and on-site, no thanks' });
     await learnFromDecision({ profileId, job: remoteGo, accepted: true });
 
-    const signals = await loadSignals(profileId);
-    const after = scoreLexically(onsitePhp, signals);
-    const good = scoreLexically(remoteGo, signals);
+    const scoring = await loadScoringContext(profileId);
+    const after = scoreLexically(onsitePhp, scoring);
+    const good = scoreLexically(remoteGo, scoring);
 
     expect(after.score).toBeLessThan(before.score);
     expect(good.score).toBeGreaterThan(before.score);
@@ -234,7 +235,7 @@ describe('learning from what you turn down', () => {
     expect(w).toBeGreaterThanOrEqual(-4);
     // Even a heavily-disliked term leaves the score above zero: the model pass
     // gets the final say on a posting, not the bag of words.
-    const score = scoreLexically(onsitePhp, await loadSignals(profileId)).score;
+    const score = scoreLexically(onsitePhp, await loadScoringContext(profileId)).score;
     expect(score).toBeGreaterThan(0);
     expect(score).toBeLessThan(20);
   });

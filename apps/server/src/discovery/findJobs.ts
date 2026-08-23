@@ -11,11 +11,14 @@ import {
 } from './boardUrls.js';
 import { firecrawlSearch, isFirecrawlConfigured, type SearchHit } from './firecrawl.js';
 import { buildSearchPlan, titleMatchesPlan, type SearchPlan } from './searchQueries.js';
+import { rescoreLexically } from './rescoreLeads.js';
 import {
   assessFit,
+  blendScores,
   buildPreferences,
   buildRejectionHistory,
-  loadSignals,
+  loadScoringContext,
+  type ScoringContext,
   scoreExperienceFit,
   scoreLexically,
   serialiseReasons,
@@ -71,6 +74,8 @@ export interface JobSearchReport {
   skippedAlreadySeen: number;
   deepScored: number;
   companiesRegistered: number;
+  /** Leads already in the queue whose cheap score was recomputed afterwards. */
+  rerankedExisting: number;
   notes: string[];
   errors: { where: string; error: string }[];
 }
@@ -124,6 +129,7 @@ export async function findJobs(
     roleTitles: [],
     queries: [],
     creditsUsed: 0,
+    rerankedExisting: 0,
     boards: [],
     jobsSeen: 0,
     newLeads: 0,
@@ -217,7 +223,7 @@ export async function findJobs(
     ),
   );
 
-  const signals = await loadSignals(profileId);
+  const scoring = await loadScoringContext(profileId);
   const fresh: { id: string; job: DiscoveredJob; lexScore: number }[] = [];
 
   // ---- 3. hydrate ----------------------------------------------------------
@@ -281,7 +287,7 @@ export async function findJobs(
       existing.add(canonical);
 
       const named: DiscoveredJob = { ...job, companyName: outcome.company || job.companyName };
-      const lex = scoreLexically(named, signals);
+      const lex = scoreLexically(named, scoring);
       try {
         const lead = await prisma.jobLead.create({
           data: {
@@ -314,8 +320,13 @@ export async function findJobs(
 
   // ---- 4. read the most promising in full ----------------------------------
   if (fresh.length && deepScoreTop > 0) {
-    report.deepScored = await deepScore(profileId, fresh, deepScoreTop, signals, report);
+    report.deepScored = await deepScore(profileId, fresh, deepScoreTop, scoring, report);
   }
+
+  // Re-rank what was already in the queue too. Leads stored before the resume
+  // was uploaded - or before the scorer learned to use it - keep the score
+  // they were created with unless something goes back for them.
+  report.rerankedExisting = await rescoreLexically(profileId);
 
   return report;
 }
@@ -346,7 +357,7 @@ async function deepScore(
   profileId: string,
   fresh: { id: string; job: DiscoveredJob; lexScore: number }[],
   top: number,
-  signals: Map<string, number>,
+  scoring: ScoringContext,
   report: JobSearchReport,
 ): Promise<number> {
   const profile = await prisma.profile.findUnique({
@@ -384,10 +395,8 @@ async function deepScore(
           }
         : fit;
 
-      const lex = scoreLexically(entry.job, signals);
-      const blended = adjustedFit.dealbreaker
-        ? Math.min(adjustedFit.score, 15)
-        : 0.7 * adjustedFit.score + 0.3 * lex.score;
+      const lex = scoreLexically(entry.job, scoring);
+      const blended = blendScores(adjustedFit, lex);
       await prisma.jobLead.update({
         where: { id: entry.id },
         data: {

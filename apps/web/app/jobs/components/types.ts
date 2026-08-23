@@ -13,6 +13,10 @@ export interface Detail {
     score: number;
     /** where the score came from: lexical keyword count or model judgment */
     scoreSource?: 'LEXICAL' | 'MODEL';
+    /** What a keyword-only score is made of: the posting's words against the resume's. */
+    affinity?: number;
+    sharedTerms?: string[];
+    missingTerms?: string[];
     deepScored: boolean;
     verdict: string | null;
     seniorityFit: string | null;
@@ -65,5 +69,3 @@ export interface Detail {
   lessons: { id: string; text: string; category: string | null; roundId: string | null }[];
   nextAction: { label: string; href: string; urgent: boolean } | null;
 }
-
-export type { Detail };

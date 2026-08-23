@@ -123,8 +123,20 @@ function MatchPanel({ d, busy, onRescore, rescoreError }: { d: Detail; busy: boo
       {rescoreError && <div className="notice bad" style={{ marginTop: '.6rem' }}>{rescoreError}</div>}
 
       <div className="grid2" style={{ marginTop: '.8rem' }}>
-        <Points title="Why it fits" items={m.forIt} marker="✓" colour="var(--good)" fallbackTerms={m.likedTerms} />
-        <Points title="Gaps and concerns" items={m.againstIt} marker="△" colour="var(--warn)" fallbackTerms={m.dislikedTerms} />
+        <Points
+          title="Why it fits"
+          items={m.forIt}
+          marker="✓"
+          colour="var(--good)"
+          fallbackTerms={m.sharedTerms?.length ? m.sharedTerms : m.likedTerms}
+        />
+        <Points
+          title="Gaps and concerns"
+          items={m.againstIt}
+          marker="△"
+          colour="var(--warn)"
+          fallbackTerms={m.missingTerms?.length ? m.missingTerms : m.dislikedTerms}
+        />
       </div>
     </div>
   );
@@ -373,7 +385,35 @@ const dot = (status: string) =>
 const dotColour = (status: string) =>
   status === 'PASSED' ? 'var(--good)' : status === 'FAILED' ? 'var(--bad)' : 'var(--muted)';
 
+function OutcomePanel({ d }: { d: Detail }) {
+  const a = d.application;
+  if (!a) return null;
 
+  return (
+    <div className="panel">
+      <h2>Outcome</h2>
+      <div className="row" style={{ gap: '2rem', flexWrap: 'wrap' }}>
+        <Fact
+          label="Applied"
+          value={a.submittedAt ? new Date(a.submittedAt).toLocaleDateString() : 'not yet'}
+        />
+        <Fact label="Response" value={a.outcome.replace(/_/g, ' ').toLowerCase()} />
+        {a.outcomeAt && <Fact label="Updated" value={new Date(a.outcomeAt).toLocaleDateString()} />}
+      </div>
+      {a.confirmation && (
+        <p className="small muted" style={{ marginTop: '.6rem' }}>
+          Confirmation seen on the page: “{a.confirmation}”
+        </p>
+      )}
+      {a.outcomeNote && (
+        <p className="small" style={{ marginTop: '.4rem' }}>
+          {a.outcomeNote}
+        </p>
+      )}
+      {a.notes && (
+        <p className="small muted" style={{ marginTop: '.4rem' }}>
+          {a.notes}
+        </p>
       )}
     </div>
   );

@@ -10,12 +10,14 @@ import {
 } from './sources.js';
 import {
   assessFit,
+  blendScores,
   buildPreferences,
   buildRejectionHistory,
-  loadSignals,
+  loadScoringContext,
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
+import { rescoreLeads, rescoreLexically } from './rescoreLeads.js';
 
 export interface CrawlReport {
   companiesCrawled: number;
@@ -23,6 +25,8 @@ export interface CrawlReport {
   newLeads: number;
   skippedAlreadyDecided: number;
   deepScored: number;
+  /** Leads already in the queue whose cheap score was recomputed afterwards. */
+  rerankedExisting: number;
   errors: { company: string; error: string }[];
 }
 
@@ -49,10 +53,11 @@ export async function crawlAll(
     newLeads: 0,
     skippedAlreadyDecided: 0,
     deepScored: 0,
+    rerankedExisting: 0,
     errors: [],
   };
 
-  const signals = await loadSignals(profileId);
+  const scoring = await loadScoringContext(profileId);
   const fresh: { id: string; job: DiscoveredJob; lexScore: number }[] = [];
 
   // A page is only created if a careers-page crawl actually needs one; the API
@@ -103,7 +108,7 @@ export async function crawlAll(
           continue;
         }
 
-        const lex = scoreLexically(job, signals);
+        const lex = scoreLexically(job, scoring);
         const lead = await prisma.jobLead.create({
           data: {
             profileId,
@@ -151,10 +156,10 @@ export async function crawlAll(
             job: entry.job,
           });
           if (!fit) continue;
-          const lex = scoreLexically(entry.job, signals);
+          const lex = scoreLexically(entry.job, scoring);
           // Blend, weighted toward the model - it read the description, the
           // lexical prior only saw word counts. A hard blocker overrides both.
-          const blended = fit.dealbreaker ? Math.min(fit.score, 15) : 0.7 * fit.score + 0.3 * lex.score;
+          const blended = blendScores(fit, lex);
           await prisma.jobLead.update({
             where: { id: entry.id },
             data: {
@@ -174,110 +179,23 @@ export async function crawlAll(
     }
   }
 
+  // Leave the whole queue correctly ranked, not just the rows this crawl
+  // added. Leads stored before the resume was uploaded - or before the scorer
+  // learned to use it - are still carrying the score they were created with,
+  // and nothing else would ever revisit them.
+  report.rerankedExisting = await rescoreLexically(profileId);
+
   bus.emit('crawl', report);
   return report;
 }
 
 /** Re-run the model pass over leads that never got one, or that are stale. */
 export async function rescore(profileId: string, limit = 20): Promise<number> {
-  const profile = await prisma.profile.findUnique({
-    where: { id: profileId },
-    include: { facts: true },
-  });
-  if (!profile) return 0;
-
   const leads = await prisma.jobLead.findMany({
     where: { profileId, status: 'NEW' },
     orderBy: [{ deepScored: 'asc' }, { score: 'desc' }],
     take: limit,
   });
-  if (!leads.length) return 0;
-
-  const candidateContext = renderCandidateContext(profile, profile.resumeText);
-  const preferences = await buildPreferences(profileId);
-  const rejectionHistory = await buildRejectionHistory(profileId);
-  const signals = await loadSignals(profileId);
-
-  let done = 0;
-  for (const lead of leads) {
-    const job = {
-      title: lead.title,
-      companyName: lead.companyName,
-      location: lead.location ?? undefined,
-      descriptionText: lead.descriptionText ?? '',
-      remote: lead.remote,
-    };
-    try {
-      const fit = await assessFit({ candidateContext, preferences, rejectionHistory, job });
-      if (!fit) continue;
-      const lex = scoreLexically(job, signals);
-      const blended = fit.dealbreaker ? Math.min(fit.score, 15) : 0.7 * fit.score + 0.3 * lex.score;
-      await prisma.jobLead.update({
-        where: { id: lead.id },
-        data: {
-          score: blended,
-          scoreReasons: serialiseReasons(lex, fit) as Prisma.InputJsonValue,
-          deepScored: true,
-          scoredAt: new Date(),
-        },
-      });
-      done++;
-    } catch {
-      // Leave it at its lexical score and move on.
-    }
-  }
-  return done;
-}
-
-/**
- * Re-apply the lexical score to every undecided lead.
- *
- * Called immediately after each decision, because the whole promise of the
- * triage queue is that rejecting one job re-ranks the ones like it. Without
- * this, the sibling posting two rows down keeps the score it was crawled with
- * and the learning is invisible until the next crawl.
- *
- * Free to run: no network, no model, and a queue is tens of rows.
- *
- * Leads that have had a model read keep it - their score is a blend the model
- * dominates, so re-deriving it from word counts alone would be a downgrade.
- * Their lexical component is refreshed on the next full rescore instead.
- */
-export async function rescoreLexically(profileId: string): Promise<number> {
-  const signals = await loadSignals(profileId);
-  const leads = await prisma.jobLead.findMany({
-    where: { profileId, status: 'NEW', deepScored: false },
-  });
-
-  let updated = 0;
-  for (const lead of leads) {
-    const lex = scoreLexically(
-      {
-        title: lead.title,
-        descriptionText: lead.descriptionText ?? '',
-        location: lead.location ?? undefined,
-      },
-      signals,
-    );
-    // Permanently remove very poor lexical matches so the queue stays useful.
-    if (lex.score < 45) {
-      try {
-        await prisma.jobLead.delete({ where: { id: lead.id } });
-      } catch {
-        // If deletion fails for some reason, skip and continue.
-      }
-      continue;
-    }
-
-    await prisma.jobLead.update({
-      where: { id: lead.id },
-      data: {
-        score: lex.score,
-        scoreReasons: serialiseReasons(lex, null),
-        scoredAt: new Date(),
-      },
-    });
-    updated++;
-  }
-  return updated;
+  const outcomes = await rescoreLeads(profileId, leads);
+  return outcomes.filter((o) => o.ok).length;
 }

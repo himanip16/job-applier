@@ -26,6 +26,18 @@ import type { DiscoveredJob } from './sources.js';
  * are likely to care about a real read.
  */
 
+/**
+ * The least a posting can be and still be scorable.
+ *
+ * A search hit is often a title and nothing else - no description was ever
+ * fetched - and that has to score rather than fail to typecheck.
+ */
+export interface ScorableJob {
+  title: string;
+  descriptionText?: string | null;
+  location?: string | null;
+}
+
 const STOP_TERMS = new Set([
   // Role filler: on every posting, so it distinguishes nothing.
   'engineer', 'engineering', 'senior', 'staff', 'lead', 'principal', 'developer',
@@ -53,59 +65,212 @@ const STOP_TERMS = new Set([
   'props', 'data', 'html', 'body', 'src', 'alt', 'utm', 'gh', 'jid',
 ]);
 
-/** Terms that characterise a posting, for the lexical model. */
-export function jobTerms(job: Pick<DiscoveredJob, 'title' | 'descriptionText' | 'location'>): string[] {
-  const title = tokenize(normalizeLabel(job.title));
+/** Terms that characterise a posting, split by where they came from. */
+function jobTermWeights(
+  job: ScorableJob,
+): { title: Map<string, number>; body: Map<string, number> } {
+  const title = new Map<string, number>();
+  const body = new Map<string, number>();
+  const add = (into: Map<string, number>, term: string, n: number) => {
+    if (STOP_TERMS.has(term)) return;
+    into.set(term, (into.get(term) ?? 0) + n);
+  };
+
+  // Title terms count for far more than body terms.
+  for (const t of tokenize(normalizeLabel(job.title))) add(title, t, 4);
+  for (const t of tokenize(normalizeLabel(job.location ?? ''))) add(body, t, 2);
   // The first chunk of a description is where the role is actually defined;
   // the tail is benefits boilerplate and EEO statements.
-  const body = tokenize(normalizeLabel((job.descriptionText ?? '').slice(0, 3000)));
-  const loc = tokenize(normalizeLabel(job.location ?? ''));
+  for (const t of tokenize(normalizeLabel((job.descriptionText ?? '').slice(0, 3000)))) {
+    add(body, t, 1);
+  }
 
-  const counts = new Map<string, number>();
-  // Title terms count for far more than body terms.
-  for (const t of title) if (!STOP_TERMS.has(t)) counts.set(t, (counts.get(t) ?? 0) + 4);
-  for (const t of loc) if (!STOP_TERMS.has(t)) counts.set(t, (counts.get(t) ?? 0) + 2);
-  for (const t of body) if (!STOP_TERMS.has(t)) counts.set(t, (counts.get(t) ?? 0) + 1);
+  // A body term said once is noise; a title term said once is the job.
+  for (const [t, n] of body) if (n < 2) body.delete(t);
+  const trimmed = new Map(
+    [...body.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60),
+  );
+  return { title, body: trimmed };
+}
 
-  return [...counts.entries()]
-    .filter(([, n]) => n >= 2)
+/** Terms that characterise a posting, for the lexical model. */
+export function jobTerms(job: ScorableJob): string[] {
+  const { title, body } = jobTermWeights(job);
+  const merged = new Map(body);
+  for (const [t, n] of title) merged.set(t, (merged.get(t) ?? 0) + n);
+  return [...merged.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, 60)
     .map(([t]) => t);
+}
+
+/**
+ * The candidate's own vocabulary, from their resume and everything else they
+ * have told us.
+ *
+ * This is the half of the ranking that was missing, and its absence is what
+ * made a fresh crawl useless: the lexical score used to be built only from
+ * learned preference weights, so a profile that had not rejected anything yet
+ * scored *every* posting at exactly 50 - a backend role and a sales role tied,
+ * and the "top 15 to read in full" was really "the first 15 stored".
+ */
+export function profileVocabulary(profile: {
+  resumeText?: string | null;
+  summary?: string | null;
+  facts?: { value: string }[];
+}): Set<string> {
+  const text = [
+    profile.resumeText ?? '',
+    profile.summary ?? '',
+    ...(profile.facts ?? []).map((f) => f.value),
+  ].join('\n');
+  return new Set(tokenize(normalizeLabel(text)).filter((t) => !STOP_TERMS.has(t)));
+}
+
+/** Everything the cheap pass needs, loaded once per crawl rather than per job. */
+export interface ScoringContext {
+  /** Learned term weights, from decisions the candidate has made. */
+  signals: Map<string, number>;
+  /** Every word that appears in the candidate's resume, summary or facts. */
+  vocabulary: Set<string>;
+}
+
+export async function loadScoringContext(profileId: string): Promise<ScoringContext> {
+  const [signals, profile] = await Promise.all([
+    loadSignals(profileId),
+    prisma.profile.findUnique({ where: { id: profileId }, include: { facts: true } }),
+  ]);
+  return { signals, vocabulary: profile ? profileVocabulary(profile) : new Set() };
 }
 
 export interface LexicalScore {
   score: number;
   positives: string[];
   negatives: string[];
+  /**
+   * How much of the posting's own vocabulary the candidate has, 0-1. Half of
+   * it is the title, whatever the length of the description, because the title
+   * is half of what you know about a job at a glance.
+   */
+  affinity: number;
+  /** Words the posting leans on that the candidate's resume also uses. */
+  shared: string[];
+  /** Words the posting leans on that appear nowhere in the resume. */
+  missing: string[];
+  /**
+   * How far this score should be trusted against a model's read, 0-1. A
+   * profile with no resume and no decision history has no opinion, and saying
+   * so is better than voting 50 on everything.
+   */
+  confidence: number;
 }
 
-/** Score a job against the learned preference signals. Cheap, no network. */
-export function scoreLexically(
-  job: Pick<DiscoveredJob, 'title' | 'descriptionText' | 'location'>,
-  signals: Map<string, number>,
-): LexicalScore {
-  const terms = jobTerms(job);
-  let total = 0;
+/**
+ * Where an average posting lands, and how hard affinity pushes away from it.
+ *
+ * A description is mostly words no resume contains - benefits, values, the
+ * legal footer - so coverage of even a perfect match tops out well under half.
+ * These two put the realistic 0.15-0.6 band across most of the 0-100 range
+ * instead of bunching it around the middle. The ranking test over real board
+ * titles is what keeps them honest.
+ */
+const AFFINITY_NEUTRAL = 0.35;
+const AFFINITY_GAIN = 7;
+
+/**
+ * How much neutral evidence every coverage figure starts with.
+ *
+ * "Software Engineer - Infrastructure" carries exactly one term the stoplist
+ * does not eat, so unsmoothed coverage of it is 0 or 1 and the posting scores
+ * either 8 or 99 on the strength of a single word. Twelve is three title
+ * terms' worth of "no opinion", which pulls a one-word title back toward the
+ * middle while leaving a full description - forty-odd terms - almost
+ * untouched. Short evidence should produce a soft answer.
+ */
+const AFFINITY_PRIOR = 12;
+
+/** Below this, there is not enough resume to judge overlap against. */
+const MIN_VOCABULARY = 15;
+
+/** Score a job against the resume and the learned preference signals. Cheap, no network. */
+export function scoreLexically(job: ScorableJob, ctx: ScoringContext): LexicalScore {
+  const { title, body } = jobTermWeights(job);
+  const known = ctx.vocabulary.size >= MIN_VOCABULARY;
+
+  const coverage = (terms: Map<string, number>) => {
+    let total = 0;
+    let covered = 0;
+    for (const [term, w] of terms) {
+      total += w;
+      if (ctx.vocabulary.has(term)) covered += w;
+    }
+    // Smoothed toward neutral, so a short title cannot swing the whole score
+    // on one word.
+    return total ? (covered + AFFINITY_PRIOR * AFFINITY_NEUTRAL) / (total + AFFINITY_PRIOR) : null;
+  };
+
+  const titleCoverage = coverage(title);
+  const bodyCoverage = coverage(body);
+  // The title gets half the vote when there is a description to weigh it
+  // against, and all of it when there is not - a search hit is often a title
+  // and nothing else.
+  const affinity =
+    titleCoverage === null
+      ? (bodyCoverage ?? 0)
+      : bodyCoverage === null
+        ? titleCoverage
+        : 0.5 * titleCoverage + 0.5 * bodyCoverage;
+
+  const shared: string[] = [];
+  const missing: string[] = [];
+  const byWeight = [...title.entries(), ...body.entries()].sort((a, b) => b[1] - a[1]);
+  for (const [term] of byWeight) {
+    (ctx.vocabulary.has(term) ? shared : missing).push(term);
+  }
+
+  let learned = 0;
   const positives: string[] = [];
   const negatives: string[] = [];
-
-  for (const term of terms) {
-    const w = signals.get(term);
+  for (const term of new Set(byWeight.map(([t]) => t))) {
+    const w = ctx.signals.get(term);
     if (w === undefined || Math.abs(w) < 0.15) continue;
-    total += w;
+    learned += w;
     if (w > 0) positives.push(term);
     else negatives.push(term);
   }
 
-  // Squash to 0-100 around a neutral 50, so an unseen job with no matching
-  // signals lands mid-pack rather than at either extreme.
-  const score = 100 / (1 + Math.exp(-total / 3));
+  // Squash to 0-100. With neither a resume nor a matching signal the drive is
+  // zero and the job lands mid-pack, which is the honest answer when nothing
+  // is known - but now it is the rare case rather than every row.
+  const drive = (known ? AFFINITY_GAIN * (affinity - AFFINITY_NEUTRAL) : 0) + learned / 3;
+  const score = 100 / (1 + Math.exp(-drive));
+
+  const hits = positives.length + negatives.length;
+  const confidence = Math.min(1, (known ? 0.7 : 0) + Math.min(0.3, hits * 0.075));
+
   return {
     score,
     positives: positives.slice(0, 6),
     negatives: negatives.slice(0, 6),
+    affinity,
+    shared: shared.slice(0, 8),
+    missing: missing.slice(0, 8),
+    confidence,
   };
+}
+
+/**
+ * Put a model's read and the cheap pass on one number.
+ *
+ * The cheap pass only gets a vote in proportion to what it actually knows.
+ * When it was scoring everything at 50 it still took a flat 30% of every
+ * blend, which dragged a model's 90 down to 78 and its 20 up to 29 - the whole
+ * range squeezed toward the middle by a number carrying no information.
+ */
+export function blendScores(fit: FitAssessment, lexical: LexicalScore): number {
+  if (fit.dealbreaker) return Math.min(fit.score, 15);
+  const weight = 0.3 * lexical.confidence;
+  return (1 - weight) * fit.score + weight * lexical.score;
 }
 
 export async function loadSignals(profileId: string): Promise<Map<string, number>> {
@@ -126,7 +291,7 @@ export async function loadSignals(profileId: string): Promise<Map<string, number
  */
 export async function learnFromDecision(args: {
   profileId: string;
-  job: Pick<DiscoveredJob, 'title' | 'descriptionText' | 'location'>;
+  job: ScorableJob;
   accepted: boolean;
   /** The candidate's own words, when they gave a reason. */
   reason?: string;
@@ -373,6 +538,12 @@ export function serialiseReasons(
     lexicalScore: Math.round(lexical.score),
     likedTerms: lexical.positives,
     dislikedTerms: lexical.negatives,
+    // What a quick score is actually made of. Without this the only
+    // explanation a keyword-ranked lead could offer was a list of learned
+    // terms, which is empty until the candidate has rejected something.
+    affinity: Math.round(lexical.affinity * 100),
+    sharedTerms: lexical.shared,
+    missingTerms: lexical.missing,
     ...(fit
       ? {
           verdict: fit.verdict,
