@@ -477,6 +477,7 @@ app.get('/api/overview', async () => {
     strongMatches,
     leadsTotal,
     shortlisted,
+    runsInFlight,
   ] =
     await Promise.all([
       safeCount(() => prisma.company.count({ where: { enabled: true } })),
@@ -498,6 +499,22 @@ app.get('/api/overview', async () => {
       ),
       safeCount(() => (profile ? prisma.jobLead.count({ where: { profileId: profile.id } }) : Promise.resolve(0))),
       safeCount(() => prisma.jobLead.count({ where: { status: 'SHORTLISTED' } })),
+      // Anything moving on its own. The dashboard polls fast only while this
+      // is non-zero, because that is the only time the numbers can change
+      // without the person doing something.
+      //
+      // Bounded by recency on purpose: a run whose process died mid-fill keeps
+      // its FILLING status for ever, and counting it would pin the dashboard
+      // at its fast interval permanently. Nothing that has not moved in ten
+      // minutes is in flight in any sense worth polling for.
+      safeCount(() =>
+        prisma.application.count({
+          where: {
+            status: { in: ['QUEUED', 'PREPARING', 'FILLING', 'SUBMITTING'] },
+            updatedAt: { gt: new Date(Date.now() - 10 * 60_000) },
+          },
+        }),
+      ),
     ]);
 
   const schema = await cachedSchemaProblem();
@@ -600,6 +617,7 @@ app.get('/api/overview', async () => {
       upcomingRounds,
       lessons,
       answerBank: profile?._count.answers ?? 0,
+      runsInFlight,
       companies,
     },
   };
