@@ -43,6 +43,8 @@ export interface Overview {
     lessons: number;
     answerBank: number;
     companies: number;
+    /** Applications currently being driven. Non-zero means the state moves on its own. */
+    runsInFlight: number;
   };
 }
 
@@ -50,11 +52,32 @@ type Listener = (state: { data: Overview | null; error: string | null }) => void
 
 const listeners = new Set<Listener>();
 let latest: { data: Overview | null; error: string | null } = { data: null, error: null };
-let timer: ReturnType<typeof setInterval> | null = null;
+let timer: ReturnType<typeof setTimeout> | null = null;
 let inFlight: Promise<void> | null = null;
 
-/** Ten seconds. The numbers here change when a human does something, not on their own. */
-const INTERVAL_MS = 10_000;
+/**
+ * How often to ask, and when not to bother.
+ *
+ * These numbers only move on their own while a run is going: a run that
+ * reaches a question, finishes, or hits a wall changes them without anyone
+ * touching the page. The rest of the time they change *because* of something
+ * the person just did, and that path reloads the data itself.
+ *
+ * So: poll briskly while something is in flight or waiting, slowly otherwise,
+ * and not at all while the tab is in the background - which is most of the
+ * time, and was previously costing twelve database queries every ten seconds
+ * on every open tab regardless.
+ */
+const BUSY_MS = 8_000;
+const IDLE_MS = 60_000;
+
+function nextDelay(): number {
+  const c = latest.data;
+  if (!c) return BUSY_MS;
+  return c.needsYou.total > 0 || c.counts.runsInFlight > 0 ? BUSY_MS : IDLE_MS;
+}
+
+const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
 
 function publish(next: { data: Overview | null; error: string | null }) {
   latest = next;
@@ -72,6 +95,26 @@ function refresh(): Promise<void> {
   return inFlight;
 }
 
+/**
+ * Chained timeouts rather than an interval, so the gap can change between
+ * ticks - an interval would keep whatever period it was created with.
+ */
+function schedule(): void {
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(async () => {
+    if (!hidden()) await refresh();
+    if (listeners.size) schedule();
+  }, nextDelay());
+}
+
+function onVisibilityChange(): void {
+  if (!listeners.size) return;
+  // Coming back to the tab should show current numbers straight away, not
+  // whatever was true when you left.
+  if (!hidden()) void refresh();
+  schedule();
+}
+
 export function useOverview(): { data: Overview | null; error: string | null; refresh: () => void } {
   const [state, setState] = useState(latest);
 
@@ -83,13 +126,17 @@ export function useOverview(): { data: Overview | null; error: string | null; re
     if (!latest.data) void refresh();
     else setState(latest);
 
-    timer ??= setInterval(() => void refresh(), INTERVAL_MS);
+    if (!timer) {
+      schedule();
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
 
     return () => {
       listeners.delete(setState);
       if (listeners.size === 0 && timer) {
-        clearInterval(timer);
+        clearTimeout(timer);
         timer = null;
+        document.removeEventListener('visibilitychange', onVisibilityChange);
       }
     };
   }, []);
