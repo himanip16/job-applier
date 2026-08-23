@@ -140,6 +140,24 @@ export default function DiscoverPage() {
   // page and two from the next, then rescoring all five, is the point.
   const [picked, setPicked] = useState<string[]>([]);
 
+  /**
+   * Whether Apply should write a cover letter.
+   *
+   * Off by default and remembered in this browser. Most applications do not
+   * need one, and writing one for every job spends a model call and half a
+   * minute on something nobody reads - but when you are applying somewhere you
+   * actually care about, you want it, and you do not want to hunt for the
+   * setting each time. A form that requires one always gets one regardless.
+   */
+  const [writeCoverLetter, setWriteCoverLetter] = useState(false);
+  useEffect(() => {
+    try {
+      setWriteCoverLetter(window.localStorage.getItem('ja.coverLetter') === 'on');
+    } catch {
+      // Private windows and blocked site data both throw here; the default stands.
+    }
+  }, []);
+
   useEffect(() => {
     if (typed === view.q) return;
     const t = setTimeout(() => change({ q: typed }), 300);
@@ -233,7 +251,7 @@ export default function DiscoverPage() {
     }
   }
 
-  async function decide(lead: Lead, action: 'apply' | 'shortlist') {
+  async function decide(lead: Lead, action: 'apply' | 'shortlist' | 'applied') {
     setBusy(lead.id);
     setLeadErrors((prev) => {
       const next = { ...prev };
@@ -242,12 +260,22 @@ export default function DiscoverPage() {
     });
     try {
       if (action === 'apply') {
-        const rRaw = await api(`/api/leads/${lead.id}/apply`, { method: 'POST' });
+        const rRaw = await api(`/api/leads/${lead.id}/apply`, {
+          method: 'POST',
+          body: JSON.stringify({ writeCoverLetter }),
+        });
         const r = rRaw as { applicationId: string };
         window.location.href = `/applications/${r.applicationId}`;
         return;
       }
-      await api(`/api/leads/${lead.id}/shortlist`, { method: 'POST' });
+      await api(`/api/leads/${lead.id}/${action === 'applied' ? 'applied' : 'shortlist'}`, {
+        method: 'POST',
+      });
+      if (action === 'applied') {
+        setFlash(
+          `Marked "${lead.title}" as applied. It is in the tracker now, and out of the queue.`,
+        );
+      }
       await load();
     } catch (e) {
       setLeadErrors((prev) => ({ ...prev, [lead.id]: (e as Error).message }));
@@ -320,6 +348,7 @@ export default function DiscoverPage() {
     onPick: () => togglePicked(lead.id),
     onApply: () => decide(lead, 'apply'),
     onShortlist: () => decide(lead, 'shortlist'),
+    onApplied: () => decide(lead, 'applied'),
     onReject: () => setRejecting(lead),
   });
 
@@ -422,6 +451,28 @@ export default function DiscoverPage() {
           onChange={change}
           total={pageInfo.total}
         />
+
+        <label
+          className="row small muted"
+          style={{ gap: '.4rem', marginTop: '.6rem', alignItems: 'center' }}
+        >
+          <input
+            type="checkbox"
+            checked={writeCoverLetter}
+            onChange={(e) => {
+              setWriteCoverLetter(e.target.checked);
+              try {
+                window.localStorage.setItem('ja.coverLetter', e.target.checked ? 'on' : 'off');
+              } catch {
+                // Not being able to remember it is not a reason to refuse the change.
+              }
+            }}
+          />
+          Write a cover letter when I press Apply
+          <span className="muted">
+            — off by default. A form that requires one gets one either way.
+          </span>
+        </label>
 
         <SelectionBar
           picked={picked}
@@ -727,6 +778,7 @@ function LeadCard({
   onPick,
   onApply,
   onShortlist,
+  onApplied,
   onReject,
 }: {
   lead: Lead;
@@ -736,6 +788,7 @@ function LeadCard({
   onPick: () => void;
   onApply: () => void;
   onShortlist: () => void;
+  onApplied: () => void;
   onReject: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -808,6 +861,13 @@ function LeadCard({
               </button>
               <button disabled={busy} onClick={onShortlist}>
                 Save
+              </button>
+              <button
+                disabled={busy}
+                onClick={onApplied}
+                title="You applied to this one yourself — record it and take it out of the queue"
+              >
+                Applied
               </button>
               <button className="danger" disabled={busy} onClick={onReject}>
                 Not for me

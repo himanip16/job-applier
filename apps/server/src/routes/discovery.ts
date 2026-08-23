@@ -325,12 +325,85 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     return { ok: true, reranked };
   });
 
+  /**
+   * "I applied to this one myself."
+   *
+   * Distinct from Apply, which drives the browser. Plenty of postings are
+   * quicker to fill in by hand - a two-field form, a company that wants an
+   * email - and before this the only way to record one was to let the
+   * automation try and fail, or to lose the fact entirely. Losing it is the
+   * worst option: the job comes back in the next crawl looking untouched.
+   *
+   * It creates the Application the tracker needs, marked SUBMITTED because it
+   * was, so rounds and outcomes hang off it like any other.
+   */
+  app.post<{ Params: { id: string } }>('/api/leads/:id/applied', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    const { note } = z.object({ note: z.string().max(2000).optional() }).parse(req.body ?? {});
+
+    const lead = await ownedLead(profile.id, req.params.id);
+    if (!lead) return reply.code(404).send(NOT_YOURS);
+
+    const adapter = adapterFor(lead.url);
+    const job = await prisma.job.upsert({
+      where: { url: lead.url },
+      create: {
+        url: lead.url,
+        ats: adapter.id,
+        company: lead.companyName,
+        title: lead.title,
+        location: lead.location,
+        descriptionText: lead.descriptionText,
+      },
+      update: {},
+    });
+
+    const application = await prisma.application.upsert({
+      where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
+      create: {
+        profileId: profile.id,
+        jobId: job.id,
+        status: 'SUBMITTED',
+        outcome: 'IN_PROGRESS',
+        submittedAt: new Date(),
+        requiresReview: false,
+        notes: note ?? 'Applied by hand, outside the automation.',
+      },
+      // Never downgrade a real run. If the automation already submitted this,
+      // the run's own record of what it sent is worth more than this flag.
+      update: {},
+    });
+
+    await prisma.jobLead.update({
+      where: { id: lead.id },
+      data: { status: 'APPLIED', applicationId: application.id, decidedAt: new Date() },
+    });
+    // Applying is the strongest "yes" there is, so it teaches like one.
+    await learnFromDecision({
+      profileId: profile.id,
+      job: {
+        title: lead.title,
+        descriptionText: lead.descriptionText ?? '',
+        location: lead.location ?? undefined,
+      },
+      accepted: true,
+    });
+    await rescoreLexically(profile.id);
+
+    return { applicationId: application.id };
+  });
+
   /** Shortlist and immediately start an application run. */
   app.post<{ Params: { id: string } }>('/api/leads/:id/apply', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
-    const { requiresReview } = z
-      .object({ requiresReview: z.boolean().default(true) })
+    const { requiresReview, writeCoverLetter } = z
+      .object({
+        requiresReview: z.boolean().default(true),
+        // Off unless asked for. Most applications do not need one.
+        writeCoverLetter: z.boolean().default(false),
+      })
       .parse(req.body ?? {});
 
     const lead = await ownedLead(profile.id, req.params.id);
@@ -352,8 +425,8 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
     const application = await prisma.application.upsert({
       where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
-      create: { profileId: profile.id, jobId: job.id, requiresReview },
-      update: { status: 'QUEUED', blockedReason: null, requiresReview },
+      create: { profileId: profile.id, jobId: job.id, requiresReview, writeCoverLetter },
+      update: { status: 'QUEUED', blockedReason: null, requiresReview, writeCoverLetter },
     });
 
     await prisma.jobLead.update({

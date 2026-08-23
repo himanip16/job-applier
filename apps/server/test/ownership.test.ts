@@ -200,3 +200,57 @@ describe("another person's rows", () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+describe('marking a lead as applied by hand', () => {
+  it('records it in the tracker and takes it out of the queue', async () => {
+    const lead = await prisma.jobLead.create({
+      data: {
+        profileId: alice,
+        url: `https://boards.greenhouse.io/acme/jobs/byhand-${Date.now()}`,
+        ats: 'greenhouse',
+        title: 'Backend Engineer',
+        companyName: 'Acme',
+        descriptionText: 'Go and Postgres.',
+      },
+    });
+
+    const res = await app.inject({ method: 'POST', url: `/api/leads/${lead.id}/applied` });
+    expect(res.statusCode).toBe(200);
+    const { applicationId } = res.json() as { applicationId: string };
+
+    const after = await prisma.jobLead.findUniqueOrThrow({ where: { id: lead.id } });
+    expect(after.status).toBe('APPLIED');
+    expect(after.applicationId).toBe(applicationId);
+
+    // SUBMITTED, because it was - the tracker hangs rounds and outcomes off
+    // this row exactly as it does for a run the automation drove.
+    const application = await prisma.application.findUniqueOrThrow({ where: { id: applicationId } });
+    expect(application.status).toBe('SUBMITTED');
+    expect(application.outcome).toBe('IN_PROGRESS');
+    expect(application.submittedAt).toBeTruthy();
+  });
+
+  it('does not overwrite what a real run recorded', async () => {
+    const job = await prisma.job.create({
+      data: { url: `https://boards.greenhouse.io/acme/jobs/ran-${Date.now()}`, ats: 'greenhouse', company: 'Acme', title: 'Engineer' },
+    });
+    const ran = await prisma.application.create({
+      data: { profileId: alice, jobId: job.id, status: 'SUBMITTED', confirmation: 'Thanks for applying' },
+    });
+    const lead = await prisma.jobLead.create({
+      data: { profileId: alice, url: job.url, ats: 'greenhouse', title: 'Engineer', companyName: 'Acme' },
+    });
+
+    await app.inject({ method: 'POST', url: `/api/leads/${lead.id}/applied` });
+
+    const after = await prisma.application.findUniqueOrThrow({ where: { id: ran.id } });
+    expect(after.confirmation).toBe('Thanks for applying');
+  });
+
+  it('will not mark someone else’s lead', async () => {
+    const res = await app.inject({ method: 'POST', url: `/api/leads/${theirs.lead}/applied` });
+    expect(res.statusCode).toBe(404);
+    const lead = await prisma.jobLead.findUniqueOrThrow({ where: { id: theirs.lead! } });
+    expect(lead.status).toBe('NEW');
+  });
+});

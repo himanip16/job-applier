@@ -208,11 +208,12 @@ app.post<{ Body: unknown }>('/api/applications', async (req, reply) => {
   const profile = await requireProfile(req, reply);
   if (!profile) return;
 
-  const { url, autoStart, requiresReview } = z
+  const { url, autoStart, requiresReview, writeCoverLetter } = z
     .object({
       url: z.string().url(),
       autoStart: z.boolean().default(true),
       requiresReview: z.boolean().default(config.requireReview),
+      writeCoverLetter: z.boolean().default(false),
     })
     .parse(req.body);
 
@@ -237,13 +238,13 @@ app.post<{ Body: unknown }>('/api/applications', async (req, reply) => {
   const application =
     existing ??
     (await prisma.application.create({
-      data: { profileId: profile.id, jobId: job.id, requiresReview },
+      data: { profileId: profile.id, jobId: job.id, requiresReview, writeCoverLetter },
     }));
 
   if (existing) {
     await prisma.application.update({
       where: { id: existing.id },
-      data: { status: 'QUEUED', blockedReason: null, requiresReview },
+      data: { status: 'QUEUED', blockedReason: null, requiresReview, writeCoverLetter },
     });
     await prisma.pendingQuestion.deleteMany({ where: { applicationId: existing.id, answeredAt: null } });
   }
@@ -563,6 +564,7 @@ app.get('/api/overview', async (req) => {
     leadsTotal,
     shortlisted,
     runsInFlight,
+    notApplied,
   ] =
     await Promise.all([
       safeCount(() => prisma.company.count({ where: { enabled: true } })),
@@ -600,7 +602,45 @@ app.get('/api/overview', async (req) => {
           },
         }),
       ),
+      // The number the front page is actually about: matches still waiting on
+      // a decision. Everything else on that page is either history or
+      // machinery.
+      safeCount(() =>
+        profile
+          ? prisma.jobLead.count({
+              where: { profileId: profile.id, status: { in: ['NEW', 'SHORTLISTED'] } },
+            })
+          : Promise.resolve(0),
+      ),
     ]);
+
+  /**
+   * The best few jobs you have not applied to yet.
+   *
+   * Sent with the overview rather than fetched separately, because it is the
+   * one thing the front page exists to show and a second round trip would let
+   * it arrive after everything less important.
+   */
+  const topMatches = profile
+    ? await prisma.jobLead
+        .findMany({
+          where: { profileId: profile.id, status: { in: ['NEW', 'SHORTLISTED'] } },
+          orderBy: [{ score: 'desc' }, { discoveredAt: 'desc' }],
+          take: 6,
+          select: {
+            id: true,
+            title: true,
+            companyName: true,
+            location: true,
+            remote: true,
+            score: true,
+            deepScored: true,
+            status: true,
+            url: true,
+          },
+        })
+        .catch(() => [])
+    : [];
 
   const schema = await cachedSchemaProblem();
 
@@ -704,7 +744,9 @@ app.get('/api/overview', async (req) => {
       answerBank: profile?._count.answers ?? 0,
       runsInFlight,
       companies,
+      notApplied,
     },
+    topMatches,
   };
 });
 
