@@ -58,6 +58,16 @@ const EXTRACTOR = () => {
   const LABEL_NOISE =
     /\s*(\(\s*(required|optional|mandatory)\s*\)|\b[0-9a-f]{8,}\b)\s*/gi;
 
+  /**
+   * What a caption can look like.
+   *
+   * `[class*="label"]` and not `.label`, because Lever's custom questions use
+   * `class="application-label"` and have no <label>, no `for`, no id and no
+   * placeholder - so `.label` matched nothing and every card question on every
+   * Lever posting arrived with an empty label.
+   */
+  const CAPTION_SELECTOR = 'label, legend, [class*="label"]';
+
   const textOf = (el: Element | null): string =>
     (el?.textContent ?? '')
       .replace(/\s+/g, ' ')
@@ -67,7 +77,15 @@ const EXTRACTOR = () => {
       .replace(/\s+/g, ' ')
       .trim();
 
-  const labelFor = (el: HTMLElement): string => {
+  /**
+   * The caption a person would read next to this control.
+   *
+   * `grouped` is set for one radio or checkbox out of a set. Those are usually
+   * wrapped in a <label> of their own holding the *option* text, so the
+   * ordinary implicit-label rule names the group after its first option -
+   * Lever's "Years of Exp" came out as "Less than 2 yrs".
+   */
+  const labelFor = (el: HTMLElement, grouped = false): string => {
     const aria = el.getAttribute('aria-label');
     if (aria?.trim()) return aria.trim();
 
@@ -87,14 +105,26 @@ const EXTRACTOR = () => {
     }
 
     const wrapping = el.closest('label');
-    if (wrapping) return textOf(wrapping);
+    if (wrapping && !grouped) return textOf(wrapping);
 
-    // Walk up looking for the nearest label inside a field wrapper. Covers
-    // Greenhouse (.field-wrapper), Workable (fieldset), Ashby (div + label).
-    let node: HTMLElement | null = el.parentElement;
-    for (let depth = 0; node && depth < 5; depth++, node = node.parentElement) {
-      const l = node.querySelector('label, legend, .label');
-      if (l && !l.contains(el)) return textOf(l);
+    // Walk up looking for the nearest caption in a field wrapper. Covers
+    // Greenhouse (.field-wrapper), Workable (fieldset), Ashby (div + label)
+    // and Lever, whose custom questions have no <label> anywhere near the
+    // control - just a sibling <div class="application-label"> with no `for`,
+    // no id and no placeholder to fall back on.
+    //
+    // `[class*="label"]` rather than `.label` for exactly that reason: the
+    // class is `application-label`, which `.label` does not match, and every
+    // Lever card question was arriving nameless as a result.
+    let node: HTMLElement | null = grouped ? (wrapping ?? el).parentElement : el.parentElement;
+    for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
+      for (const l of Array.from(node.querySelectorAll(CAPTION_SELECTOR))) {
+        // A caption that contains the control is the control's own wrapper,
+        // and for one radio of a set that is the option, not the question.
+        if (l.contains(el)) continue;
+        const text = textOf(l);
+        if (text) return text;
+      }
     }
     return el.getAttribute('placeholder')?.trim() ?? '';
   };
@@ -184,9 +214,29 @@ const EXTRACTOR = () => {
         const groupHandle = `g${counter}`;
         container.setAttribute('data-ja-group', groupHandle);
 
-        const groupLabel =
-          textOf(container.querySelector('legend, label:not([for]), .label')) ||
-          labelFor(el);
+        // The question, not one of its answers.
+        //
+        // Reading a caption from inside the options container finds the first
+        // option's own <label>, which is how Lever's "Years of Exp" came out
+        // named "Less than 2 yrs". A <legend> is the one caption that lives
+        // inside the group and still describes it; everything else has to come
+        // from above the container.
+        const groupLabel = ((): string => {
+          const legend = container.querySelector('legend');
+          if (legend && !legend.contains(el)) {
+            const text = textOf(legend);
+            if (text) return text;
+          }
+          let node: HTMLElement | null = container.parentElement;
+          for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
+            for (const l of Array.from(node.querySelectorAll(CAPTION_SELECTOR))) {
+              if (container.contains(l) || l.contains(container)) continue;
+              const text = textOf(l);
+              if (text) return text;
+            }
+          }
+          return labelFor(el, true);
+        })();
 
         results.push({
           handle: mark(el),

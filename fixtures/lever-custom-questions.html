@@ -1,0 +1,158 @@
+<!doctype html>
+<!--
+  Lever's apply form, as jobs.lever.co actually serves it.
+
+  Copied structurally from https://jobs.lever.co/fampay/8dfc0511-.../apply on
+  2026-08-23. Two things about it break naive label resolution, and both are
+  Lever's normal output rather than anything unusual this company did:
+
+    * The built-in fields wrap their input in a <label>, so an implicit
+      association works. The custom "card" questions do not: the caption is a
+      sibling <div class="application-label"> with no for=, no id, no
+      aria-label and no placeholder. Nothing standard connects the two.
+
+    * Every radio in a multiple-choice card is wrapped in its own <label>
+      holding the *option* text. Reading the wrapping label for the group
+      therefore names the group after its first option.
+-->
+<html>
+  <head><meta charset="utf-8" /><title>Backend Engineer - Apply</title></head>
+  <body>
+    <form method="POST" id="application-form">
+      <div class="section page-centered application-form">
+        <h4>Submit your application</h4>
+        <ul>
+          <li class="application-question">
+            <label>
+              <div class="application-label">Full name<span class="required">✱</span></div>
+              <div class="application-field"><input type="text" data-qa="name-input" name="name" required="" /></div>
+            </label>
+          </li>
+          <li class="application-question">
+            <label>
+              <div class="application-label">Email<span class="required">✱</span></div>
+              <div class="application-field"><input type="email" data-qa="email-input" name="email" required="" /></div>
+            </label>
+          </li>
+          <li class="application-question">
+            <label>
+              <div class="application-label">Phone<span class="required">✱</span></div>
+              <div class="application-field"><input type="text" data-qa="phone-input" name="phone" required="" /></div>
+            </label>
+          </li>
+          <li class="application-question">
+            <label>
+              <div class="application-label">Current location<span class="required">✱</span></div>
+              <div class="application-field"><input class="location-input" id="location-input" type="text" maxlength="100" name="location" required="" /></div>
+            </label>
+          </li>
+          <li class="application-question">
+            <label>
+              <div class="application-label">Current company<span class="required">✱</span></div>
+              <div class="application-field"><input type="text" data-qa="org-input" name="org" required="" /></div>
+            </label>
+          </li>
+        </ul>
+      </div>
+
+      <div class="section page-centered application-form">
+        <h4>Links</h4>
+        <ul>
+          <li class="application-question">
+            <label>
+              <div class="application-label">LinkedIn URL<span class="required">✱</span></div>
+              <div class="application-field"><input type="text" name="urls[LinkedIn]" required="" /></div>
+            </label>
+          </li>
+          <li class="application-question">
+            <label>
+              <div class="application-label">GitHub URL</div>
+              <div class="application-field"><input type="text" name="urls[GitHub]" /></div>
+            </label>
+          </li>
+          <li class="application-question">
+            <label>
+              <div class="application-label">Portfolio URL</div>
+              <div class="application-field"><input type="text" name="urls[Portfolio]" /></div>
+            </label>
+          </li>
+        </ul>
+      </div>
+
+      <div class="section page-centered application-form" data-qa="additional-cards">
+        <h4 data-qa="card-name">General</h4>
+        <ul>
+          <li class="application-question custom-question">
+            <div>
+              <div class="application-label full-width textarea">
+                <div class="text">Current CTC (Please mention the CTC breakup)<span class="required">✱</span></div>
+              </div>
+              <div class="application-field full-width required-field">
+                <textarea class="card-field-input" name="cards[38109191][field0]" required="required"></textarea>
+              </div>
+            </div>
+          </li>
+          <li class="application-question custom-question">
+            <div>
+              <div class="application-label full-width textarea">
+                <div class="text">Expected CTC<span class="required">✱</span></div>
+              </div>
+              <div class="application-field full-width required-field">
+                <textarea class="card-field-input" name="cards[38109191][field1]" required="required"></textarea>
+              </div>
+            </div>
+          </li>
+          <li class="application-question custom-question">
+            <div>
+              <div class="application-label full-width textarea">
+                <div class="text">Notice Period<span class="required">✱</span></div>
+              </div>
+              <div class="application-field full-width required-field">
+                <textarea class="card-field-input" name="cards[38109191][field2]" required="required"></textarea>
+              </div>
+            </div>
+          </li>
+          <li class="application-question custom-question">
+            <div>
+              <div class="application-label full-width textarea">
+                <div class="text">Current Company<span class="required">✱</span></div>
+              </div>
+              <div class="application-field full-width required-field">
+                <textarea class="card-field-input" name="cards[38109191][field3]" required="required"></textarea>
+              </div>
+            </div>
+          </li>
+          <li class="application-question custom-question">
+            <div>
+              <div class="application-label full-width textarea">
+                <div class="text">Current Designation<span class="required">✱</span></div>
+              </div>
+              <div class="application-field full-width required-field">
+                <textarea class="card-field-input" name="cards[38109191][field4]" required="required"></textarea>
+              </div>
+            </div>
+          </li>
+          <li class="application-question custom-question">
+            <div>
+              <div class="application-label full-width multiple-choice">
+                <div class="text">Years of Exp<span class="required">✱</span></div>
+              </div>
+              <div class="application-field full-width required-field">
+                <ul data-qa="multiple-choice">
+                  <li><label><input type="radio" name="cards[38109191][field5]" value="Less than 2 yrs" required="required" /><span class="application-answer-alternative">Less than 2 yrs</span></label></li>
+                  <li><label><input type="radio" name="cards[38109191][field5]" value="3yrs - 4yrs" required="required" /><span class="application-answer-alternative">3yrs - 4yrs</span></label></li>
+                  <li><label><input type="radio" name="cards[38109191][field5]" value="5yrs - 6yrs" required="required" /><span class="application-answer-alternative">5yrs - 6yrs</span></label></li>
+                  <li><label><input type="radio" name="cards[38109191][field5]" value="7 yrs - 9 yrs" required="required" /><span class="application-answer-alternative">7 yrs - 9 yrs</span></label></li>
+                  <li><label><input type="radio" name="cards[38109191][field5]" value="10yrs - 13 yrs" required="required" /><span class="application-answer-alternative">10yrs - 13 yrs</span></label></li>
+                  <li><label><input type="radio" name="cards[38109191][field5]" value="14+ yrs" required="required" /><span class="application-answer-alternative">14+ yrs</span></label></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <button type="submit" id="btn-submit" class="template-btn-submit">Submit application</button>
+    </form>
+  </body>
+</html>
