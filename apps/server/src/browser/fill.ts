@@ -50,15 +50,19 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
   switch (field.kind) {
     case 'SELECT': {
       const want = asOne(value, field);
-      // Try by visible label, then by option value; both are common.
+      // Try by visible label, then by the best option we can find; both are
+      // common, and an exact label match is rarer than it looks.
+      //
+      // Short timeout on the speculative attempt. It is expected to miss - the
+      // fallback below is the one that handles "India" against "India +91" -
+      // and letting it wait out the default put 30 seconds on the clock for
+      // every such field.
       try {
-        await el.selectOption({ label: want });
+        await el.selectOption({ label: want }, { timeout: 3_000 });
       } catch {
-        const optionValue = field.options?.find(
-          (o) => normalizeLabel(o.label) === normalizeLabel(want),
-        )?.value;
-        if (!optionValue) throw new FillError(`No option "${want}" on ${field.label}`, field);
-        await el.selectOption(optionValue);
+        const option = bestOption(field.options, want);
+        if (!option) throw new FillError(`No option "${want}" on ${field.label}`, field);
+        await el.selectOption(option.value);
       }
       break;
     }
@@ -95,6 +99,80 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
  * into a menu that may be portalled to document.body, so they are located
  * globally by role rather than inside the field's container.
  */
+/**
+ * Did the control end up on the option we asked for, even though it does not
+ * say so in those words?
+ *
+ * Greenhouse's phone country field is the case that forced this: ask for
+ * "India", and the control afterwards reads `+91`. That is a correct fill
+ * reported as a failure, which then routes a perfectly good application to a
+ * human for no reason.
+ *
+ * So: find the option we meant, and accept any read-back that is recognisably
+ * part of it - its value, or a fragment of its label such as the dial code.
+ */
+function showsChosenOption(field: FormField, want: string, shown: string): boolean {
+  if (!shown) return false;
+  const chosen = bestOption(field.options, want);
+  if (!chosen) return false;
+
+  const label = normalizeLabel(chosen.label);
+  const value = normalizeLabel(chosen.value);
+  if (shown === label || shown === value) return true;
+  if (label.includes(shown) && shown.length >= 2) return true;
+
+  // The decoration on its own: "+91" out of "India +91".
+  const dial = label.match(/\+\d{1,4}/)?.[0];
+  return Boolean(dial && normalizeLabel(dial) === shown);
+}
+
+/**
+ * The option a human would have picked.
+ *
+ * An exact label match is the exception, not the rule. Greenhouse's phone
+ * country field lists `India +91`, not `India`, so resolving the profile's
+ * country to "India" and asking for that label finds nothing and the fill
+ * fails on a required field — which was enough to end a whole run.
+ *
+ * Tiers, most specific first, so "India" can never be satisfied by
+ * "British Indian Ocean Territory" while an exact option exists.
+ */
+export function bestOption(
+  options: { label: string; value?: string }[] | undefined,
+  want: string,
+): { label: string; value: string } | null {
+  if (!options?.length) return null;
+  const target = normalizeLabel(want);
+  if (!target) return null;
+
+  // An option with no explicit value submits its label, which is what the
+  // browser does for `<option>Text</option>`.
+  const norm = options.map((o) => ({
+    o: { label: o.label, value: o.value ?? o.label },
+    label: normalizeLabel(o.label),
+    value: normalizeLabel(o.value ?? o.label),
+  }));
+
+  const exact = norm.find((c) => c.label === target || c.value === target);
+  if (exact) return exact.o;
+
+  // "India" against "India +91": the option starts with what we asked for and
+  // the rest is a dial code or similar decoration.
+  const prefixed = norm.find((c) => c.label.startsWith(`${target} `) || c.label.startsWith(`${target}(`));
+  if (prefixed) return prefixed.o;
+
+  // "India +91" against an option labelled "India" - the same case, reversed,
+  // which happens when a remembered answer carries the decoration.
+  const reverse = norm.find((c) => target.startsWith(`${c.label} `));
+  if (reverse) return reverse.o;
+
+  // Word-boundary containment. Deliberately last and deliberately strict about
+  // boundaries, so "us" does not select "Belarus".
+  const boundary = new RegExp(`(^|[^a-z0-9])${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`);
+  const contained = norm.find((c) => boundary.test(c.label));
+  return contained?.o ?? null;
+}
+
 async function fillReactSelect(page: Page, field: FormField, value: string | string[]): Promise<void> {
   const wants = Array.isArray(value) ? value : [value];
   const input = page.locator(field.selector).first();
@@ -327,7 +405,11 @@ export async function verifyFilled(
       const selectedText = normalizeLabel(
         await el.locator('option:checked').innerText().catch(() => ''),
       );
-      return { ok: wants.every((w) => selectedText.includes(w) || actual.includes(w)), actual: selectedText || actual };
+      const shown = selectedText || actual;
+      const ok =
+        wants.every((w) => selectedText.includes(w) || actual.includes(w)) ||
+        wants.every((w) => showsChosenOption(field, w, shown));
+      return { ok, actual: shown };
     }
     return { ok: wants.every((w) => actual.includes(w)), actual };
   } catch (err) {

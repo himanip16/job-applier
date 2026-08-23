@@ -302,15 +302,49 @@ export async function runApplication(applicationId: string): Promise<void> {
         }
       }
 
+      const unfilledRequired: string[] = [];
       for (const field of fillable) {
         const answer = answers.get(field.id);
         if (!answer || answer.value === null || answer.displayValue === '') {
           plan.push(entry(field, answer, false));
           continue;
         }
+        const wanted = answer.value as string | string[];
+
+        const attempt = async (target: FormField) => {
+          await fillField(page!, target, wanted);
+          return verifyFilled(page!, target, wanted);
+        };
+
+        let check: Awaited<ReturnType<typeof verifyFilled>> | null = null;
+        let failure = '';
         try {
-          await fillField(page, field, answer.value as string | string[]);
-          const check = await verifyFilled(page, field, answer.value as string | string[]);
+          check = await attempt(field);
+        } catch (err) {
+          failure = err instanceof FillError ? err.message : (err as Error).message;
+
+          // Filling one control routinely re-renders its neighbours — a phone
+          // country picker rebuilds the number input beside it — and the
+          // handle we stamped during extraction then points at a node that no
+          // longer exists. Look the field up again by label before believing
+          // it cannot be filled.
+          const fresh = await refindField(page, adapter, field);
+          if (fresh) {
+            try {
+              check = await attempt(fresh);
+              failure = '';
+              await bus.emitEvent(
+                applicationId,
+                'LOG',
+                `"${field.label}" had been re-rendered; found it again and filled it.`,
+              );
+            } catch (retryErr) {
+              failure = retryErr instanceof FillError ? retryErr.message : (retryErr as Error).message;
+            }
+          }
+        }
+
+        if (check) {
           plan.push({
             ...entry(field, answer, true),
             verified: check.actual,
@@ -323,14 +357,30 @@ export async function runApplication(applicationId: string): Promise<void> {
               `"${field.label}" did not hold the value we set (page shows: ${truncate(check.actual)}).`,
             );
           }
-        } catch (err) {
-          const msg = err instanceof FillError ? err.message : (err as Error).message;
-          plan.push({ ...entry(field, answer, false), error: msg });
-          await bus.emitEvent(applicationId, 'WARNING', `Could not fill "${field.label}": ${msg}`);
-          if (field.required) {
-            throw new Error(`Required field "${field.label}" could not be filled: ${msg}`);
-          }
+          continue;
         }
+
+        plan.push({ ...entry(field, answer, false), error: failure });
+        await bus.emitEvent(applicationId, 'WARNING', `Could not fill "${field.label}": ${failure}`);
+        if (field.required) unfilledRequired.push(field.label);
+      }
+
+      if (unfilledRequired.length) {
+        // One awkward dropdown used to end the whole application. The browser
+        // is open on a form that is otherwise complete, and setting one field
+        // by hand takes seconds - so this is a pause, like every other thing
+        // only a person can do, not a failure.
+        const carryOn = await pauseForHuman(applicationId, page, {
+          kind: 'UNKNOWN',
+          detail:
+            `Could not fill ${unfilledRequired.map((l) => `"${l}"`).join(', ')}, which ` +
+            `${unfilledRequired.length === 1 ? 'is' : 'are'} required. Everything else on this step ` +
+            'is filled in - set those in the open browser and it will carry on.',
+          humanCanClear: true,
+        });
+        if (!carryOn) return;
+        step--;
+        continue;
       }
 
       // ---- Attachments, on whichever step asks for them ----------------------
@@ -822,6 +872,50 @@ async function writeCoverLetter(
       `Could not write a cover letter: ${(err as Error).message}. Carrying on without one.`,
     );
     return undefined;
+  }
+}
+
+/**
+ * Find a field again after the page has rebuilt it.
+ *
+ * Handles are stamped onto elements during extraction, so anything that
+ * re-renders invalidates them - and filling a control is one of the most
+ * common ways to make that happen. Re-extracting and matching on the label is
+ * the cheap recovery, and it is worth doing before reporting that a required
+ * field cannot be filled at all.
+ */
+async function refindField(
+  page: Page,
+  adapter: { extractForm: (page: Page) => Promise<FormField[]> },
+  wanted: FormField,
+): Promise<FormField | null> {
+  try {
+    const fields = await adapter.extractForm(page);
+    const target = normalizeLabel(wanted.label);
+
+    // The control's own name, which survives a re-render. Matching on the
+    // label alone is not enough and quietly does the wrong thing: Greenhouse's
+    // phone block labels both the country picker and the number input "Phone",
+    // so a lookup by label refound the wrong one, left the number empty, and
+    // the submission was rejected for a field that looked filled.
+    if (wanted.name) {
+      const byName = fields.find((f) => f.name === wanted.name);
+      if (byName) return byName;
+    }
+    if (wanted.canonicalKey) {
+      const byKey = fields.find((f) => f.canonicalKey === wanted.canonicalKey);
+      if (byKey) return byKey;
+    }
+
+    // Last resort: the same label AND the same kind, and only when that is
+    // unambiguous. Guessing between two identically-labelled controls is worse
+    // than admitting we cannot find it.
+    const byLabel = fields.filter(
+      (f) => normalizeLabel(f.label) === target && f.kind === wanted.kind,
+    );
+    return byLabel.length === 1 ? byLabel[0]! : null;
+  } catch {
+    return null;
   }
 }
 

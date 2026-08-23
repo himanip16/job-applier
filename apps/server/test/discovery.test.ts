@@ -239,3 +239,64 @@ describe('learning from what you turn down', () => {
     expect(score).toBeLessThan(20);
   });
 });
+
+describe('descriptions that arrive as escaped HTML', () => {
+  /**
+   * A live queue had a Roku posting scoring 94% whose top matched terms were
+   * `span`, `nbsp`, `data` and `props`. Greenhouse returns `content` as HTML
+   * that is itself HTML-escaped, and stripping tags before unescaping left the
+   * markup in the text for the scorer to learn from.
+   */
+  it('strips markup that is itself escaped, not just markup', async () => {
+    mockJson({
+      jobs: [
+      {
+        id: 1,
+        title: 'Senior Software Engineer - Service mesh',
+        absolute_url: 'https://boards.greenhouse.io/roku/jobs/1',
+        location: { name: 'Bengaluru, India' },
+        // Exactly the shape Greenhouse sends: escaped tags inside real ones.
+        content:
+          '&lt;p&gt;&lt;span style="color: #333"&gt;Build the service mesh.&lt;/span&gt;&lt;/p&gt;' +
+          '&lt;ul&gt;&lt;li&gt;Go and Kubernetes&lt;/li&gt;&lt;/ul&gt;&amp;nbsp;',
+      },
+      ],
+    });
+
+    const jobs = await greenhouseSource.fetchJobs('roku');
+    const text = jobs[0]!.descriptionText;
+
+    expect(text).toMatch(/Build the service mesh/);
+    expect(text).toMatch(/Go and Kubernetes/);
+    for (const junk of ['span', 'nbsp', 'style', 'color', '<p>', '&lt;', '&amp;']) {
+      expect(text.toLowerCase()).not.toContain(junk);
+    }
+
+    // And nothing markup-shaped survives into what the scorer learns from.
+    const terms = jobTerms({ title: jobs[0]!.title, descriptionText: text });
+    for (const junk of ['span', 'nbsp', 'div', 'style', 'props']) {
+      expect(terms).not.toContain(junk);
+    }
+  });
+
+  it('keeps a weight learned on markup from ever scoring again', async () => {
+    // The parser is fixed, but weights already in the database are not, and a
+    // stored weight on "span" is not something anyone can see to delete.
+    const p = await prisma.profile.create({
+      data: {
+        email: `markup-${Date.now()}@example.com`,
+        fullName: 'T', firstName: 'T', lastName: 'T',
+      },
+    });
+    await prisma.preferenceSignal.create({
+      data: { profileId: p.id, term: 'span', weight: 3.5, evidence: 9, origin: 'LEXICAL' },
+    });
+    await prisma.preferenceSignal.create({
+      data: { profileId: p.id, term: 'kubernetes', weight: 1.2, evidence: 3, origin: 'LEXICAL' },
+    });
+
+    const signals = await loadSignals(p.id);
+    expect(signals.has('span')).toBe(false);
+    expect(signals.get('kubernetes')).toBeCloseTo(1.2);
+  });
+});

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { extractFields } from '../src/browser/extract.js';
-import { fillField, attachFile, verifyFilled } from '../src/browser/fill.js';
+import { fillField, attachFile, verifyFilled, bestOption } from '../src/browser/fill.js';
 import { detectBlockers, detectSubmissionOutcome } from '../src/browser/blockers.js';
 
 /**
@@ -229,4 +229,63 @@ describe('Lever-shaped form (native controls)', () => {
 
     await page.close();
   }, 90_000);
+});
+
+describe('a phone country picker, as Greenhouse actually renders it', () => {
+  /**
+   * A live run against a project44 posting failed here twice over: "India"
+   * matched no option because the labels carry a dial code, and the control
+   * afterwards reads "+91", which the verifier called a failed fill.
+   */
+  it('selects a country whose option label carries the dial code', async () => {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/greenhouse-like.html`, { waitUntil: 'domcontentloaded' });
+
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const country = fields.find((f) => /country/i.test(f.label))!;
+    expect(country).toBeTruthy();
+
+    await fillField(page, country, 'India');
+    expect(await page.inputValue('#phone-country')).toBe('IN');
+    await page.close();
+  }, 60_000);
+
+  it('counts "+91" as confirmation that India was selected', async () => {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/greenhouse-like.html`, { waitUntil: 'domcontentloaded' });
+
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const country = fields.find((f) => /country/i.test(f.label))!;
+    await fillField(page, country, 'India');
+
+    const check = await verifyFilled(page, country, 'India');
+    expect(check.ok).toBe(true);
+    await page.close();
+  }, 60_000);
+
+  it('does not let a loose match beat an exact one', async () => {
+    // "India" must not select "British Indian Ocean Territory +246".
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/greenhouse-like.html`, { waitUntil: 'domcontentloaded' });
+
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const country = fields.find((f) => /country/i.test(f.label))!;
+    await fillField(page, country, 'India');
+    expect(await page.inputValue('#phone-country')).not.toBe('IO');
+    await page.close();
+  }, 60_000);
+
+  it('picks the right option ahead of a substring of another', () => {
+    const options = [
+      { label: 'India +91', value: 'IN' },
+      { label: 'British Indian Ocean Territory +246', value: 'IO' },
+      { label: 'United States +1', value: 'US' },
+      { label: 'Belarus +375', value: 'BY' },
+    ];
+    expect(bestOption(options, 'India')?.value).toBe('IN');
+    expect(bestOption(options, 'United States')?.value).toBe('US');
+    // A word-boundary rule, so "us" cannot land on Belarus.
+    expect(bestOption(options, 'us')?.value).not.toBe('BY');
+    expect(bestOption(options, 'Atlantis')).toBeNull();
+  });
 });

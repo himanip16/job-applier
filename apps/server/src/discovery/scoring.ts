@@ -42,6 +42,15 @@ const STOP_TERMS = new Set([
   // Category chips are prefixed with these; the discriminating word is the
   // rest of the phrase.
   'location', 'wrong', 'already', 'applied', 'elsewhere', 'type',
+  // Markup that leaked into descriptions before stripHtml learned to handle
+  // Greenhouse's double-escaped content. The parser is fixed, but weights
+  // learned from the old text are still in the database and postings already
+  // stored still contain it, so these stay permanently unlearnable rather than
+  // relying on a re-crawl.
+  'span', 'div', 'nbsp', 'href', 'strong', 'em', 'ul', 'ol', 'li', 'br', 'img',
+  'style', 'class', 'rsquo', 'lsquo', 'ldquo', 'rdquo', 'amp', 'quot', 'apos',
+  'font', 'color', 'align', 'width', 'height', 'padding', 'margin', 'border',
+  'props', 'data', 'html', 'body', 'src', 'alt', 'utm', 'gh', 'jid',
 ]);
 
 /** Terms that characterise a posting, for the lexical model. */
@@ -101,7 +110,10 @@ export function scoreLexically(
 
 export async function loadSignals(profileId: string): Promise<Map<string, number>> {
   const rows = await prisma.preferenceSignal.findMany({ where: { profileId } });
-  return new Map(rows.map((r) => [r.term, r.weight]));
+  // Filter on the way out as well as on the way in. Terms banned after they
+  // were already learned would otherwise keep scoring for ever, and a stored
+  // weight on "span" is not something anyone can see to delete.
+  return new Map(rows.filter((r) => !STOP_TERMS.has(r.term)).map((r) => [r.term, r.weight]));
 }
 
 /**

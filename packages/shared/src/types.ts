@@ -25,6 +25,16 @@ export const FormField = z.object({
   id: z.string(),
   /** Playwright selector that resolves to the control (or its combobox input). */
   selector: z.string(),
+  /**
+   * The control's own `name` (or `id`), when it has one.
+   *
+   * `id` and `selector` are stamped onto the element at extraction time, so
+   * both die the moment anything re-renders. This survives, which is what
+   * lets a field be found again afterwards — and it disambiguates the very
+   * common case of two controls sharing a label, such as Greenhouse's phone
+   * block, where "Phone" is both the dial-code group and the number.
+   */
+  name: z.string().optional(),
   kind: FieldKind,
   label: z.string(),
   helpText: z.string().optional(),
