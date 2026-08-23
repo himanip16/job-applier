@@ -5,16 +5,8 @@ import { API_SOURCES } from '../discovery/sources.js';
 import { crawlAll, rescore, rescoreLexically } from '../discovery/crawler.js';
 import { findJobs } from '../discovery/findJobs.js';
 import { isFirecrawlConfigured } from '../discovery/firecrawl.js';
-import {
-  assessFit,
-  buildPreferences,
-  buildRejectionHistory,
-  learnFromDecision,
-  loadSignals,
-  scoreLexically,
-  serialiseReasons,
-} from '../discovery/scoring.js';
-import { renderCandidateContext } from '../llm/candidateContext.js';
+import { learnFromDecision, loadSignals } from '../discovery/scoring.js';
+import { rescoreByIds } from '../discovery/rescoreLeads.js';
 import { adapterFor } from '../ats/registry.js';
 import { enqueue } from '../engine/queue.js';
 
@@ -37,6 +29,15 @@ export const REJECT_CATEGORIES = [
   'Already applied elsewhere',
   'Not looking for this type of role',
 ] as const;
+
+/**
+ * How many leads one "rescore selected" press may read.
+ *
+ * Each one is a model call taking seconds, run in series, and the browser is
+ * holding the request open the whole time. Twenty-five is about a minute of
+ * waiting, which is the most a button press should ever ask for.
+ */
+export const MAX_RESCORE_BATCH = 25;
 
 export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   // ------------------------------------------------------------- companies ---
@@ -137,55 +138,36 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   app.post<{ Params: { id: string } }>('/api/leads/:id/rescore', async (req, reply) => {
     const profile = await requireProfile(reply);
     if (!profile) return;
+
+    const [outcome] = await rescoreByIds(profile.id, [req.params.id]);
+    if (!outcome) return reply.code(404).send({ error: 'Not found' });
+    if (!outcome.ok) {
+      const code =
+        outcome.reason === 'not-found' ? 404 : outcome.reason === 'declined' ? 502 : 400;
+      return reply.code(code).send({ error: outcome.error });
+    }
+
     const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
-    if (!lead) return reply.code(404).send({ error: 'Not found' });
-    if (!lead.descriptionText) {
-      return reply.code(400).send({
-        error:
-          'This lead has no description stored, so there is nothing to read. It came from a board ' +
-          'whose API would not answer; open the posting itself.',
-      });
-    }
+    return { lead: lead && { ...lead, descriptionText: undefined } };
+  });
 
-    const job = {
-      title: lead.title,
-      companyName: lead.companyName,
-      location: lead.location ?? undefined,
-      descriptionText: lead.descriptionText,
-      remote: lead.remote,
-    };
+  /**
+   * Read the postings the candidate picked.
+   *
+   * Deliberately by id rather than "rescore everything": a model pass costs
+   * money and a minute of waiting per lead, and most of a queue is jobs you
+   * have already decided you do not want. Ticking four boxes and pressing the
+   * button spends four calls, not sixty.
+   */
+  app.post('/api/leads/rescore', async (req, reply) => {
+    const profile = await requireProfile(reply);
+    if (!profile) return;
+    const { ids } = z
+      .object({ ids: z.array(z.string().min(1)).min(1).max(MAX_RESCORE_BATCH) })
+      .parse(req.body ?? {});
 
-    try {
-      const [full, preferences, rejectionHistory, signals] = await Promise.all([
-        prisma.profile.findUniqueOrThrow({ where: { id: profile.id }, include: { facts: true } }),
-        buildPreferences(profile.id),
-        buildRejectionHistory(profile.id),
-        loadSignals(profile.id),
-      ]);
-      const fit = await assessFit({
-        candidateContext: renderCandidateContext(full, full.resumeText),
-        preferences,
-        rejectionHistory,
-        job,
-      });
-      if (!fit) {
-        return reply.code(502).send({ error: 'The model declined to assess this one.' });
-      }
-      const lex = scoreLexically(job, signals);
-      const blended = fit.dealbreaker ? Math.min(fit.score, 15) : 0.7 * fit.score + 0.3 * lex.score;
-      const updated = await prisma.jobLead.update({
-        where: { id: lead.id },
-        data: {
-          score: blended,
-          scoreReasons: serialiseReasons(lex, fit) as Prisma.InputJsonValue,
-          deepScored: true,
-          scoredAt: new Date(),
-        },
-      });
-      return { lead: { ...updated, descriptionText: undefined } };
-    } catch (err) {
-      return reply.code(400).send({ error: (err as Error).message });
-    }
+    const results = await rescoreByIds(profile.id, ids);
+    return { results, rescored: results.filter((r) => r.ok).length };
   });
 
   app.post('/api/discovery/rescore', async (req, reply) => {
@@ -197,26 +179,80 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
   // ----------------------------------------------------------------- leads ---
 
-  app.get<{ Querystring: { status?: string; limit?: string } }>('/api/leads', async (req, reply) => {
+  const LeadQuery = z.object({
+    status: z.string().default('NEW'),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(25),
+    sort: z.enum(['score', 'discovered', 'company', 'title']).default('score'),
+    dir: z.enum(['desc', 'asc']).default('desc'),
+    /** Free text over the title, the company and the location. */
+    q: z.string().trim().default(''),
+    remote: z.enum(['any', 'yes', 'no']).default('any'),
+    minScore: z.coerce.number().min(0).max(100).optional(),
+    /** Whether a model has read the posting, or only the keyword pass has. */
+    depth: z.enum(['any', 'deep', 'quick']).default('any'),
+  });
+
+  app.get('/api/leads', async (req, reply) => {
     const profile = await requireProfile(reply);
     if (!profile) return;
-    const requested = req.query.status ?? 'NEW';
-    const statusFilter: Prisma.JobLeadWhereInput =
-      requested === 'ALL' ? {} : { status: requested as Prisma.JobLeadWhereInput['status'] };
+    const query = LeadQuery.parse(req.query ?? {});
+
+    const where: Prisma.JobLeadWhereInput = { profileId: profile.id };
+    if (query.status !== 'ALL') where.status = query.status as Prisma.JobLeadWhereInput['status'];
+    if (query.remote !== 'any') where.remote = query.remote === 'yes';
+    if (query.minScore !== undefined) where.score = { gte: query.minScore };
+    if (query.depth !== 'any') where.deepScored = query.depth === 'deep';
+    if (query.q) {
+      where.OR = [
+        { title: { contains: query.q, mode: 'insensitive' } },
+        { companyName: { contains: query.q, mode: 'insensitive' } },
+        { location: { contains: query.q, mode: 'insensitive' } },
+      ];
+    }
+
+    // Every sort ends in a stable tiebreak. Without one, two leads with the
+    // same score can swap places between page 1 and page 2 and the same job
+    // shows up twice - or not at all.
+    const orderBy: Prisma.JobLeadOrderByWithRelationInput[] =
+      query.sort === 'discovered'
+        ? [{ discoveredAt: query.dir }]
+        : query.sort === 'company'
+          ? [{ companyName: query.dir }, { title: 'asc' }]
+          : query.sort === 'title'
+            ? [{ title: query.dir }, { companyName: 'asc' }]
+            : [{ score: query.dir }, { discoveredAt: 'desc' }];
+    orderBy.push({ id: 'asc' });
+
+    const [total, counts, strong] = await Promise.all([
+      prisma.jobLead.count({ where }),
+      prisma.jobLead.groupBy({ by: ['status'], where: { profileId: profile.id }, _count: true }),
+      prisma.jobLead.count({ where: { profileId: profile.id, status: 'NEW', score: { gte: 70 } } }),
+    ]);
+
+    // Clamp rather than 404: deciding on the last lead of the last page would
+    // otherwise land you on an empty one, which reads as "everything is gone".
+    const pages = Math.max(1, Math.ceil(total / query.limit));
+    const page = Math.min(query.page, pages);
+
     const leads = await prisma.jobLead.findMany({
-      where: { profileId: profile.id, ...statusFilter },
-      orderBy: [{ score: 'desc' }, { discoveredAt: 'desc' }],
-      take: Number(req.query.limit ?? 60),
+      where,
+      orderBy,
+      skip: (page - 1) * query.limit,
+      take: query.limit,
     });
-    const counts = await prisma.jobLead.groupBy({
-      by: ['status'],
-      where: { profileId: profile.id },
-      _count: true,
-    });
+
     return {
       // The description is large and the list view never shows it in full.
       leads: leads.map((l) => ({ ...l, descriptionText: l.descriptionText?.slice(0, 600) ?? null })),
       counts: Object.fromEntries(counts.map((c) => [c.status, c._count])),
+      total,
+      page,
+      pages,
+      limit: query.limit,
+      /** New leads at or above the "start here" threshold, across every page. */
+      strong,
+      maxRescoreBatch: MAX_RESCORE_BATCH,
     };
   });
 

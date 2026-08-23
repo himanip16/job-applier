@@ -16,6 +16,7 @@ import {
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
+import { rescoreLeads } from './rescoreLeads.js';
 
 export interface CrawlReport {
   companiesCrawled: number;
@@ -180,53 +181,13 @@ export async function crawlAll(
 
 /** Re-run the model pass over leads that never got one, or that are stale. */
 export async function rescore(profileId: string, limit = 20): Promise<number> {
-  const profile = await prisma.profile.findUnique({
-    where: { id: profileId },
-    include: { facts: true },
-  });
-  if (!profile) return 0;
-
   const leads = await prisma.jobLead.findMany({
     where: { profileId, status: 'NEW' },
     orderBy: [{ deepScored: 'asc' }, { score: 'desc' }],
     take: limit,
   });
-  if (!leads.length) return 0;
-
-  const candidateContext = renderCandidateContext(profile, profile.resumeText);
-  const preferences = await buildPreferences(profileId);
-  const rejectionHistory = await buildRejectionHistory(profileId);
-  const signals = await loadSignals(profileId);
-
-  let done = 0;
-  for (const lead of leads) {
-    const job = {
-      title: lead.title,
-      companyName: lead.companyName,
-      location: lead.location ?? undefined,
-      descriptionText: lead.descriptionText ?? '',
-      remote: lead.remote,
-    };
-    try {
-      const fit = await assessFit({ candidateContext, preferences, rejectionHistory, job });
-      if (!fit) continue;
-      const lex = scoreLexically(job, signals);
-      const blended = fit.dealbreaker ? Math.min(fit.score, 15) : 0.7 * fit.score + 0.3 * lex.score;
-      await prisma.jobLead.update({
-        where: { id: lead.id },
-        data: {
-          score: blended,
-          scoreReasons: serialiseReasons(lex, fit) as Prisma.InputJsonValue,
-          deepScored: true,
-          scoredAt: new Date(),
-        },
-      });
-      done++;
-    } catch {
-      // Leave it at its lexical score and move on.
-    }
-  }
-  return done;
+  const outcomes = await rescoreLeads(profileId, leads);
+  return outcomes.filter((o) => o.ok).length;
 }
 
 /**

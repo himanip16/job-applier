@@ -26,6 +26,62 @@ interface Lead {
   status: string;
 }
 
+interface LeadPage {
+  leads: Lead[];
+  counts: Record<string, number>;
+  total: number;
+  page: number;
+  pages: number;
+  limit: number;
+  strong: number;
+  maxRescoreBatch: number;
+}
+
+/** Everything that decides which jobs are on screen and in what order. */
+interface View {
+  status: string;
+  sort: 'score' | 'discovered' | 'company' | 'title';
+  dir: 'desc' | 'asc';
+  q: string;
+  remote: 'any' | 'yes' | 'no';
+  minScore: string;
+  depth: 'any' | 'deep' | 'quick';
+  limit: number;
+}
+
+const DEFAULT_VIEW: View = {
+  status: 'NEW',
+  sort: 'score',
+  dir: 'desc',
+  q: '',
+  remote: 'any',
+  minScore: '',
+  depth: 'any',
+  limit: 25,
+};
+
+function queryString(view: View, page: number): string {
+  const params = new URLSearchParams({
+    status: view.status,
+    sort: view.sort,
+    dir: view.dir,
+    remote: view.remote,
+    depth: view.depth,
+    limit: String(view.limit),
+    page: String(page),
+  });
+  if (view.q) params.set('q', view.q);
+  if (view.minScore) params.set('minScore', view.minScore);
+  return params.toString();
+}
+
+interface RescoreResult {
+  id: string;
+  ok: boolean;
+  score?: number;
+  error?: string;
+}
+
 interface SearchReport {
   planSource: 'model' | 'profile';
   roleTitles: string[];
@@ -58,7 +114,6 @@ export default function DiscoverPage() {
   const [categories, setCategories] = useState<string[]>([]);
   const [searchConfigured, setSearchConfigured] = useState(true);
   const [report, setReport] = useState<SearchReport | null>(null);
-  const [filter, setFilter] = useState('NEW');
   const [busy, setBusy] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -68,15 +123,51 @@ export default function DiscoverPage() {
   // was pressed, which makes a failed click look like a dead button.
   const [leadErrors, setLeadErrors] = useState<Record<string, string>>({});
 
+  // Which page of which slice of the queue is on screen.
+  const [view, setView] = useState<View>(DEFAULT_VIEW);
+  const [page, setPage] = useState(1);
+  const [pageInfo, setPageInfo] = useState({ total: 0, pages: 1, strong: 0, maxRescoreBatch: 25 });
+
+  // Typed straight into the box; `view.q` lags it by a beat so a search does
+  // not fire a request per keystroke.
+  const [typed, setTyped] = useState('');
+
+  // Ticked leads, by id. Kept across pages on purpose: picking three from this
+  // page and two from the next, then rescoring all five, is the point.
+  const [picked, setPicked] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (typed === view.q) return;
+    const t = setTimeout(() => change({ q: typed }), 300);
+    return () => clearTimeout(t);
+    // `change` is stable enough for this: it only closes over setState.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typed, view.q]);
+
   const load = useCallback(async () => {
     const [l, c] = await Promise.all([
-      api<{ leads: Lead[]; counts: Record<string, number> }>(`/api/leads?status=${filter}`),
+      api<LeadPage>(`/api/leads?${queryString(view, page)}`),
       api<{ companies: Company[] }>('/api/companies'),
     ]);
     setLeads(l.leads);
     setCounts(l.counts);
     setCompanies(c.companies);
-  }, [filter]);
+    setPageInfo({
+      total: l.total,
+      pages: l.pages,
+      strong: l.strong,
+      maxRescoreBatch: l.maxRescoreBatch,
+    });
+    // The server clamps a page past the end, so follow it rather than sitting
+    // on a number that no longer exists.
+    if (l.page !== page) setPage(l.page);
+  }, [view, page]);
+
+  /** Any change to what is being shown starts again at page one. */
+  function change(patch: Partial<View>) {
+    setView((v) => ({ ...v, ...patch }));
+    setPage(1);
+  }
 
   useEffect(() => {
     load().catch((e) => setError(e.message));
@@ -164,12 +255,72 @@ export default function DiscoverPage() {
     }
   }
 
+  function togglePicked(id: string) {
+    setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  }
+
+  /**
+   * Read the ticked postings properly.
+   *
+   * Deliberately not "rescore everything". A model pass is seconds and a
+   * fraction of a cent per posting, and most of a queue is jobs you have
+   * already glanced at and dismissed - so the button spends what you pointed
+   * it at, and nothing else.
+   */
+  async function rescorePicked() {
+    const batch = picked.slice(0, pageInfo.maxRescoreBatch);
+    if (!batch.length) return;
+    setBusy('rescore');
+    setError(null);
+    setFlash(null);
+    setLeadErrors({});
+    try {
+      const r = await api<{ results: RescoreResult[]; rescored: number }>('/api/leads/rescore', {
+        method: 'POST',
+        body: JSON.stringify({ ids: batch }),
+      });
+      const failed = r.results.filter((x) => !x.ok);
+      setLeadErrors(Object.fromEntries(failed.map((x) => [x.id, x.error ?? 'Could not read it.'])));
+      setFlash(
+        `Read ${r.rescored} posting${r.rescored === 1 ? '' : 's'} in full and re-scored ${
+          r.rescored === 1 ? 'it' : 'them'
+        }.` + (failed.length ? ` ${failed.length} could not be read — see the rows below.` : ''),
+      );
+      // Keep the ones that failed ticked, so a retry is one press. Drop the
+      // ones that worked: their new score is on screen.
+      setPicked(failed.map((x) => x.id));
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   // The split that makes the page useful: the jobs worth opening, then the
   // rest. 70 is the same threshold the score turns green at, so the section
   // heading and the number beside each job never disagree.
-  const strong = filter === 'NEW' ? leads.filter((l) => l.score >= 70) : [];
-  const rest = filter === 'NEW' ? leads.filter((l) => l.score < 70) : leads;
+  //
+  // Only when the page is actually ordered by score, though. Grouping a
+  // title-sorted page under "Strong matches" would scatter the two headings
+  // through an alphabetical list and say nothing true about either.
+  const grouped = view.status === 'NEW' && view.sort === 'score' && view.dir === 'desc';
+  const strong = grouped ? leads.filter((l) => l.score >= 70) : [];
+  const rest = grouped ? leads.filter((l) => l.score < 70) : leads;
   const failing = companies.filter((c) => c.lastCrawlNote?.startsWith('failed')).length;
+  const pageIds = leads.map((l) => l.id);
+  const allPicked = pageIds.length > 0 && pageIds.every((id) => picked.includes(id));
+
+  const cardProps = (lead: Lead) => ({
+    lead,
+    busy: busy === lead.id || busy === 'rescore',
+    error: leadErrors[lead.id],
+    picked: picked.includes(lead.id),
+    onPick: () => togglePicked(lead.id),
+    onApply: () => decide(lead, 'apply'),
+    onShortlist: () => decide(lead, 'shortlist'),
+    onReject: () => setRejecting(lead),
+  });
 
   return (
     <>
@@ -226,42 +377,36 @@ export default function DiscoverPage() {
             You can also add boards by hand below, or paste a job URL on the Runs page.
           </div>
         )}
-        <Tally counts={counts} strong={strong.length} />
+        <Tally counts={counts} strong={pageInfo.strong} />
 
         {flash && <div className="notice good" style={{ marginTop: '.9rem' }}>{flash}</div>}
         {error && <div className="notice bad" style={{ marginTop: '.9rem' }}>{error}</div>}
         {report && <SearchReportPanel report={report} />}
       </div>
 
-      {filter === 'NEW' && strong.length > 0 && (
+      {grouped && strong.length > 0 && (
         <div className="panel">
           <h2>Strong matches</h2>
           <p className="sub">
             Scored 70 or above against your profile and your past decisions. Start here.
           </p>
           {strong.map((lead) => (
-            <LeadCard
-              key={lead.id}
-              lead={lead}
-              busy={busy === lead.id}
-              error={leadErrors[lead.id]}
-              onApply={() => decide(lead, 'apply')}
-              onShortlist={() => decide(lead, 'shortlist')}
-              onReject={() => setRejecting(lead)}
-            />
+            <LeadCard key={lead.id} {...cardProps(lead)} />
           ))}
         </div>
       )}
 
       <div className="panel">
         <div className="spread">
-          <h2>{filter === 'NEW' && strong.length > 0 ? 'Everything else' : 'Jobs'}</h2>
+          <h2>{grouped && strong.length > 0 ? 'Everything else' : 'Jobs'}</h2>
           <div className="row">
             {['NEW', 'SHORTLISTED', 'APPLIED', 'REJECTED', 'ALL'].map((s) => (
               <button
                 key={s}
-                onClick={() => setFilter(s)}
-                style={filter === s ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined}
+                onClick={() => change({ status: s })}
+                style={
+                  view.status === s ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined
+                }
               >
                 {s.toLowerCase()} {counts[s] !== undefined ? `(${counts[s]})` : ''}
               </button>
@@ -269,25 +414,49 @@ export default function DiscoverPage() {
           </div>
         </div>
 
+        <Controls
+          view={view}
+          typed={typed}
+          onTyped={setTyped}
+          onChange={change}
+          total={pageInfo.total}
+        />
+
+        <SelectionBar
+          picked={picked}
+          max={pageInfo.maxRescoreBatch}
+          allPicked={allPicked}
+          pageCount={pageIds.length}
+          busy={busy === 'rescore'}
+          onToggleAll={() =>
+            setPicked((p) =>
+              allPicked ? p.filter((id) => !pageIds.includes(id)) : [...new Set([...p, ...pageIds])],
+            )
+          }
+          onClear={() => setPicked([])}
+          onRescore={rescorePicked}
+        />
+
         {rest.length === 0 ? (
           <p className="muted small" style={{ marginTop: '.8rem' }}>
-            {leads.length === 0
-              ? 'No jobs here yet. Press “Find jobs for me” above.'
-              : 'Everything here is in strong matches.'}
+            {pageInfo.total === 0
+              ? view.q || view.minScore || view.remote !== 'any' || view.depth !== 'any'
+                ? 'Nothing matches those filters. Widen them, or clear them.'
+                : 'No jobs here yet. Press “Find jobs for me” above.'
+              : 'Everything on this page is in strong matches.'}
           </p>
         ) : (
-          rest.map((lead) => (
-            <LeadCard
-              key={lead.id}
-              lead={lead}
-              busy={busy === lead.id}
-              error={leadErrors[lead.id]}
-              onApply={() => decide(lead, 'apply')}
-              onShortlist={() => decide(lead, 'shortlist')}
-              onReject={() => setRejecting(lead)}
-            />
-          ))
+          rest.map((lead) => <LeadCard key={lead.id} {...cardProps(lead)} />)
         )}
+
+        <Pager
+          page={page}
+          pages={pageInfo.pages}
+          total={pageInfo.total}
+          limit={view.limit}
+          shown={leads.length}
+          onPage={setPage}
+        />
       </div>
 
       <details className="panel">
@@ -317,10 +486,244 @@ export default function DiscoverPage() {
   );
 }
 
+/**
+ * The controls above the list.
+ *
+ * Laid out flat rather than behind a "Filters" disclosure. A hidden filter is
+ * one you forget you left on, and then the page is lying to you about how many
+ * jobs you have.
+ */
+function Controls({
+  view,
+  typed,
+  onTyped,
+  onChange,
+  total,
+}: {
+  view: View;
+  typed: string;
+  onTyped: (v: string) => void;
+  onChange: (patch: Partial<View>) => void;
+  total: number;
+}) {
+  const filtered =
+    view.q !== '' || view.minScore !== '' || view.remote !== 'any' || view.depth !== 'any';
+
+  return (
+    <div className="row" style={{ marginTop: '.7rem', gap: '.5rem', alignItems: 'center' }}>
+      <input
+        type="search"
+        value={typed}
+        placeholder="Search title, company or location"
+        onChange={(e) => onTyped(e.target.value)}
+        style={{ flex: '1 1 14rem', minWidth: '10rem' }}
+      />
+
+      <label className="row small muted" style={{ gap: '.35rem' }}>
+        sort
+        <select
+          value={view.sort}
+          onChange={(e) => onChange({ sort: e.target.value as View['sort'] })}
+        >
+          <option value="score">score</option>
+          <option value="discovered">when found</option>
+          <option value="company">company</option>
+          <option value="title">title</option>
+        </select>
+        <button
+          onClick={() => onChange({ dir: view.dir === 'desc' ? 'asc' : 'desc' })}
+          title={view.dir === 'desc' ? 'Highest first — click for lowest first' : 'Lowest first — click for highest first'}
+        >
+          {view.dir === 'desc' ? '↓' : '↑'}
+        </button>
+      </label>
+
+      <label className="row small muted" style={{ gap: '.35rem' }}>
+        remote
+        <select
+          value={view.remote}
+          onChange={(e) => onChange({ remote: e.target.value as View['remote'] })}
+        >
+          <option value="any">any</option>
+          <option value="yes">remote only</option>
+          <option value="no">on site</option>
+        </select>
+      </label>
+
+      <label className="row small muted" style={{ gap: '.35rem' }}>
+        score ≥
+        <input
+          type="number"
+          min={0}
+          max={100}
+          value={view.minScore}
+          placeholder="0"
+          onChange={(e) => onChange({ minScore: e.target.value })}
+          style={{ width: '4.5rem' }}
+        />
+      </label>
+
+      <label className="row small muted" style={{ gap: '.35rem' }}>
+        scored
+        <select
+          value={view.depth}
+          onChange={(e) => onChange({ depth: e.target.value as View['depth'] })}
+        >
+          <option value="any">any way</option>
+          <option value="deep">read in full</option>
+          <option value="quick">keywords only</option>
+        </select>
+      </label>
+
+      <label className="row small muted" style={{ gap: '.35rem' }}>
+        per page
+        <select value={view.limit} onChange={(e) => onChange({ limit: Number(e.target.value) })}>
+          {[10, 25, 50, 100].map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <span className="muted small">{total} matching</span>
+      {filtered && (
+        <button
+          onClick={() =>
+            onChange({ q: '', minScore: '', remote: 'any', depth: 'any' })
+          }
+          title="Clear the filters, keep the sort"
+        >
+          clear filters
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Keywords only" is the state this bar exists for.
+ *
+ * A crawl reads the top slice properly and ranks the rest on word counts, so
+ * most of the queue carries a score nobody stands behind. Ticking the ones
+ * that look interesting and pressing this reads exactly those.
+ */
+function SelectionBar({
+  picked,
+  max,
+  allPicked,
+  pageCount,
+  busy,
+  onToggleAll,
+  onClear,
+  onRescore,
+}: {
+  picked: string[];
+  max: number;
+  allPicked: boolean;
+  pageCount: number;
+  busy: boolean;
+  onToggleAll: () => void;
+  onClear: () => void;
+  onRescore: () => void;
+}) {
+  const over = picked.length > max;
+  return (
+    <div
+      className="row"
+      style={{
+        gap: '.6rem',
+        alignItems: 'center',
+        marginTop: '.6rem',
+        paddingBottom: '.2rem',
+        flexWrap: 'wrap',
+      }}
+    >
+      <label className="row small muted" style={{ gap: '.35rem' }}>
+        <input
+          type="checkbox"
+          checked={allPicked}
+          disabled={pageCount === 0}
+          onChange={onToggleAll}
+        />
+        select this page
+      </label>
+
+      <button
+        className="primary"
+        disabled={picked.length === 0 || busy}
+        onClick={onRescore}
+        title="Send the ticked postings to the model to be read properly"
+      >
+        {busy
+          ? 'Reading…'
+          : `Rescore selected${picked.length ? ` (${Math.min(picked.length, max)})` : ''}`}
+      </button>
+
+      {picked.length > 0 && (
+        <button onClick={onClear} disabled={busy}>
+          clear selection
+        </button>
+      )}
+
+      <span className="muted small">
+        {picked.length === 0
+          ? 'Tick the jobs you want read in full — a real read costs a model call each, so it only reads what you pick.'
+          : over
+            ? `${picked.length} ticked; the first ${max} will be read. Run it again for the rest.`
+            : `${picked.length} ticked, here and on other pages.`}
+      </span>
+    </div>
+  );
+}
+
+function Pager({
+  page,
+  pages,
+  total,
+  limit,
+  shown,
+  onPage,
+}: {
+  page: number;
+  pages: number;
+  total: number;
+  limit: number;
+  shown: number;
+  onPage: (p: number) => void;
+}) {
+  if (total === 0) return null;
+  const first = (page - 1) * limit + 1;
+  return (
+    <div
+      className="row"
+      style={{ gap: '.5rem', alignItems: 'center', marginTop: '.9rem', borderTop: '1px solid var(--border)', paddingTop: '.8rem' }}
+    >
+      <button disabled={page <= 1} onClick={() => onPage(1)}>
+        « first
+      </button>
+      <button disabled={page <= 1} onClick={() => onPage(page - 1)}>
+        ‹ previous
+      </button>
+      <span className="muted small" style={{ fontVariantNumeric: 'tabular-nums' }}>
+        {first}–{first + shown - 1} of {total} · page {page} of {pages}
+      </span>
+      <button disabled={page >= pages} onClick={() => onPage(page + 1)}>
+        next ›
+      </button>
+      <button disabled={page >= pages} onClick={() => onPage(pages)}>
+        last »
+      </button>
+    </div>
+  );
+}
+
 function LeadCard({
   lead,
   busy,
   error,
+  picked,
+  onPick,
   onApply,
   onShortlist,
   onReject,
@@ -328,6 +731,8 @@ function LeadCard({
   lead: Lead;
   busy: boolean;
   error?: string;
+  picked: boolean;
+  onPick: () => void;
   onApply: () => void;
   onShortlist: () => void;
   onReject: () => void;
@@ -347,6 +752,13 @@ function LeadCard({
       <div className="spread">
         <div style={{ minWidth: 0 }}>
           <div className="row" style={{ gap: '.5rem' }}>
+            <input
+              type="checkbox"
+              checked={picked}
+              onChange={onPick}
+              title="Pick this one to be read in full"
+              aria-label={`Select ${lead.title} at ${lead.companyName}`}
+            />
             <strong style={{ color: tone, fontVariantNumeric: 'tabular-nums' }}>{score}</strong>
             <a href={`/jobs/${lead.id}`}>
               <strong>{lead.title}</strong>
