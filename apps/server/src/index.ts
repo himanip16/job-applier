@@ -20,6 +20,12 @@ import { matchCanonical, normalizeLabel, type RunEvent } from '@ja/shared';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerDiscoveryRoutes } from './routes/discovery.js';
 import { currentUser } from './auth/sessions.js';
+import {
+  NOT_YOURS,
+  ownedApplication,
+  ownedFact,
+  ownedResumeFile,
+} from './auth/ownership.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerJobDetailRoutes } from './routes/jobDetail.js';
 import { loadSettings } from './lib/secrets.js';
@@ -136,7 +142,10 @@ app.post('/api/facts', async (req, reply) => {
   return { fact };
 });
 
-app.delete<{ Params: { id: string } }>('/api/facts/:id', async (req) => {
+app.delete<{ Params: { id: string } }>('/api/facts/:id', async (req, reply) => {
+  const profile = await requireProfile(req, reply);
+  if (!profile) return;
+  if (!(await ownedFact(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
   await prisma.profileFact.delete({ where: { id: req.params.id } });
   return { ok: true };
 });
@@ -186,6 +195,7 @@ app.post('/api/resume', async (req, reply) => {
 app.post<{ Params: { id: string } }>('/api/resume/:id/default', async (req, reply) => {
   const profile = await requireProfile(req, reply);
   if (!profile) return;
+  if (!(await ownedResumeFile(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
   await prisma.resumeFile.updateMany({ where: { profileId: profile.id }, data: { isDefault: false } });
   const r = await prisma.resumeFile.update({ where: { id: req.params.id }, data: { isDefault: true } });
   await prisma.profile.update({ where: { id: profile.id }, data: { resumeText: r.text } });
@@ -252,8 +262,10 @@ app.get('/api/applications', async () => {
 });
 
 app.get<{ Params: { id: string } }>('/api/applications/:id', async (req, reply) => {
-  const application = await prisma.application.findUnique({
-    where: { id: req.params.id },
+  const profile = await requireProfile(req, reply);
+  if (!profile) return;
+  const application = await prisma.application.findFirst({
+    where: { id: req.params.id, profileId: profile.id },
     include: {
       job: true,
       events: { orderBy: { createdAt: 'asc' }, take: 500 },
@@ -265,7 +277,10 @@ app.get<{ Params: { id: string } }>('/api/applications/:id', async (req, reply) 
   return { application };
 });
 
-app.post<{ Params: { id: string } }>('/api/applications/:id/start', async (req) => {
+app.post<{ Params: { id: string } }>('/api/applications/:id/start', async (req, reply) => {
+  const profile = await requireProfile(req, reply);
+  if (!profile) return;
+  if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
   await prisma.application.update({
     where: { id: req.params.id },
     data: { status: 'QUEUED', blockedReason: null },
@@ -346,6 +361,9 @@ app.post<{ Params: { id: string } }>('/api/applications/:id/answers', async (req
 });
 
 app.post<{ Params: { id: string } }>('/api/applications/:id/review', async (req, reply) => {
+  const profile = await requireProfile(req, reply);
+  if (!profile) return;
+  if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
   const { approved, note } = z
     .object({ approved: z.boolean(), note: z.string().optional() })
     .parse(req.body);
@@ -362,6 +380,9 @@ app.post<{ Params: { id: string } }>('/api/applications/:id/review', async (req,
  * they have dealt with it.
  */
 app.post<{ Params: { id: string } }>('/api/applications/:id/continue', async (req, reply) => {
+  const profile = await requireProfile(req, reply);
+  if (!profile) return;
+  if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
   const { carryOn, note } = z
     .object({ carryOn: z.boolean().default(true), note: z.string().optional() })
     .parse(req.body ?? {});
@@ -379,6 +400,11 @@ app.post<{ Params: { id: string } }>('/api/applications/:id/continue', async (re
 // -------------------------------------------------------- live event feed ---
 
 app.get<{ Params: { id: string } }>('/api/applications/:id/stream', async (req, reply) => {
+  // A live feed of someone else's run is exactly as sensitive as the run.
+  const profile = await requireProfile(req, reply);
+  if (!profile) return;
+  if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
+
   // Writing to reply.raw bypasses Fastify's onSend hooks, which is where
   // @fastify/cors injects its headers - so an SSE response reaches the browser
   // with no Access-Control-Allow-Origin and the EventSource is rejected before
@@ -436,7 +462,12 @@ app.get('/api/answers', async (req, reply) => {
   return { answers: answers.map(({ vector: _vector, ...rest }) => rest) };
 });
 
-app.patch<{ Params: { id: string } }>('/api/answers/:id', async (req) => {
+app.patch<{ Params: { id: string } }>('/api/answers/:id', async (req, reply) => {
+  const profile = await requireProfile(req, reply);
+  if (!profile) return;
+  if (!(await prisma.answer.findFirst({ where: { id: req.params.id, profileId: profile.id } }))) {
+    return reply.code(404).send(NOT_YOURS);
+  }
   const { displayValue } = z.object({ displayValue: z.string() }).parse(req.body);
   const answer = await prisma.answer.update({
     where: { id: req.params.id },
@@ -445,7 +476,12 @@ app.patch<{ Params: { id: string } }>('/api/answers/:id', async (req) => {
   return { answer };
 });
 
-app.delete<{ Params: { id: string } }>('/api/answers/:id', async (req) => {
+app.delete<{ Params: { id: string } }>('/api/answers/:id', async (req, reply) => {
+  const profile = await requireProfile(req, reply);
+  if (!profile) return;
+  if (!(await prisma.answer.findFirst({ where: { id: req.params.id, profileId: profile.id } }))) {
+    return reply.code(404).send(NOT_YOURS);
+  }
   await prisma.answer.delete({ where: { id: req.params.id } });
   return { ok: true };
 });
@@ -476,7 +512,7 @@ registerDiscoveryRoutes(app, requireProfile);
 registerResumeRoutes(app, requireProfile);
 registerTrackerRoutes(app, requireProfile);
 registerSettingsRoutes(app);
-registerJobDetailRoutes(app);
+registerJobDetailRoutes(app, requireProfile);
 
 // ----------------------------------------------------------------- health ---
 

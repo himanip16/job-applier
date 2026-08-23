@@ -7,6 +7,7 @@ import { findJobs } from '../discovery/findJobs.js';
 import { isFirecrawlConfigured } from '../discovery/firecrawl.js';
 import { learnFromDecision, loadSignals } from '../discovery/scoring.js';
 import { rescoreByIds, rescoreLexically } from '../discovery/rescoreLeads.js';
+import { NOT_YOURS, ownedLead, ownedSignal } from '../auth/ownership.js';
 import { adapterFor } from '../ats/registry.js';
 import { enqueue } from '../engine/queue.js';
 
@@ -147,7 +148,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       return reply.code(code).send({ error: outcome.error });
     }
 
-    const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
+    const lead = await ownedLead(profile.id, req.params.id);
     return { lead: lead && { ...lead, descriptionText: undefined } };
   });
 
@@ -260,8 +261,10 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   });
 
   app.get<{ Params: { id: string } }>('/api/leads/:id', async (req, reply) => {
-    const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
-    if (!lead) return reply.code(404).send({ error: 'Not found' });
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    const lead = await ownedLead(profile.id, req.params.id);
+    if (!lead) return reply.code(404).send(NOT_YOURS);
     return { lead };
   });
 
@@ -277,7 +280,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       .object({ reason: z.string().optional(), category: z.string().optional() })
       .parse(req.body ?? {});
 
-    const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
+    const lead = await ownedLead(profile.id, req.params.id);
     if (!lead) return reply.code(404).send({ error: 'Not found' });
     // Learn from the candidate's decision, then permanently remove the
     // lead from the queue. This keeps the triage queue focused and avoids
@@ -302,7 +305,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   app.post<{ Params: { id: string } }>('/api/leads/:id/shortlist', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
-    const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
+    const lead = await ownedLead(profile.id, req.params.id);
     if (!lead) return reply.code(404).send({ error: 'Not found' });
 
     await prisma.jobLead.update({
@@ -330,7 +333,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       .object({ requiresReview: z.boolean().default(true) })
       .parse(req.body ?? {});
 
-    const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
+    const lead = await ownedLead(profile.id, req.params.id);
     if (!lead) return reply.code(404).send({ error: 'Not found' });
 
     const adapter = adapterFor(lead.url);
@@ -388,8 +391,12 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     };
   });
 
-  app.delete<{ Params: { id: string } }>('/api/preferences/:id', async (req) => {
-    await prisma.preferenceSignal.delete({ where: { id: req.params.id } });
+  app.delete<{ Params: { id: string } }>('/api/preferences/:id', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    const signal = await ownedSignal(profile.id, req.params.id);
+    if (!signal) return reply.code(404).send(NOT_YOURS);
+    await prisma.preferenceSignal.delete({ where: { id: signal.id } });
     return { ok: true };
   });
 
