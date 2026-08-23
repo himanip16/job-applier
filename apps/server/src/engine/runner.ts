@@ -20,6 +20,7 @@ import { generateCoverLetter } from '../llm/coverLetter.js';
 import { resolveField, type ResolveContext } from './resolver.js';
 import { rememberAnswer } from './answerBank.js';
 import { park, release, questionsKey, reviewKey, abandon } from './waiters.js';
+import { detectNextAction } from '../ats/nextAction.js';
 
 export class SubmissionBudgetError extends Error {}
 
@@ -89,255 +90,264 @@ export async function runApplication(applicationId: string): Promise<void> {
     await bus.emitEvent(applicationId, 'LOG', `Read the posting: ${meta.title} at ${meta.company}.`);
 
     // ---- Read the form -----------------------------------------------------
-    await setStatus(applicationId, 'FILLING', 'Reading the form.');
-    const fields = await adapter.extractForm(page);
-    await bus.emitEvent(
-      applicationId,
-      'FORM_EXTRACTED',
-      `Found ${fields.length} fields (${fields.filter((f) => f.required).length} required).`,
-      { fields },
-    );
-    if (!fields.length) {
-      throw new Error('No form fields found on the page. The posting may be closed or the form behind a wall.');
-    }
+    for (let stepIndex = 0; stepIndex < 20; stepIndex++) {
+      await setStatus(applicationId, 'FILLING', 'Reading the form.');
+      const fields = await adapter.extractForm(page);
+      await bus.emitEvent(
+        applicationId,
+        'FORM_EXTRACTED',
+        `Found ${fields.length} fields (${fields.filter((f) => f.required).length} required).`,
+        { fields },
+      );
 
-    // ---- Resume + cover letter --------------------------------------------
-    const resume =
-      app.profile.resumes.find((r) => r.id === app.resumeFileId) ??
-      app.profile.resumes.find((r) => r.isDefault) ??
-      app.profile.resumes[0];
-    const candidateContext = renderCandidateContext(
-      app.profile,
-      resume?.text ?? app.profile.resumeText,
-    );
+      if (!fields.length) {
+        const action = await detectNextAction(page);
+        if (action && action.type === 'NEXT') {
+          await bus.emitEvent(applicationId, 'LOG', `No fields on this step; advancing via "${action.label}".`);
+          await action.locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+          await action.locator.click({ timeout: 15000 }).catch(() => {});
+          await page.waitForLoadState('domcontentloaded').catch(() => {});
+          await page.waitForTimeout(1200);
+          continue;
+        }
+        throw new Error('No form fields found on the page. The posting may be closed or the form behind a wall.');
+      }
 
-    const { resume: resumeInput, coverLetter: coverInput } = adapter.fileInputs(fields);
-    const wantsCoverLetter =
-      !!coverInput || fields.some((f) => /cover letter/i.test(f.label) && f.kind === 'TEXTAREA');
+      const resume =
+        app.profile.resumes.find((r) => r.id === app.resumeFileId) ??
+        app.profile.resumes.find((r) => r.isDefault) ??
+        app.profile.resumes[0];
+      const candidateContext = renderCandidateContext(
+        app.profile,
+        resume?.text ?? app.profile.resumeText,
+      );
 
-    let coverLetter = app.coverLetter ?? undefined;
-    if (wantsCoverLetter && !coverLetter) {
-      await bus.emitEvent(applicationId, 'LOG', 'Writing a cover letter for this role.');
-      try {
-        const generated = await generateCoverLetter({
-          candidateContext,
-          companyName: meta.company,
-          jobTitle: meta.title,
-          jobDescription: meta.descriptionText,
-        });
-        coverLetter = generated.body;
-        await prisma.application.update({ where: { id: applicationId }, data: { coverLetter } });
-        if (generated.unsupportedClaims.length) {
+      const { resume: resumeInput, coverLetter: coverInput } = adapter.fileInputs(fields);
+      const wantsCoverLetter =
+        !!coverInput || fields.some((f) => /cover letter/i.test(f.label) && f.kind === 'TEXTAREA');
+
+      let coverLetter = app.coverLetter ?? undefined;
+      if (wantsCoverLetter && !coverLetter) {
+        await bus.emitEvent(applicationId, 'LOG', 'Writing a cover letter for this role.');
+        try {
+          const generated = await generateCoverLetter({
+            candidateContext,
+            companyName: meta.company,
+            jobTitle: meta.title,
+            jobDescription: meta.descriptionText,
+          });
+          coverLetter = generated.body;
+          await prisma.application.update({ where: { id: applicationId }, data: { coverLetter } });
+          if (generated.unsupportedClaims.length) {
+            await bus.emitEvent(
+              applicationId,
+              'WARNING',
+              `The cover letter contains ${generated.unsupportedClaims.length} claim(s) not grounded in your resume. Check them before submitting.`,
+              { unsupportedClaims: generated.unsupportedClaims },
+            );
+          }
+          await bus.emitEvent(applicationId, 'COVER_LETTER', 'Cover letter ready.', { coverLetter });
+        } catch (err) {
           await bus.emitEvent(
             applicationId,
             'WARNING',
-            `The cover letter contains ${generated.unsupportedClaims.length} claim(s) not grounded in your resume. Check them before submitting.`,
-            { unsupportedClaims: generated.unsupportedClaims },
+            `Could not write a cover letter: ${(err as Error).message}. Carrying on without one.`,
           );
         }
-        await bus.emitEvent(applicationId, 'COVER_LETTER', 'Cover letter ready.', { coverLetter });
-      } catch (err) {
-        // The cover letter is usually optional. Losing it is a degraded run,
-        // not a failed one - say so and keep filling the rest of the form.
-        await bus.emitEvent(
-          applicationId,
-          'WARNING',
-          `Could not write a cover letter: ${(err as Error).message}. Carrying on without one.`,
-        );
       }
-    }
 
-    // ---- Resolve every field ------------------------------------------------
-    const sessionAnswers = new Map<string, ResolvedAnswer>();
-    const ctx: ResolveContext = {
-      profile: app.profile,
-      candidateContext,
-      companyName: meta.company,
-      companyKey: normalizeLabel(meta.company),
-      jobTitle: meta.title,
-      jobDescription: meta.descriptionText,
-      coverLetter,
-      sessionAnswers,
-    };
+      const sessionAnswers = new Map<string, ResolvedAnswer>();
+      const ctx: ResolveContext = {
+        profile: app.profile,
+        candidateContext,
+        companyName: meta.company,
+        companyKey: normalizeLabel(meta.company),
+        jobTitle: meta.title,
+        jobDescription: meta.descriptionText,
+        coverLetter,
+        sessionAnswers,
+      };
 
-    const fillable = fields.filter((f) => f.kind !== 'FILE');
-    let answers = new Map<string, ResolvedAnswer>();
-    let gaps: AnswerGap[] = [];
+      const fillable = fields.filter((f) => f.kind !== 'FILE');
+      const answers = new Map<string, ResolvedAnswer>();
+      let gaps: AnswerGap[] = [];
 
-    for (const field of fillable) {
-      const res = await resolveField(field, ctx);
-      if (res.kind === 'answer') {
-        answers.set(field.id, res.answer);
-        await bus.emitEvent(
-          applicationId,
-          'FIELD_RESOLVED',
-          `${field.label}: ${truncate(res.answer.displayValue)} [${res.answer.source}]`,
-          { fieldId: field.id, source: res.answer.source, confidence: res.answer.confidence },
-        );
-      } else {
-        gaps.push(res.gap);
+      for (const field of fillable) {
+        const res = await resolveField(field, ctx);
+        if (res.kind === 'answer') {
+          answers.set(field.id, res.answer);
+          await bus.emitEvent(
+            applicationId,
+            'FIELD_RESOLVED',
+            `${field.label}: ${truncate(res.answer.displayValue)} [${res.answer.source}]`,
+            { fieldId: field.id, source: res.answer.source, confidence: res.answer.confidence },
+          );
+        } else {
+          gaps.push(res.gap);
+        }
       }
-    }
 
-    // ---- Park on anything we refuse to guess -------------------------------
-    if (gaps.length) {
-      const supplied = await askHuman(applicationId, fillable, gaps);
-      for (const [fieldId, answer] of supplied) {
-        answers.set(fieldId, answer);
-        sessionAnswers.set(fieldId, answer);
+      if (gaps.length) {
+        const supplied = await askHuman(applicationId, fillable, gaps);
+        for (const [fieldId, answer] of supplied) {
+          answers.set(fieldId, answer);
+          sessionAnswers.set(fieldId, answer);
+        }
+        const stillMissing = fillable.filter((f) => f.required && !answers.has(f.id));
+        if (stillMissing.length) {
+          throw new Error(
+            `Required field(s) left unanswered: ${stillMissing.map((f) => f.label).join(', ')}`,
+          );
+        }
       }
-      // Re-resolve any field the human left blank but that is still required.
-      const stillMissing = fillable.filter((f) => f.required && !answers.has(f.id));
-      if (stillMissing.length) {
-        throw new Error(
-          `Required field(s) left unanswered: ${stillMissing.map((f) => f.label).join(', ')}`,
-        );
-      }
-    }
 
-    // ---- Fill --------------------------------------------------------------
-    const plan: FieldPlanEntry[] = [];
-    for (const field of fillable) {
-      const answer = answers.get(field.id);
-      if (!answer || answer.value === null || answer.displayValue === '') {
-        plan.push(entry(field, answer, false));
+      const plan: FieldPlanEntry[] = [];
+      for (const field of fillable) {
+        const answer = answers.get(field.id);
+        if (!answer || answer.value === null || answer.displayValue === '') {
+          plan.push(entry(field, answer, false));
+          continue;
+        }
+        try {
+          await fillField(page, field, answer.value as string | string[]);
+          const check = await verifyFilled(page, field, answer.value as string | string[]);
+          plan.push({ ...entry(field, answer, true), verified: check.actual, error: check.ok ? undefined : 'value did not stick' });
+          if (!check.ok) {
+            await bus.emitEvent(
+              applicationId,
+              'WARNING',
+              `"${field.label}" did not hold the value we set (page shows: ${truncate(check.actual)}).`,
+            );
+          }
+        } catch (err) {
+          const msg = err instanceof FillError ? err.message : (err as Error).message;
+          plan.push({ ...entry(field, answer, false), error: msg });
+          await bus.emitEvent(applicationId, 'WARNING', `Could not fill "${field.label}": ${msg}`);
+          if (field.required) {
+            throw new Error(`Required field "${field.label}" could not be filled: ${msg}`);
+          }
+        }
+      }
+
+      if (resumeInput && resume) {
+        await attachFile(page, resumeInput.selector, path.resolve(resume.path));
+        await bus.emitEvent(applicationId, 'FILE_ATTACHED', `Attached ${resume.filename}.`);
+        plan.push({
+          fieldId: resumeInput.id, label: resumeInput.label, kind: 'FILE', required: resumeInput.required,
+          value: resume.filename, source: 'PROFILE', confidence: 1, filled: true,
+        });
+      } else if (resumeInput && !resume) {
+        throw new Error('This form wants a resume and none is uploaded to your profile.');
+      }
+
+      if (coverInput && coverLetter) {
+        const file = await writeCoverLetterFile(applicationId, coverLetter);
+        await attachFile(page, coverInput.selector, file);
+        await bus.emitEvent(applicationId, 'FILE_ATTACHED', 'Attached the generated cover letter.');
+      }
+
+      await prisma.application.update({
+        where: { id: applicationId },
+        data: { fieldPlan: plan as unknown as Prisma.InputJsonValue },
+      });
+      await artifact(applicationId, 'screenshot', 'filled', await screenshot(page, applicationId, 'filled'));
+      await artifact(applicationId, 'dom', 'filled-dom', await saveDom(page, applicationId, 'filled'));
+
+      const blockers = await detectBlockers(page);
+      const captcha = blockers.find((b) => b.kind === 'CAPTCHA');
+
+      const nextAction = await detectNextAction(page);
+      if (nextAction && nextAction.type === 'NEXT') {
+        await bus.emitEvent(applicationId, 'LOG', `Advancing from step to step via "${nextAction.label}".`);
+        await nextAction.locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+        await nextAction.locator.click({ timeout: 15000 }).catch(() => {});
+        await page.waitForLoadState('domcontentloaded').catch(() => {});
+        await page.waitForTimeout(1200);
         continue;
       }
-      try {
-        await fillField(page, field, answer.value as string | string[]);
-        const check = await verifyFilled(page, field, answer.value as string | string[]);
-        plan.push({ ...entry(field, answer, true), verified: check.actual, error: check.ok ? undefined : 'value did not stick' });
-        if (!check.ok) {
-          await bus.emitEvent(
-            applicationId,
-            'WARNING',
-            `"${field.label}" did not hold the value we set (page shows: ${truncate(check.actual)}).`,
-          );
+
+      const mustReview =
+        app.requiresReview ||
+        config.requireReview ||
+        adapter.id === 'generic' ||
+        !!captcha ||
+        plan.some((p) => p.error) ||
+        plan.some((p) => p.confidence < 0.9 && p.filled);
+
+      if (mustReview) {
+        const reason = captcha
+          ? `${captcha.detail} The form is filled and waiting; solve the challenge in the browser, then approve here.`
+          : adapter.id === 'generic'
+            ? 'Unrecognised site, so this always goes through review.'
+            : 'Filled and ready. Check it over, then approve.';
+        const decisionPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
+        await setStatus(applicationId, 'REVIEW', reason, { blockers, plan });
+        const decision = await decisionPromise;
+        if (!decision.approved) {
+          await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
+          return;
         }
-      } catch (err) {
-        const msg = err instanceof FillError ? err.message : (err as Error).message;
-        plan.push({ ...entry(field, answer, false), error: msg });
-        await bus.emitEvent(applicationId, 'WARNING', `Could not fill "${field.label}": ${msg}`);
-        if (field.required) {
-          throw new Error(`Required field "${field.label}" could not be filled: ${msg}`);
-        }
       }
-    }
 
-    // ---- Attachments --------------------------------------------------------
-    if (resumeInput && resume) {
-      await attachFile(page, resumeInput.selector, path.resolve(resume.path));
-      await bus.emitEvent(applicationId, 'FILE_ATTACHED', `Attached ${resume.filename}.`);
-      plan.push({
-        fieldId: resumeInput.id, label: resumeInput.label, kind: 'FILE', required: resumeInput.required,
-        value: resume.filename, source: 'PROFILE', confidence: 1, filled: true,
-      });
-    } else if (resumeInput && !resume) {
-      throw new Error('This form wants a resume and none is uploaded to your profile.');
-    }
-
-    if (coverInput && coverLetter) {
-      const file = await writeCoverLetterFile(applicationId, coverLetter);
-      await attachFile(page, coverInput.selector, file);
-      await bus.emitEvent(applicationId, 'FILE_ATTACHED', 'Attached the generated cover letter.');
-    }
-
-    await prisma.application.update({
-      where: { id: applicationId },
-      data: { fieldPlan: plan as unknown as Prisma.InputJsonValue },
-    });
-    await artifact(applicationId, 'screenshot', 'filled', await screenshot(page, applicationId, 'filled'));
-    await artifact(applicationId, 'dom', 'filled-dom', await saveDom(page, applicationId, 'filled'));
-
-    // ---- Blockers, second look ---------------------------------------------
-    const blockers = await detectBlockers(page);
-    const captcha = blockers.find((b) => b.kind === 'CAPTCHA');
-
-    // ---- Review gate ---------------------------------------------------------
-    const mustReview =
-      app.requiresReview ||
-      config.requireReview ||
-      adapter.id === 'generic' ||
-      !!captcha ||
-      plan.some((p) => p.error) ||
-      plan.some((p) => p.confidence < 0.9 && p.filled);
-
-    if (mustReview) {
-      const reason = captcha
-        ? `${captcha.detail} The form is filled and waiting; solve the challenge in the browser, then approve here.`
-        : adapter.id === 'generic'
-          ? 'Unrecognised site, so this always goes through review.'
-          : 'Filled and ready. Check it over, then approve.';
-      // Register the waiter BEFORE announcing the status. Anything watching the
-      // run - the UI, the CLI, a test - can observe REVIEW and answer within
-      // microseconds, and if the parked promise does not exist yet that reply
-      // is dropped and the run waits forever.
-      const decisionPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
-      await setStatus(applicationId, 'REVIEW', reason, { blockers, plan });
-      const decision = await decisionPromise;
-      if (!decision.approved) {
-        await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
-        return;
-      }
-    }
-
-    // ---- Submit ---------------------------------------------------------------
-    await enforceSubmitBudget();
-    await setStatus(applicationId, 'SUBMITTING', 'Submitting.');
-    const urlBefore = page.url();
-    await adapter.submit(page);
-    const outcome = await detectSubmissionOutcome(page, urlBefore);
-    await artifact(applicationId, 'screenshot', 'after-submit', await screenshot(page, applicationId, 'after-submit'));
-
-    if (outcome.outcome === 'SUBMITTED') {
-      await prisma.application.update({
-        where: { id: applicationId },
-        data: { status: 'SUBMITTED', submittedAt: new Date(), confirmation: outcome.detail, blockedReason: null },
-      });
-      await bus.emitEvent(applicationId, 'STATUS', 'Submitted.', { status: 'SUBMITTED' });
-      await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, ctx.companyKey);
-      return;
-    }
-
-    if (outcome.outcome === 'VALIDATION_ERROR') {
-      const retryPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
-      await setStatus(
-        applicationId,
-        'REVIEW',
-        `The form rejected the submission: ${outcome.detail}. It is still open in the browser - fix it there and approve, or cancel.`,
-      );
-      const retry = await retryPromise;
-      if (!retry.approved) {
-        await setStatus(applicationId, 'CANCELLED', retry.note ?? 'Cancelled after a validation error.');
-        return;
-      }
+      await enforceSubmitBudget();
+      await setStatus(applicationId, 'SUBMITTING', 'Submitting.');
+      const urlBefore = page.url();
       await adapter.submit(page);
-      const second = await detectSubmissionOutcome(page, urlBefore);
+      const outcome = await detectSubmissionOutcome(page, urlBefore);
+      await artifact(applicationId, 'screenshot', 'after-submit', await screenshot(page, applicationId, 'after-submit'));
+
+      if (outcome.outcome === 'SUBMITTED') {
+        await prisma.application.update({
+          where: { id: applicationId },
+          data: { status: 'SUBMITTED', submittedAt: new Date(), confirmation: outcome.detail, blockedReason: null },
+        });
+        await bus.emitEvent(applicationId, 'STATUS', 'Submitted.', { status: 'SUBMITTED' });
+        await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, ctx.companyKey);
+        return;
+      }
+
+      if (outcome.outcome === 'VALIDATION_ERROR') {
+        const retryPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
+        await setStatus(
+          applicationId,
+          'REVIEW',
+          `The form rejected the submission: ${outcome.detail}. It is still open in the browser - fix it there and approve, or cancel.`,
+        );
+        const retry = await retryPromise;
+        if (!retry.approved) {
+          await setStatus(applicationId, 'CANCELLED', retry.note ?? 'Cancelled after a validation error.');
+          return;
+        }
+        await adapter.submit(page);
+        const second = await detectSubmissionOutcome(page, urlBefore);
+        await prisma.application.update({
+          where: { id: applicationId },
+          data:
+            second.outcome === 'SUBMITTED'
+              ? { status: 'SUBMITTED', submittedAt: new Date(), confirmation: second.detail }
+              : { status: 'FAILED', blockedReason: second.detail },
+        });
+        await bus.emitEvent(applicationId, 'STATUS', second.outcome, { status: second.outcome });
+        if (second.outcome === 'SUBMITTED') {
+          await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, ctx.companyKey);
+        }
+        return;
+      }
+
       await prisma.application.update({
         where: { id: applicationId },
-        data:
-          second.outcome === 'SUBMITTED'
-            ? { status: 'SUBMITTED', submittedAt: new Date(), confirmation: second.detail }
-            : { status: 'FAILED', blockedReason: second.detail },
+        data: { status: 'NEEDS_HUMAN', blockedReason: outcome.detail },
       });
-      await bus.emitEvent(applicationId, 'STATUS', second.outcome, { status: second.outcome });
-      if (second.outcome === 'SUBMITTED') {
-        await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, ctx.companyKey);
-      }
+      await bus.emitEvent(
+        applicationId,
+        'STATUS',
+        'Submitted, but no confirmation was visible. Check the browser before assuming it went through.',
+        { status: 'NEEDS_HUMAN', detail: outcome.detail },
+      );
       return;
     }
 
-    // Ambiguous. Never claim success we cannot see.
-    await prisma.application.update({
-      where: { id: applicationId },
-      data: { status: 'NEEDS_HUMAN', blockedReason: outcome.detail },
-    });
-    await bus.emitEvent(
-      applicationId,
-      'STATUS',
-      'Submitted, but no confirmation was visible. Check the browser before assuming it went through.',
-      { status: 'NEEDS_HUMAN', detail: outcome.detail },
-    );
+    throw new Error('The application did not converge on a final step within the step budget.');
   } catch (err) {
     const message = (err as Error).message;
     await prisma.application.update({
