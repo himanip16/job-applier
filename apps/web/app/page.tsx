@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import { useOverview, type Overview } from '../lib/overview';
 
 /**
  * The overview.
@@ -22,20 +23,6 @@ interface SetupStep {
   href: string | null;
 }
 
-interface Overview {
-  setup: SetupStep[];
-  ready: boolean;
-  needsYou: { needsInput: number; inReview: number; needsHuman: number; total: number };
-  counts: {
-    leadsNew: number;
-    submitted: number;
-    upcomingRounds: number;
-    lessons: number;
-    answerBank: number;
-    companies: number;
-  };
-}
-
 interface Health {
   llmConfigured: boolean;
   headless: boolean;
@@ -46,18 +33,13 @@ interface Health {
 }
 
 export default function Home() {
-  const [ov, setOv] = useState<Overview | null>(null);
+  const { data: ov, error } = useOverview();
   const [health, setHealth] = useState<Health | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
+  // Health is separate and barely changes — a key being added is the only
+  // thing that moves it, and that already forces a reload of this page.
   useEffect(() => {
-    const load = () => {
-      api<Overview>('/api/overview').then(setOv).catch((e) => setError(e.message));
-      api<Health>('/api/health').then(setHealth).catch(() => {});
-    };
-    load();
-    const t = setInterval(load, 5000);
-    return () => clearInterval(t);
+    api<Health>('/api/health').then(setHealth).catch(() => {});
   }, []);
 
   if (error) {
@@ -76,38 +58,17 @@ export default function Home() {
 
   return (
     <>
-      {outstanding > 0 && (
-        <div className="panel" style={{ borderColor: 'var(--warn)' }}>
-          <div className="spread">
-            <div>
-              <h2>
-                {outstanding} thing{outstanding === 1 ? '' : 's'} waiting on you
-              </h2>
-              <p className="sub" style={{ margin: 0 }}>
-                {[
-                  ov!.needsYou.needsInput && `${ov!.needsYou.needsInput} run(s) asking a question`,
-                  ov!.needsYou.inReview && `${ov!.needsYou.inReview} filled and awaiting approval`,
-                  ov!.needsYou.needsHuman && `${ov!.needsYou.needsHuman} blocked on a captcha or login`,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </p>
-            </div>
-            <a href="/runs">
-              <button className="primary">Go to runs</button>
-            </a>
-          </div>
-        </div>
-      )}
+      <Hero ov={ov} />
 
       {ov && !ov.ready && <SetupPanel setup={ov.setup} />}
 
-      <div className="panel">
-        <h2>What this does</h2>
-        <p className="sub">
-          Four parts. They work independently — you can paste a single job URL and skip the rest, or
-          run the whole loop.
-        </p>
+      <details className="panel">
+        <summary style={{ cursor: 'pointer' }}>
+          <strong>How it works</strong>{' '}
+          <span className="muted small">
+            — four parts, each usable on its own
+          </span>
+        </summary>
 
         <Feature
           step="1"
@@ -160,7 +121,7 @@ export default function Home() {
           wrong.
           {ov?.counts.upcomingRounds ? ` ${ov.counts.upcomingRounds} round(s) scheduled.` : ''}
         </Feature>
-      </div>
+      </details>
 
       <div className="panel">
         <h2>Also here</h2>
@@ -193,6 +154,137 @@ export default function Home() {
 
       {health && <StatusPanel health={health} submitted={ov?.counts.submitted ?? 0} />}
     </>
+  );
+}
+
+
+/**
+ * The first screen.
+ *
+ * This used to open with "Four parts. They work independently" - an accurate
+ * description of the architecture and the wrong thing to lead with. What
+ * someone opening this at 9am wants is the state of their job hunt in one
+ * glance: how many jobs are waiting, how many are worth their time, and what
+ * needs them right now. The architecture is still on the page, one click down,
+ * for the moment it becomes interesting.
+ *
+ * Every number is a link, because a number you cannot act on is decoration.
+ */
+function Hero({ ov }: { ov: Overview | null }) {
+  const c = ov?.counts;
+  const y = ov?.needsYou;
+  const outstanding = y?.total ?? 0;
+  const nothingYet = (c?.leadsTotal ?? 0) === 0 && (c?.submitted ?? 0) === 0;
+
+  return (
+    <div className="panel">
+      <h1 style={{ fontSize: '1.9rem', margin: '0 0 .2rem', letterSpacing: '-.02em' }}>
+        Your job search, on autopilot.
+      </h1>
+      <p className="sub" style={{ marginTop: 0, maxWidth: '42rem' }}>
+        It finds the openings, ranks them against what you actually want, fills in the
+        applications, and stops to ask you only when it genuinely cannot answer honestly.
+      </p>
+
+      {nothingYet ? (
+        <div className="row" style={{ gap: '.6rem', marginTop: '1rem' }}>
+          <a href="/discover">
+            <button className="primary">Find jobs for me</button>
+          </a>
+          <a href="/runs">
+            <button>Or paste a job URL</button>
+          </a>
+        </div>
+      ) : (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(9rem, 1fr))',
+            gap: '.75rem',
+            marginTop: '1.1rem',
+          }}
+        >
+          <Big href="/discover" value={c?.leadsTotal ?? 0} label="jobs found" />
+          <Big
+            href="/discover"
+            value={c?.strongMatches ?? 0}
+            label="strong matches"
+            tone={(c?.strongMatches ?? 0) > 0 ? 'var(--good)' : undefined}
+          />
+          <Big href="/runs" value={y?.inReview ?? 0} label="applications ready" />
+          <Big
+            href="/runs"
+            value={outstanding}
+            label="waiting for you"
+            tone={outstanding > 0 ? 'var(--warn)' : undefined}
+          />
+          <Big href="/tracker" value={c?.submitted ?? 0} label="submitted" />
+        </div>
+      )}
+
+      {outstanding > 0 && (
+        <div className="notice" style={{ borderColor: 'var(--warn)', marginTop: '1rem' }}>
+          <div className="spread">
+            <div>
+              <strong>
+                {outstanding} thing{outstanding === 1 ? '' : 's'} need{outstanding === 1 ? 's' : ''}{' '}
+                you
+              </strong>
+              <div className="muted small">
+                {[
+                  y!.needsInput && `${y!.needsInput} run(s) asking a question`,
+                  y!.inReview && `${y!.inReview} filled and awaiting your approval`,
+                  y!.needsHuman && `${y!.needsHuman} blocked on a captcha or login`,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </div>
+            </div>
+            <a href="/runs">
+              <button className="primary">Open them</button>
+            </a>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Big({
+  href,
+  value,
+  label,
+  tone,
+}: {
+  href: string;
+  value: number;
+  label: string;
+  tone?: string;
+}) {
+  return (
+    <a
+      href={href}
+      style={{
+        textDecoration: 'none',
+        border: '1px solid var(--border)',
+        borderRadius: '.5rem',
+        padding: '.7rem .8rem',
+        display: 'block',
+      }}
+    >
+      <div
+        style={{
+          fontSize: '2rem',
+          fontWeight: 650,
+          lineHeight: 1.05,
+          fontVariantNumeric: 'tabular-nums',
+          color: tone ?? 'inherit',
+        }}
+      >
+        {value}
+      </div>
+      <div className="muted small">{label}</div>
+    </a>
   );
 }
 

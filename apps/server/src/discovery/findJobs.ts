@@ -93,6 +93,13 @@ const defaultDeps: FindJobsDeps = {
 };
 
 export interface FindJobsOptions {
+  /**
+   * Work out what it would search for and stop, without spending a credit.
+   *
+   * The answer to "I pressed the button and nothing happened" is almost always
+   * visible here, and finding it out should not cost anything.
+   */
+  dryRun?: boolean;
   maxQueries?: number;
   resultsPerQuery?: number;
   /** Bound the work: a run that hydrates ninety boards takes minutes. */
@@ -131,6 +138,17 @@ export async function findJobs(
   report.roleTitles = plan.roleTitles;
   report.notes.push(...plan.notes);
 
+  if (opts.dryRun) {
+    report.queries = plan.queries.map((query) => ({ query, hits: 0 }));
+    report.notes.push(
+      'Dry run: this is what it would search for. Nothing was searched and no credits were spent.',
+    );
+    return report;
+  }
+
+  log(`searching ${plan.queries.length} quer${plan.queries.length === 1 ? 'y' : 'ies'} ` +
+      `(plan from ${plan.source})`);
+
   // ---- 1. search -----------------------------------------------------------
   //
   // Boards are keyed so the same company found by three different queries is
@@ -164,14 +182,18 @@ export async function findJobs(
         }
       }
       report.queries.push({ query, hits: usable });
+      log(`  "${query}" -> ${hits.length} result(s), ${usable} on a board we can apply to`);
     } catch (err) {
       report.errors.push({ where: `search "${query}"`, error: (err as Error).message });
       report.queries.push({ query, hits: 0 });
+      log(`  "${query}" -> FAILED: ${(err as Error).message}`);
       // A dead key or an exhausted balance fails every remaining query the
       // same way; nine more identical errors help nobody.
       if (!isTransient(err)) break;
     }
   }
+
+  log(`found ${boards.size} board(s) to read`);
 
   if (!boards.size) {
     if (!report.errors.length) {
@@ -223,11 +245,13 @@ export async function findJobs(
     try {
       jobs = await deps.fetchBoard(entry.ref);
       outcome.openings = jobs.length;
+      log(`  ${outcome.company} (${entry.ref.ats}/${entry.ref.slug}): ${jobs.length} opening(s)`);
     } catch (err) {
       // The board API refused - a renamed slug, a private board, an outage.
       // The posting search found is still real, so fall back to that rather
       // than dropping the company entirely.
       outcome.error = (err as Error).message;
+      log(`  ${outcome.company} (${entry.ref.ats}/${entry.ref.slug}): board API failed - ${outcome.error}`);
       jobs = fallbackJobsFromHits(entry.ref, matchedUrls, hitsByUrl, entry.name);
       outcome.openings = jobs.length;
       if (jobs.length) {
@@ -284,6 +308,8 @@ export async function findJobs(
       }
     }
   }
+
+  log(`${report.newLeads} new lead(s) from ${report.jobsSeen} relevant posting(s)`);
 
   // ---- 4. read the most promising in full ----------------------------------
   if (fresh.length && deepScoreTop > 0) {
@@ -443,5 +469,14 @@ const isTransient = (err: unknown): boolean =>
   typeof err === 'object' && err !== null && (err as { transient?: boolean }).transient === true;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Progress on stdout.
+ *
+ * A search run takes tens of seconds and, until it finishes, the UI can only
+ * say "Searching...". Without this the honest report from a user is "it is not
+ * doing anything", and there is nowhere to look to find out otherwise.
+ */
+const log = (message: string) => process.stdout.write(`[find] ${message}\n`);
 
 export { isFirecrawlConfigured };

@@ -83,8 +83,9 @@ a model. A 400-job crawl therefore costs a handful of model calls, not 400.
 
 ### What search costs
 
-Searching needs a [Firecrawl](https://firecrawl.dev) key in `FIRECRAWL_API_KEY`
-— the free tier is enough for a personal job hunt. A run is about two credits
+Searching needs a [Firecrawl](https://firecrawl.dev) key — paste it on the
+Settings page, or set `FIRECRAWL_API_KEY`. The free tier is enough for a
+personal job hunt. A run is about two credits
 per query and six queries by default, so roughly a dozen credits; everything
 after the search is done by the boards' own free APIs.
 
@@ -112,6 +113,76 @@ The reason box is optional and says so. Forcing one gets you "n/a", and "n/a"
 is worse than silence because the learner would treat it as signal.
 
 ---
+
+## Applications are wizards, not forms
+
+Almost no real application is one page with a Submit button. Workday walks you
+through My Information, My Experience, Application Questions, Voluntary
+Disclosures and Review. Taleo and iCIMS want an account first. Several ask,
+before showing you anything, whether to parse your resume and fill it all in.
+
+So the engine walks it one screen at a time:
+
+```
+open  ->  [ wall? -> you clear it, it carries on ]
+      ->  [ "autofill with your resume?" -> answer it ]
+      ->  read this screen -> resolve -> ask you what it cannot answer -> fill
+      ->  find what moves forward -> press it -> did anything change?
+      ->  ...until the control that ends the application
+```
+
+A single-page Greenhouse form is just the one-step case of the same loop.
+
+Some details that took a fixture to get right:
+
+- **Knowing whether "Continue" did anything.** The URL is identical across all
+  six steps of a single-page app, so movement is judged on a fingerprint of the
+  path, the visible heading and the field labels. When it does not move, the
+  page's own complaint is reported — including native constraint messages,
+  which render no markup at all — rather than "nothing happened".
+- **A login is a pause, not an end.** The browser profile persists, so once you
+  have signed in the run picks up from exactly where it stopped. Press
+  **Done — carry on** on the run page. You sign in once per site, not once per
+  application.
+- **Only the last button is Submit.** "Save and Continue" is another step;
+  "Back" is never pressed. Getting that wrong either walks the wizard backwards
+  or submits early, so anything not clearly final is treated as another step.
+- **Screens with no fields** (a Review page) are recognised as gates rather
+  than treated as an empty form.
+- **Autofill is taken when offered**, because it is the employer's own parser
+  reading your own resume, and it is the only practical way past a page like
+  Workday's My Experience. It does not weaken the no-fabrication rule: the
+  step is re-read afterwards and anything your profile can answer overwrites
+  the parsed value, so a mis-parsed phone number does not survive. The whole
+  application still goes through review before submission.
+
+`MAX_APPLICATION_STEPS` (default 12) exists to stop a loop, not to limit a
+long application.
+
+### What about Google, Amazon, and other in-house systems?
+
+They work the same way, with one caveat. Only Greenhouse, Lever, Ashby and
+Workable publish board APIs, so **Find jobs for me** only searches those — an
+in-house careers site will not turn up there. You can still paste the URL into
+a run and the generic adapter drives it.
+
+Google Careers is the honest example. Its Apply link redirects to
+`accounts.google.com`, whose first screen asks for an email address and nothing
+else — no password field, no "sign in to apply" text. That is why login
+detection also matches known identity-provider hosts. You sign in once, press
+**Done — carry on**, and the wizard continues.
+
+## One job, one page
+
+Each feature here grew its own page, which left the thing they all describe —
+a single job at a single company — split across five of them. `/jobs/<id>` is
+the join: the score and the reasoning behind it, what the application actually
+contains (which fields came from your profile, which from remembered answers,
+which were written for this employer, which are still waiting on you), the
+interview rounds and the questions you were asked, and how it ended.
+
+It takes a lead id or an application id, because the link you have could be
+either.
 
 ## Making the resume ATS-friendly
 
@@ -180,7 +251,7 @@ the information is not actually there.
 Requires Node 22+, pnpm, and Postgres 14+.
 
 ```bash
-cp .env.example .env          # DATABASE_URL, one model API key, and (to search) FIRECRAWL_API_KEY
+cp .env.example .env          # DATABASE_URL is the only one you must set here
 pnpm setup                    # install, push the schema, download Chromium
 pnpm --filter @ja/server seed # optional: a starter profile and standing answers
 ```
@@ -202,9 +273,17 @@ pnpm dev:server   # API + run engine on :8787
 pnpm dev:web      # UI on :3000
 ```
 
-Then open <http://localhost:3000>, fill in your profile, upload your resume,
-and press **Find jobs for me** — or paste a job URL directly if you already
-have one in mind.
+Then open <http://localhost:3000>. The front page lists what is left to set
+up; **Settings** takes the API keys directly, checks each one against the real
+API before saving it, and applies it without a restart. Fill in your profile,
+upload your resume, and press **Find jobs for me** — or paste a job URL
+directly if you already have one in mind.
+
+Keys are stored in the `settings` table of your own database, in plain text —
+the same protection as the `.env` file they replace, no better. A saved key is
+never sent back to the browser; the page shows only the first and last four
+characters. Anything already in `.env` keeps working and is labelled as coming
+from there.
 
 ### Which model provider, and what it costs
 
@@ -334,6 +413,8 @@ fixtures/            Offline replicas of real Greenhouse and Lever DOM
 | Page | What it is for |
 |---|---|
 | `/discover` | Search for openings, triage the queue, see what the ranking has learned |
+| `/jobs/<id>` | One job, everything about it: match and why, the application, interviews, outcome |
+| `/settings` | API keys, checked against the real API and applied without a restart |
 | `/` | Live run view: log, screenshots, question popup, review gate |
 | `/resume` | Tailor for a job; the grounded / unsupported split |
 | `/tracker` | Outcomes, rounds, questions, lessons |

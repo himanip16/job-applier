@@ -89,18 +89,18 @@ export default function DiscoverPage() {
       .catch(() => {});
   }, [load]);
 
-  async function find() {
-    setBusy('find');
+  async function find(dryRun = false) {
+    setBusy(dryRun ? 'preview' : 'find');
     setError(null);
     setFlash(null);
     setReport(null);
     try {
       const r = await api<{ report: SearchReport }>('/api/discovery/find', {
         method: 'POST',
-        body: JSON.stringify({ deepScoreTop: 15 }),
+        body: JSON.stringify({ deepScoreTop: 15, dryRun }),
       });
       setReport(r.report);
-      await load();
+      if (!dryRun) await load();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -109,6 +109,13 @@ export default function DiscoverPage() {
   }
 
   async function crawl() {
+    if (!companies.length) {
+      setError(
+        'No boards on the watch list yet, so there is nothing to re-check. Press "Find jobs for ' +
+          'me" — it adds every company it finds — or add one by hand below.',
+      );
+      return;
+    }
     setBusy('crawl');
     setError(null);
     setFlash(null);
@@ -148,6 +155,13 @@ export default function DiscoverPage() {
     }
   }
 
+  // The split that makes the page useful: the jobs worth opening, then the
+  // rest. 70 is the same threshold the score turns green at, so the section
+  // heading and the number beside each job never disagree.
+  const strong = filter === 'NEW' ? leads.filter((l) => l.score >= 70) : [];
+  const rest = filter === 'NEW' ? leads.filter((l) => l.score < 70) : leads;
+  const failing = companies.filter((c) => c.lastCrawlNote?.startsWith('failed')).length;
+
   return (
     <>
       <div className="panel">
@@ -161,16 +175,29 @@ export default function DiscoverPage() {
             </p>
           </div>
           <div className="row" style={{ flex: 'none', gap: '.5rem' }}>
+            {/*
+              Deliberately not disabled when there is no key. A greyed-out
+              button that does nothing when you click it is indistinguishable
+              from a broken one; clicking this always produces an answer, even
+              if the answer is which line to add to .env.
+            */}
             <button
               className="primary"
-              disabled={busy !== null || !searchConfigured}
-              onClick={find}
+              disabled={busy !== null}
+              onClick={() => find(false)}
               title="Search the web for openings that match your profile"
             >
               {busy === 'find' ? 'Searching…' : 'Find jobs for me'}
             </button>
             <button
-              disabled={busy !== null || !companies.length}
+              disabled={busy !== null}
+              onClick={() => find(true)}
+              title="Show the searches it would run. Costs nothing and needs no key."
+            >
+              {busy === 'preview' ? 'Working…' : 'Preview'}
+            </button>
+            <button
+              disabled={busy !== null}
               onClick={crawl}
               title="Re-read the boards already on the list, without searching"
             >
@@ -186,19 +213,39 @@ export default function DiscoverPage() {
             <a href="https://firecrawl.dev" target="_blank" rel="noreferrer">
               firecrawl.dev
             </a>
-            . Until then you can add boards by hand below, or paste a job URL on the Runs page.
+            . <strong>Preview</strong> works without one and shows you what it would search for.
+            You can also add boards by hand below, or paste a job URL on the Runs page.
           </div>
         )}
+        <Tally counts={counts} strong={strong.length} />
+
         {flash && <div className="notice good" style={{ marginTop: '.9rem' }}>{flash}</div>}
         {error && <div className="notice bad" style={{ marginTop: '.9rem' }}>{error}</div>}
         {report && <SearchReportPanel report={report} />}
       </div>
 
-      <CompanyManager companies={companies} sources={sources} onChange={load} />
+      {filter === 'NEW' && strong.length > 0 && (
+        <div className="panel">
+          <h2>Strong matches</h2>
+          <p className="sub">
+            Scored 70 or above against your profile and your past decisions. Start here.
+          </p>
+          {strong.map((lead) => (
+            <LeadCard
+              key={lead.id}
+              lead={lead}
+              busy={busy === lead.id}
+              onApply={() => decide(lead, 'apply')}
+              onShortlist={() => decide(lead, 'shortlist')}
+              onReject={() => setRejecting(lead)}
+            />
+          ))}
+        </div>
+      )}
 
       <div className="panel">
         <div className="spread">
-          <h2>Leads</h2>
+          <h2>{filter === 'NEW' && strong.length > 0 ? 'Everything else' : 'Jobs'}</h2>
           <div className="row">
             {['NEW', 'SHORTLISTED', 'APPLIED', 'REJECTED', 'ALL'].map((s) => (
               <button
@@ -212,12 +259,14 @@ export default function DiscoverPage() {
           </div>
         </div>
 
-        {leads.length === 0 ? (
+        {rest.length === 0 ? (
           <p className="muted small" style={{ marginTop: '.8rem' }}>
-            Nothing here.
+            {leads.length === 0
+              ? 'No jobs here yet. Press “Find jobs for me” above.'
+              : 'Everything here is in strong matches.'}
           </p>
         ) : (
-          leads.map((lead) => (
+          rest.map((lead) => (
             <LeadCard
               key={lead.id}
               lead={lead}
@@ -229,6 +278,17 @@ export default function DiscoverPage() {
           ))
         )}
       </div>
+
+      <details className="panel">
+        <summary style={{ cursor: 'pointer' }}>
+          <strong>Sources</strong>{' '}
+          <span className="muted small">
+            — {companies.length} board{companies.length === 1 ? '' : 's'} watched
+            {failing > 0 && `, ${failing} failing`}
+          </span>
+        </summary>
+        <CompanyManager companies={companies} sources={sources} onChange={load} />
+      </details>
 
       {rejecting && (
         <RejectDialog
@@ -275,10 +335,19 @@ function LeadCard({
         <div style={{ minWidth: 0 }}>
           <div className="row" style={{ gap: '.5rem' }}>
             <strong style={{ color: tone, fontVariantNumeric: 'tabular-nums' }}>{score}</strong>
-            <a href={lead.url} target="_blank" rel="noreferrer">
-              {lead.title}
+            <a href={`/jobs/${lead.id}`}>
+              <strong>{lead.title}</strong>
             </a>
             <span className="muted small">· {lead.companyName}</span>
+            <a
+              href={lead.url}
+              target="_blank"
+              rel="noreferrer"
+              className="small muted"
+              title="Open the original posting"
+            >
+              ↗
+            </a>
             {lead.remote && <span className="src">remote</span>}
             {lead.location && <span className="muted small">{lead.location}</span>}
             {!lead.deepScored && <span className="src" title="Ranked on keywords only, not read in full">quick score</span>}
@@ -306,20 +375,26 @@ function LeadCard({
           ) : null}
         </div>
 
-        {lead.status === 'NEW' && (
-          <div className="row" style={{ flexWrap: 'nowrap' }}>
-            <button className="primary" disabled={busy} onClick={onApply}>
-              Apply
-            </button>
-            <button disabled={busy} onClick={onShortlist}>
-              Save
-            </button>
-            <button className="danger" disabled={busy} onClick={onReject}>
-              Not for me
-            </button>
-          </div>
-        )}
-        {lead.status !== 'NEW' && <span className={`pill ${lead.status}`}>{lead.status}</span>}
+        <div className="row" style={{ flexWrap: 'nowrap', flex: 'none' }}>
+          <a href={`/jobs/${lead.id}`}>
+            <button title="Everything about this job on one page">View job</button>
+          </a>
+          {lead.status === 'NEW' ? (
+            <>
+              <button className="primary" disabled={busy} onClick={onApply}>
+                Apply
+              </button>
+              <button disabled={busy} onClick={onShortlist}>
+                Save
+              </button>
+              <button className="danger" disabled={busy} onClick={onReject}>
+                Not for me
+              </button>
+            </>
+          ) : (
+            <span className={`pill ${lead.status}`}>{lead.status}</span>
+          )}
+        </div>
       </div>
 
       <button
@@ -419,6 +494,45 @@ function RejectDialog({
 }
 
 /**
+ * The numbers, before any of the machinery.
+ *
+ * Someone opening this page wants to know what was found for them, not how
+ * many boards were read or which one errored. Those still matter and are still
+ * on the page — one fold down, under Sources, where they belong.
+ */
+function Tally({ counts, strong }: { counts: Record<string, number>; strong: number }) {
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  if (!total) return null;
+  const cells: [number, string, string | undefined][] = [
+    [counts.NEW ?? 0, 'new jobs found', undefined],
+    [strong, 'strong matches', strong > 0 ? 'var(--good)' : undefined],
+    [counts.SHORTLISTED ?? 0, 'worth applying', undefined],
+    [counts.APPLIED ?? 0, 'applied', undefined],
+    [counts.REJECTED ?? 0, 'rejected', undefined],
+  ];
+  return (
+    <div className="row" style={{ gap: '2rem', marginTop: '1rem', flexWrap: 'wrap' }}>
+      {cells.map(([value, label, tone]) => (
+        <div key={label}>
+          <div
+            style={{
+              fontSize: '1.6rem',
+              fontWeight: 650,
+              lineHeight: 1.1,
+              fontVariantNumeric: 'tabular-nums',
+              color: tone ?? 'inherit',
+            }}
+          >
+            {value}
+          </div>
+          <div className="muted small">{label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
  * What the run actually did.
  *
  * A single "found 12 jobs" line hides the two things worth knowing: what it
@@ -430,36 +544,42 @@ function RejectDialog({
 function SearchReportPanel({ report }: { report: SearchReport }) {
   const boards = report.boards.filter((b) => b.kept > 0);
   const nothing = report.newLeads === 0;
+  const dryRun = report.notes.some((n) => n.startsWith('Dry run:'));
 
   return (
     <div className="notice" style={{ marginTop: '.9rem' }}>
       <strong>
-        {nothing
-          ? 'No new jobs this time.'
-          : `${report.newLeads} new job${report.newLeads === 1 ? '' : 's'} from ${boards.length} compan${
-              boards.length === 1 ? 'y' : 'ies'
-            }.`}
+        {dryRun
+          ? `Would run ${report.queries.length} search${report.queries.length === 1 ? '' : 'es'}.`
+          : nothing
+            ? 'No new jobs this time.'
+            : `${report.newLeads} new job${report.newLeads === 1 ? '' : 's'} from ${boards.length} compan${
+                boards.length === 1 ? 'y' : 'ies'
+              }.`}
       </strong>{' '}
-      <span className="muted small">
-        Searched {report.queries.length} time{report.queries.length === 1 ? '' : 's'} ·{' '}
-        {report.jobsSeen} posting{report.jobsSeen === 1 ? '' : 's'} considered ·{' '}
-        {report.skippedAlreadySeen} already seen · {report.deepScored} read in full
-        {report.companiesRegistered > 0 &&
-          ` · ${report.companiesRegistered} new board${
-            report.companiesRegistered === 1 ? '' : 's'
-          } added to the watch list`}
-        {report.creditsUsed > 0 && ` · ${report.creditsUsed} search credits`}
-      </span>
+      {!dryRun && (
+        <span className="muted small">
+          Searched {report.queries.length} time{report.queries.length === 1 ? '' : 's'} ·{' '}
+          {report.jobsSeen} posting{report.jobsSeen === 1 ? '' : 's'} considered ·{' '}
+          {report.skippedAlreadySeen} already seen · {report.deepScored} read in full
+          {report.companiesRegistered > 0 &&
+            ` · ${report.companiesRegistered} new board${
+              report.companiesRegistered === 1 ? '' : 's'
+            } added to the watch list`}
+          {report.creditsUsed > 0 && ` · ${report.creditsUsed} search credits`}
+        </span>
+      )}
 
-      <details style={{ marginTop: '.6rem' }}>
+      <details open={dryRun} style={{ marginTop: '.6rem' }}>
         <summary className="small" style={{ cursor: 'pointer' }}>
-          What it searched for
+          {dryRun ? 'The searches it would run' : 'What it searched for'}
           {report.planSource === 'profile' && ' (derived from your profile, no model used)'}
         </summary>
         <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
           {report.queries.map((q) => (
             <li key={q.query}>
-              &ldquo;{q.query}&rdquo; — {q.hits} usable hit{q.hits === 1 ? '' : 's'}
+              &ldquo;{q.query}&rdquo;
+              {!dryRun && ` — ${q.hits} usable hit${q.hits === 1 ? '' : 's'}`}
             </li>
           ))}
         </ul>

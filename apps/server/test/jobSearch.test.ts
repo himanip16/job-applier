@@ -24,7 +24,7 @@ const { titleMatchesPlan, buildSearchPlan } = await import(
 );
 const { findJobs, canonicalUrl } = await import('../src/discovery/findJobs.js');
 const { firecrawlSearch, FirecrawlError } = await import('../src/discovery/firecrawl.js');
-const { config } = await import('../src/lib/config.js');
+const { setSetting, clearSetting, loadSettings } = await import('../src/lib/secrets.js');
 
 describe('recognising a posting URL', () => {
   it('reduces every board we can apply on to an ats and a slug', () => {
@@ -173,27 +173,56 @@ describe('the relevance gate against a real company board', () => {
 
 describe('the Firecrawl client', () => {
   const realFetch = globalThis.fetch;
-  const realKey = config.firecrawlApiKey;
+  const realEnvKey = process.env.FIRECRAWL_API_KEY;
 
-  const withKey = (key: string) => {
-    (config as unknown as Record<string, unknown>).firecrawlApiKey = key;
+  /**
+   * Set the key the way the app does.
+   *
+   * `config.firecrawlApiKey` is a getter over the settings overlay now, so a
+   * test cannot assign to it - which is the point: a key saved from the UI has
+   * to reach the same call sites a key in .env does, and this exercises that.
+   */
+  const withKey = async (key: string) => {
+    delete process.env.FIRECRAWL_API_KEY;
+    await loadSettings();
+    if (key) await setSetting('FIRECRAWL_API_KEY', key);
+    else await clearSetting('FIRECRAWL_API_KEY');
   };
-  const restore = () => {
+  const restore = async () => {
     globalThis.fetch = realFetch;
-    withKey(realKey);
+    await clearSetting('FIRECRAWL_API_KEY');
+    if (realEnvKey) process.env.FIRECRAWL_API_KEY = realEnvKey;
+    await loadSettings();
   };
 
   it('says what to do when there is no key, instead of failing at the socket', async () => {
-    withKey('');
+    await withKey('');
     try {
       await expect(firecrawlSearch('backend engineer')).rejects.toThrow(/FIRECRAWL_API_KEY/);
     } finally {
-      restore();
+      await restore();
+    }
+  });
+
+  it('uses a key saved from the settings page, not just one in .env', async () => {
+    // The regression this guards: config read the environment once at import,
+    // so a key typed into the UI did nothing until the server was restarted.
+    await withKey('saved-from-ui');
+    let seenAuth = '';
+    globalThis.fetch = vi.fn(async (_url: unknown, init: unknown) => {
+      seenAuth = (init as { headers: Record<string, string> }).headers.authorization ?? '';
+      return new Response(JSON.stringify({ success: true, data: { web: [] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      await firecrawlSearch('x');
+      expect(seenAuth).toBe('Bearer saved-from-ui');
+    } finally {
+      await restore();
     }
   });
 
   it('sends the domain filter and reads the results back', async () => {
-    withKey('test-key');
+    await withKey('test-key');
     let sent: { url: string; body: Record<string, unknown>; auth: string } | null = null;
     globalThis.fetch = vi.fn(async (url: unknown, init: unknown) => {
       const req = init as { body: string; headers: Record<string, string> };
@@ -225,12 +254,12 @@ describe('the Firecrawl client', () => {
       expect(call.body.includeDomains).toEqual(['jobs.lever.co']);
       expect(call.body.limit).toBe(5);
     } finally {
-      restore();
+      await restore();
     }
   });
 
   it('distinguishes an exhausted balance from a rate limit, because only one is worth retrying', async () => {
-    withKey('test-key');
+    await withKey('test-key');
     try {
       globalThis.fetch = vi.fn(
         async () => new Response(JSON.stringify({ error: 'Insufficient credits' }), { status: 402 }),
@@ -246,12 +275,12 @@ describe('the Firecrawl client', () => {
       const limited = await firecrawlSearch('x').catch((e: unknown) => e);
       expect((limited as InstanceType<typeof FirecrawlError>).transient).toBe(true);
     } finally {
-      restore();
+      await restore();
     }
   });
 
   it('reports a bad key as a config problem, not a transient one', async () => {
-    withKey('test-key');
+    await withKey('test-key');
     globalThis.fetch = vi.fn(
       async () => new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 }),
     ) as unknown as typeof fetch;
@@ -260,7 +289,7 @@ describe('the Firecrawl client', () => {
       expect((err as Error).message).toMatch(/FIRECRAWL_API_KEY/);
       expect((err as InstanceType<typeof FirecrawlError>).transient).toBe(false);
     } finally {
-      restore();
+      await restore();
     }
   });
 });

@@ -121,8 +121,11 @@ export default function RunsPage() {
               {rows.map((r) => (
                 <tr key={r.id}>
                   <td>
-                    <a href={`/applications/${r.id}`}>
+                    <a href={`/jobs/${r.id}`}>
                       {r.job.title === 'pending' ? r.job.url : `${r.job.title} — ${r.job.company}`}
+                    </a>{' '}
+                    <a href={`/applications/${r.id}`} className="small muted" title="The live run log">
+                      run log
                     </a>
                     {r.blockedReason && <div className="muted small">{r.blockedReason}</div>}
                   </td>

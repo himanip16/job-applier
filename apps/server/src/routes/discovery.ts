@@ -88,22 +88,25 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     const profile = await requireProfile(reply);
     if (!profile) return;
 
-    if (!isFirecrawlConfigured()) {
-      return reply.code(400).send({
-        error:
-          'Job search needs a Firecrawl key. Get one free at firecrawl.dev, put ' +
-          'FIRECRAWL_API_KEY in .env, and restart the server. Everything else works without it.',
-      });
-    }
-
     const body = z
       .object({
+        dryRun: z.boolean().default(false),
         maxQueries: z.number().min(1).max(12).optional(),
         resultsPerQuery: z.number().min(1).max(30).optional(),
         maxBoards: z.number().min(1).max(60).optional(),
         deepScoreTop: z.number().min(0).max(60).default(15),
       })
       .parse(req.body ?? {});
+
+    // A dry run never touches Firecrawl, so it works without a key - which is
+    // exactly when you most want to see what the app thinks it would do.
+    if (!body.dryRun && !isFirecrawlConfigured()) {
+      return reply.code(400).send({
+        error:
+          'Job search needs a Firecrawl key. Get one free at firecrawl.dev, put ' +
+          'FIRECRAWL_API_KEY in .env, and restart the server. Everything else works without it.',
+      });
+    }
 
     try {
       return { report: await findJobs(profile.id, body) };

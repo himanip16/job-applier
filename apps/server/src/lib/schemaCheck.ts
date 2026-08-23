@@ -105,3 +105,22 @@ export async function schemaProblem(): Promise<string | null> {
   if (!tables.ok) return tables.message!;
   return null;
 }
+
+/**
+ * The same answer, cached.
+ *
+ * /api/overview is polled while the dashboard is open, and it calls this on
+ * every request - a file read and a database round-trip to re-derive something
+ * that only changes when someone runs `db:push`. Thirty seconds is short
+ * enough that the fix is reflected almost immediately and long enough that
+ * polling costs nothing.
+ */
+let cached: { at: number; problem: string | null } | null = null;
+const CACHE_MS = 30_000;
+
+export async function cachedSchemaProblem(): Promise<string | null> {
+  if (cached && Date.now() - cached.at < CACHE_MS) return cached.problem;
+  const problem = await schemaProblem();
+  cached = { at: Date.now(), problem };
+  return problem;
+}

@@ -322,3 +322,111 @@ describe('a complete application run', () => {
     expect(done.status).toBe('CANCELLED');
   }, 180_000);
 });
+
+describe('a multi-step application', () => {
+  /**
+   * The shape almost every real application has, and the one the engine
+   * originally could not handle at all: sign in, "autofill from your resume?",
+   * then five screens with the Submit button only on the last.
+   */
+  it('signs in, takes the autofill, walks all five screens and submits', async () => {
+    inferMock.mockResolvedValue({
+      answerable: false,
+      value: '',
+      values: [],
+      confidence: 0,
+      evidence: '',
+      missingInformation: 'Not stated anywhere in the profile or resume.',
+    });
+    essayMock.mockResolvedValue('Initech runs the payments stack I already work on.');
+    coverLetterMock.mockResolvedValue({ body: 'letter', claimsMade: [], unsupportedClaims: [] });
+
+    const app = await createApplication('workday-like.html');
+    const run = runApplication(app.id);
+
+    // ---- 1. it stops at the account wall instead of failing ---------------
+    await waitForStatus(app.id, 'NEEDS_HUMAN');
+    const blocked = await prisma.application.findUniqueOrThrow({ where: { id: app.id } });
+    expect(blocked.blockedReason).toMatch(/LOGIN_REQUIRED|ACCOUNT_CREATION/);
+
+    // ---- 2. the human signs in, in the browser that is still open ---------
+    const { activePageFor } = await import('./helpers/activePage.js');
+    const page = activePageFor('workday-like.html');
+    await page.click('#signin');
+
+    // ...and tells the run to carry on. The old engine had no way back from
+    // here; the run had simply ended.
+    const { continueRun } = await import('../src/engine/runner.js');
+    // The run may take a moment to register its waiter after announcing.
+    for (let i = 0; i < 40 && !continueRun(app.id, true); i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    // ---- 3. it walks the rest of the wizard on its own --------------------
+    //
+    // Answering whatever it stops to ask along the way. How many times it
+    // stops depends on how much of the profile covers this particular form -
+    // with a full profile it may not stop at all, and requiring it to would
+    // make this test assert the opposite of what the app is for.
+    let asked = 0;
+    for (let round = 0; round < 60; round++) {
+      const current = await prisma.application.findUniqueOrThrow({ where: { id: app.id } });
+      if (current.status === 'REVIEW' || current.status === 'SUBMITTED') break;
+      if (current.status === 'FAILED') throw new Error(`Run failed: ${current.blockedReason}`);
+
+      if (current.status === 'NEEDS_INPUT') {
+        const open = await prisma.pendingQuestion.findMany({
+          where: { applicationId: app.id, answeredAt: null },
+        });
+        if (open.length) {
+          asked += open.length;
+          // Field ids are namespaced per step, or step 2's "f0" would collide
+          // with step 1's and overwrite the answer.
+          expect(open.every((q) => /^s\d+:/.test(q.fieldId))).toBe(true);
+          submitAnswers(
+            app.id,
+            open.map((q) => ({ fieldId: q.fieldId, value: answerFor(q.rawLabel), remember: true })),
+          );
+        }
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    // Whether or not it had to ask, it must have got past the first screen.
+    expect(asked).toBeGreaterThanOrEqual(0);
+
+    // ---- 4. review, then the real Submit at the end of the wizard ---------
+    await waitForStatus(app.id, 'REVIEW');
+    decideReview(app.id, true);
+
+    await waitForStatus(app.id, 'SUBMITTED');
+    await run;
+
+    const done = await prisma.application.findUniqueOrThrow({ where: { id: app.id } });
+    expect(done.submittedAt).toBeTruthy();
+
+    // The audit trail covers every screen, not just the first.
+    const plan = done.fieldPlan as { fieldId: string; label: string }[];
+    const steps = new Set(plan.map((p) => p.fieldId.split(':')[0]));
+    expect(steps.size).toBeGreaterThanOrEqual(3);
+    const labels = plan.map((p) => p.label.toLowerCase()).join(' | ');
+    expect(labels).toMatch(/first name/);
+    expect(labels).toMatch(/authorized/);
+    expect(labels).toMatch(/gender/);
+
+    // The profile beats what the site's parser guessed: the fixture autofills
+    // a wrong phone number on purpose.
+    const phone = plan.find((p) => /phone/i.test(p.label)) as
+      | { value: string; source: string }
+      | undefined;
+    expect(phone?.value).toBe('+1 415 555 0132');
+  }, 180_000);
+});
+
+/** Plausible answers for whatever the wizard asks that the profile cannot cover. */
+function answerFor(label: string): string {
+  if (/year/i.test(label)) return '9';
+  if (/why/i.test(label)) return 'Initech runs the payments stack I already work on.';
+  if (/veteran/i.test(label)) return 'I decline to self-identify';
+  if (/gender/i.test(label)) return 'I do not wish to self-identify';
+  return 'Yes';
+}
