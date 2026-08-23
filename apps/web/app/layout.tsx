@@ -1,9 +1,11 @@
 import './globals.css';
 import type { ReactNode } from 'react';
+import { Nav } from '../components/Nav';
+import { NeedsYou } from '../components/NeedsYou';
 
 export const metadata = {
   title: 'Job Applier',
-  description: 'Assisted job applications with an answer bank that learns.',
+  description: 'Find, apply, tailor and track — with an answer bank that learns.',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -12,18 +14,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         <header className="top">
           <div className="inner">
-            <strong>Job Applier</strong>
-            <nav>
-              <a href="/discover">Find work</a>
-              <a href="/">Runs</a>
-              <a href="/tracker">Tracker</a>
-              <a href="/resume">Resume</a>
-              <a href="/retro">Retrospective</a>
-              <a href="/profile">Profile</a>
-              <a href="/answers">Answers</a>
-            </nav>
+            <a href="/" style={{ color: 'inherit', textDecoration: 'none' }}>
+              <strong>Job Applier</strong>
+            </a>
+            <Nav />
           </div>
         </header>
+        <NeedsYou />
         <div className="wrap">{children}</div>
       </body>
     </html>

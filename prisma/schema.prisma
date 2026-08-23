@@ -512,3 +512,17 @@ model Lesson {
   @@index([applicationId])
   @@map("lessons")
 }
+
+/// Settings you can change from the UI instead of editing .env and restarting.
+///
+/// API keys live here so the app is usable without a text editor. That is the
+/// same trust level as .env - plaintext, readable by anyone who can read the
+/// database - and no worse, but no better either. The values are never sent
+/// back to the browser once saved; the UI only ever sees a masked preview.
+model Setting {
+  key       String   @id
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}

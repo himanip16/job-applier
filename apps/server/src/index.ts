@@ -9,14 +9,19 @@ import { config, artifactsDir, resumesDir } from './lib/config.js';
 import { prisma, type Prisma } from './lib/db.js';
 import { bus } from './lib/events.js';
 import { enqueue, recoverInterruptedRuns, activeRuns } from './engine/queue.js';
-import { submitAnswers, decideReview } from './engine/runner.js';
+import { submitAnswers, decideReview, continueRun } from './engine/runner.js';
 import { rememberAnswer } from './engine/answerBank.js';
 import { adapterFor } from './ats/registry.js';
 import { extractResumeText, assessResumeText } from './lib/resumeText.js';
 import { estimateActivityCosts, activeModels } from './llm/models.js';
 import { provider, isConfigured } from './llm/client.js';
+import { schemaProblem, cachedSchemaProblem } from './lib/schemaCheck.js';
 import { matchCanonical, normalizeLabel, type RunEvent } from '@ja/shared';
 import { registerDiscoveryRoutes } from './routes/discovery.js';
+import { registerSettingsRoutes } from './routes/settings.js';
+import { registerJobDetailRoutes } from './routes/jobDetail.js';
+import { loadSettings } from './lib/secrets.js';
+import { isFirecrawlConfigured } from './discovery/firecrawl.js';
 import { registerTrackerRoutes } from './routes/tracker.js';
 import { registerResumeRoutes } from './routes/resume.js';
 
@@ -305,6 +310,28 @@ app.post<{ Params: { id: string } }>('/api/applications/:id/review', async (req,
   return { ok: true };
 });
 
+/**
+ * "I have signed in / solved the captcha — keep going."
+ *
+ * A run stopped at a wall is parked, not dead: the browser is still open on
+ * the page and the wizard is still half-filled. This is how the human says
+ * they have dealt with it.
+ */
+app.post<{ Params: { id: string } }>('/api/applications/:id/continue', async (req, reply) => {
+  const { carryOn, note } = z
+    .object({ carryOn: z.boolean().default(true), note: z.string().optional() })
+    .parse(req.body ?? {});
+  const delivered = continueRun(req.params.id, carryOn, note);
+  if (!delivered) {
+    return reply.code(409).send({
+      error:
+        'That run is not waiting at a wall. If it stopped before this server started, the ' +
+        'browser page is gone — start it again and it will pick up the signed-in session.',
+    });
+  }
+  return { ok: true };
+});
+
 // -------------------------------------------------------- live event feed ---
 
 app.get<{ Params: { id: string } }>('/api/applications/:id/stream', async (req, reply) => {
@@ -381,15 +408,37 @@ app.delete<{ Params: { id: string } }>('/api/answers/:id', async (req) => {
 
 // ------------------------------------------------- discovery, resume, tracker ---
 
+/**
+ * An empty body is not a malformed body.
+ *
+ * Fastify's default JSON parser rejects `Content-Type: application/json` with
+ * no payload, which is a reasonable reading of the spec and a hostile one for
+ * a client that sets the header once for every request. Several endpoints here
+ * take no body at all, so treat empty as `{}` and let the route's own schema
+ * decide what is required.
+ */
+app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+  const text = typeof body === 'string' ? body.trim() : '';
+  if (!text) return done(null, {});
+  try {
+    done(null, JSON.parse(text));
+  } catch (err) {
+    done(err as Error, undefined);
+  }
+});
+
 registerDiscoveryRoutes(app, requireProfile);
 registerResumeRoutes(app, requireProfile);
 registerTrackerRoutes(app, requireProfile);
+registerSettingsRoutes(app);
+registerJobDetailRoutes(app);
 
 // ----------------------------------------------------------------- health ---
 
 app.get('/api/health', async () => ({
   ok: true,
   llmConfigured: isConfigured(),
+  searchConfigured: isFirecrawlConfigured(),
   ...activeModels(),
   // Rough, local, and always an estimate - the real figure is on your console.
   estimatedCosts: estimateActivityCosts(),
@@ -397,6 +446,164 @@ app.get('/api/health', async () => ({
   requireReview: config.requireReview,
   activeRuns: activeRuns(),
 }));
+
+/**
+ * Everything the home page needs to explain itself.
+ *
+ * Two jobs. It reports what is still unconfigured, so a fresh install tells
+ * you what to do next instead of failing later with a stack trace. And it
+ * counts everything currently waiting on a human, across all four features,
+ * because "three things need you" is the one number worth putting at the top
+ * of a page.
+ */
+app.get('/api/overview', async () => {
+  const profile = await prisma.profile.findFirst({
+    include: { facts: true, resumes: true, _count: { select: { answers: true } } },
+  });
+
+  // Every count is guarded. This endpoint is the one that reports a broken
+  // install, so it has to survive one - a stale client or a missing table must
+  // degrade a number to zero, not take the whole dashboard down with a
+  // TypeError the user cannot act on.
+  const [
+    companies,
+    leadsNew,
+    needsInput,
+    needsHuman,
+    inReview,
+    submitted,
+    upcomingRounds,
+    lessons,
+    strongMatches,
+    leadsTotal,
+    shortlisted,
+  ] =
+    await Promise.all([
+      safeCount(() => prisma.company.count({ where: { enabled: true } })),
+      profile
+        ? safeCount(() => prisma.jobLead.count({ where: { profileId: profile.id, status: 'NEW' } }))
+        : 0,
+      safeCount(() => prisma.application.count({ where: { status: 'NEEDS_INPUT' } })),
+      safeCount(() => prisma.application.count({ where: { status: 'NEEDS_HUMAN' } })),
+      safeCount(() => prisma.application.count({ where: { status: 'REVIEW' } })),
+      safeCount(() => prisma.application.count({ where: { status: 'SUBMITTED' } })),
+      safeCount(() => prisma.interviewRound.count({ where: { status: 'SCHEDULED' } })),
+      safeCount(() => prisma.lesson.count()),
+      // The headline numbers. "Strong" is the same threshold the lead cards
+      // colour green at, so the front page and the queue never disagree.
+      safeCount(() =>
+        profile
+          ? prisma.jobLead.count({ where: { profileId: profile.id, status: 'NEW', score: { gte: 70 } } })
+          : Promise.resolve(0),
+      ),
+      safeCount(() => (profile ? prisma.jobLead.count({ where: { profileId: profile.id } }) : Promise.resolve(0))),
+      safeCount(() => prisma.jobLead.count({ where: { status: 'SHORTLISTED' } })),
+    ]);
+
+  const schema = await cachedSchemaProblem();
+
+  // Which run to send them to. A banner that says "1 thing needs you" and
+  // makes you go and find it is only half a nudge, so the overview names the
+  // most urgent one. Ordered by how blocking it is: a question stops the run
+  // dead, a review is ready and waiting, a wall needs you in the browser.
+  const urgent = await prisma.application
+    .findFirst({
+      where: { status: { in: ['NEEDS_INPUT', 'NEEDS_HUMAN', 'REVIEW'] } },
+      orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
+      include: { job: { select: { title: true, company: true } } },
+    })
+    .catch(() => null);
+
+  const standingAnswers = profile?.facts.length ?? 0;
+
+  // Ordered: each step is genuinely blocked by the one above it.
+  const setup = [
+    {
+      id: 'schema',
+      label: 'Sync the database',
+      done: schema === null,
+      detail: schema ?? 'Client, schema and tables all match.',
+      href: null,
+    },
+    {
+      id: 'model',
+      label: 'Connect a model',
+      done: isConfigured(),
+      detail: isConfigured()
+        ? `${activeModels().provider} · ${activeModels().writing}`
+        : 'Gemini has a free tier. Paste the key on the settings page — no restart needed.',
+      href: '/settings',
+    },
+    {
+      id: 'profile',
+      label: 'Fill in your profile',
+      done: Boolean(profile?.email && profile?.fullName),
+      detail: profile ? `${profile.fullName} · ${profile.email}` : 'Name, contact and links fill half of every form directly.',
+      href: '/profile',
+    },
+    {
+      id: 'resume',
+      label: 'Upload your resume',
+      done: (profile?.resumes.length ?? 0) > 0,
+      detail: profile?.resumes.length
+        ? `${profile.resumes.length} on file`
+        : 'Attached to applications, and the only thing claims can be grounded in.',
+      href: '/profile',
+    },
+    {
+      id: 'facts',
+      label: 'Answer the standing questions',
+      done: standingAnswers >= 5,
+      detail:
+        standingAnswers >= 5
+          ? `${standingAnswers} recorded`
+          : `${standingAnswers} of ~11 filled. Each one is a popup you will not see later.`,
+      href: '/profile',
+    },
+    {
+      id: 'search',
+      label: 'Turn on job search',
+      done: isFirecrawlConfigured(),
+      detail: isFirecrawlConfigured()
+        ? companies > 0
+          ? `Ready. ${companies} board(s) found so far.`
+          : 'Ready. Hit "Find jobs for me" and it will go looking.'
+        : 'Paste a Firecrawl key on the settings page and it will find openings on its own.',
+      href: '/settings',
+    },
+  ];
+
+  return {
+    setup,
+    ready: setup.slice(0, 4).every((s) => s.done),
+    needsYou: {
+      needsInput,
+      inReview,
+      needsHuman,
+      total: needsInput + inReview + needsHuman,
+      first: urgent
+        ? {
+            id: urgent.id,
+            status: urgent.status,
+            title: urgent.job.title,
+            company: urgent.job.company,
+            reason: urgent.blockedReason,
+          }
+        : null,
+    },
+    counts: {
+      leadsNew,
+      leadsTotal,
+      strongMatches,
+      shortlisted,
+      submitted,
+      upcomingRounds,
+      lessons,
+      answerBank: profile?._count.answers ?? 0,
+      companies,
+    },
+  };
+});
 
 /**
  * What this API key can actually reach.
@@ -414,6 +621,15 @@ app.get('/api/models', async () => {
   }
 });
 
+/** A count that reports zero rather than taking the page down. */
+async function safeCount(fn: () => Promise<number>): Promise<number> {
+  try {
+    return await fn();
+  } catch {
+    return 0;
+  }
+}
+
 async function requireProfile(reply: { code: (n: number) => { send: (b: unknown) => unknown } }) {
   const profile = await prisma.profile.findFirst();
   if (!profile) {
@@ -422,6 +638,25 @@ async function requireProfile(reply: { code: (n: number) => { send: (b: unknown)
   }
   return profile;
 }
+
+// Say it once at boot, loudly, rather than once per request. A stale generated
+// client produces "Cannot read properties of undefined" from whichever endpoint
+// hits the missing model first, which names neither the cause nor the fix.
+//
+// Deliberately not fatal. Most people only ever see this app through the
+// browser, and a process that refuses to start can only tell them "cannot
+// reach the server" - which is a worse message than the real one. So it keeps
+// serving, and /api/overview puts the same sentence at the top of the setup
+// checklist with the command in it.
+const bootProblem = await schemaProblem();
+if (bootProblem) process.stderr.write(`\n${bootProblem}\n\n`);
+
+// Before anything reads a key. Keys saved from the settings page live in the
+// database, and config.ts reads them through an in-memory cache that this
+// fills - so a server that skipped this would quietly behave as though every
+// key you saved had been forgotten.
+const savedSettings = await loadSettings();
+if (savedSettings) process.stdout.write(`Loaded ${savedSettings} setting(s) saved from the UI.\n`);
 
 const recovered = await recoverInterruptedRuns();
 if (recovered) {

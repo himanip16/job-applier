@@ -65,6 +65,8 @@ interface GhJob {
   updated_at?: string;
   content?: string;
   location?: { name?: string };
+  /** The company's own display name. Greenhouse sends it; most boards fill it in. */
+  company_name?: string;
 }
 
 export const greenhouseSource: Source = {
@@ -84,7 +86,9 @@ export const greenhouseSource: Source = {
         url: j.absolute_url,
         ats: 'greenhouse',
         title: j.title,
-        companyName: handle,
+        // The board API carries the real name ("Mercury") alongside the slug
+        // ("mercury"), and a triage queue full of slugs reads like a bug.
+        companyName: j.company_name || handle,
         location: loc || undefined,
         remote: looksRemote(`${loc} ${j.title}`) || looksRemote(description.slice(0, 1200)),
         descriptionText: description,

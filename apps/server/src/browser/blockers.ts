@@ -64,18 +64,57 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
     });
   }
 
-  const signals = await evaluatePage(page, () => {
+  /**
+   * Redirected to somebody's identity provider.
+   *
+   * The cheapest and most reliable login signal there is, and the only one
+   * that catches the common case: Google Careers sends you to
+   * accounts.google.com, whose first screen asks for an email address and
+   * nothing else. There is no password box to find and no "sign in to apply"
+   * text - just a different host. Checked against the live page.
+   */
+  const identityHost =
+    /^(accounts\.google\.com|login\.microsoftonline\.com|login\.live\.com|signin\.aws\.amazon\.com|.*\.okta\.com|.*\.auth0\.com|.*\.onelogin\.com|.*\.pingidentity\.com|github\.com\/login|.*\.oktapreview\.com)$/i;
+
+  let host = '';
+  try {
+    host = new URL(page.url()).hostname;
+  } catch {
+    host = '';
+  }
+  const onIdentityProvider = identityHost.test(host);
+
+  const signals = await page.evaluate(() => {
     const text = document.body?.innerText?.toLowerCase() ?? '';
     const has = (re: RegExp) => re.test(text);
+
+    /**
+     * A password box you can actually see.
+     *
+     * Presence in the DOM is not enough. Applications that render every screen
+     * up front and hide all but one keep the sign-in fields mounted for the
+     * whole session, so a plain querySelector reports a login wall on every
+     * step - including the ones after you have signed in, which leaves the run
+     * stuck at a wall it already cleared.
+     */
+    const visiblePassword = Array.from(
+      document.querySelectorAll<HTMLElement>('input[type="password"]'),
+    ).some((el) =>
+      typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null,
+    );
+
     return {
       login:
-        !!document.querySelector('input[type="password"]') ||
+        visiblePassword ||
         has(/sign in to (continue|apply)/) ||
-        has(/log ?in to your account/),
+        has(/log ?in to your account/) ||
+        // Google's first sign-in screen is an email box and this sentence.
+        has(/use your google account/) ||
+        has(/sign in with your (work|school|microsoft|google) account/),
       createAccount:
         has(/create (an )?account to apply/) ||
         has(/register to (continue|apply)/) ||
-        (!!document.querySelector('input[type="password"]') && has(/confirm password/)),
+        (visiblePassword && has(/confirm password/)),
       emailVerification:
         has(/verify your email/) ||
         has(/we sent (you )?a (verification )?(code|link)/) ||
@@ -99,7 +138,15 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
       humanCanClear: true,
     });
   }
-  if (signals.createAccount) {
+  if (onIdentityProvider) {
+    found.push({
+      kind: 'LOGIN_REQUIRED',
+      detail:
+        `This application handed off to ${host} to sign in. Do it once in the open browser - the ` +
+        'session profile keeps you signed in for every later application on the same site.',
+      humanCanClear: true,
+    });
+  } else if (signals.createAccount) {
     found.push({
       kind: 'ACCOUNT_CREATION',
       detail: 'This ATS requires an account before it will accept an application.',
@@ -147,9 +194,25 @@ export async function detectSubmissionOutcome(
   const state = await evaluatePage(page, () => {
     const text = document.body?.innerText ?? '';
     const lower = text.toLowerCase();
+
+    /**
+     * On screen, not merely in the document.
+     *
+     * A wizard that renders every screen up front and hides all but one keeps
+     * the earlier screens' error messages and invalid fields mounted for the
+     * rest of the session. Counting those reports a stale "Phone is required"
+     * from step one as the reason a submission on step five failed - which is
+     * both wrong and impossible to debug from the message.
+     */
+    const onScreen = (el: Element) =>
+      typeof (el as HTMLElement).checkVisibility === 'function'
+        ? (el as HTMLElement).checkVisibility()
+        : (el as HTMLElement).offsetParent !== null;
+
     const errorNodes = Array.from(
       document.querySelectorAll('[aria-invalid="true"], .error:not(:empty), [role="alert"]:not(:empty), .field-error'),
     )
+      .filter(onScreen)
       .map((n) => (n.textContent ?? '').replace(/\s+/g, ' ').trim())
       .filter((t) => t.length > 0 && t.length < 300);
 
@@ -164,6 +227,7 @@ export async function detectSubmissionOutcome(
       ),
     )
       .filter((el) => typeof el.checkValidity === 'function' && !el.validity.valid)
+      .filter(onScreen)
       .map((el) => {
         const name = el.getAttribute('aria-label') || el.getAttribute('name') || el.id || 'field';
         return `${name}: ${el.validationMessage || 'invalid'}`;

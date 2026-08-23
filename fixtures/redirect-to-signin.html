@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>Software Engineer — Careers</title></head>
+<body>
+<!--
+  What Google Careers actually does, reproduced.
+
+  The Apply link is a plain <a target="_self"> that navigates to an /apply URL,
+  which immediately redirects again to an identity provider. Two navigations
+  back to back, and the first thing the engine does on arriving at a step is
+  read the page — which is how a real run died with "Execution context was
+  destroyed, most likely because of a navigation".
+
+  The sign-in it lands on has no password field and no "sign in to apply" text.
+  Only the host gives it away.
+-->
+<h1>Software Engineer, YouTube, Full Stack</h1>
+<p>Google · Bengaluru, Karnataka, India</p>
+<p>Minimum qualifications: Bachelor's degree or equivalent practical experience.</p>
+<a href="apply-redirect.html" target="_self">Apply</a>
+</body>
+</html>

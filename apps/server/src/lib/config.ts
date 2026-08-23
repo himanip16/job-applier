@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { secret } from './secrets.js';
 
 /**
  * Repo root, derived from this file rather than from cwd.
@@ -26,11 +27,26 @@ export const config = {
   port: num(process.env.PORT, 8787),
   databaseUrl: process.env.DATABASE_URL ?? '',
 
-  /** 'anthropic' | 'gemini', or unset to infer from whichever key is present. */
-  llmProvider: (process.env.LLM_PROVIDER as 'anthropic' | 'gemini' | undefined) || undefined,
+  /**
+   * The four values below are getters, not constants.
+   *
+   * They are the ones you can change from the settings page, and a getter is
+   * what lets a saved key take effect on the next request instead of the next
+   * restart - without changing a single one of the ~15 call sites that read
+   * `config.geminiApiKey` and friends.
+   */
 
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
-  geminiApiKey: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? '',
+  /** 'anthropic' | 'gemini', or unset to infer from whichever key is present. */
+  get llmProvider(): 'anthropic' | 'gemini' | undefined {
+    return (secret('LLM_PROVIDER') as 'anthropic' | 'gemini' | undefined) || undefined;
+  },
+
+  get anthropicApiKey(): string {
+    return secret('ANTHROPIC_API_KEY');
+  },
+  get geminiApiKey(): string {
+    return secret('GEMINI_API_KEY', 'GOOGLE_API_KEY');
+  },
 
   /**
    * Model slots, per provider.
@@ -49,6 +65,21 @@ export const config = {
   geminiModel: process.env.GEMINI_MODEL ?? 'gemini-3.5-flash',
   geminiModelCheap: process.env.GEMINI_MODEL_CHEAP ?? 'gemini-3.5-flash',
 
+  /**
+   * Firecrawl, for finding openings without being told where to look.
+   *
+   * Optional. Without it the per-company crawler still works, you just have to
+   * name the companies yourself.
+   */
+  get firecrawlApiKey(): string {
+    return secret('FIRECRAWL_API_KEY');
+  },
+  firecrawlBaseUrl: (process.env.FIRECRAWL_BASE_URL ?? 'https://api.firecrawl.dev').replace(/\/+$/, ''),
+  /** Queries per search run. Each costs roughly two Firecrawl credits. */
+  jobSearchQueries: num(process.env.JOB_SEARCH_QUERIES, 6),
+  /** Results requested per query. */
+  jobSearchResultsPerQuery: num(process.env.JOB_SEARCH_RESULTS_PER_QUERY, 10),
+
   headless: bool(process.env.HEADLESS, false),
   /**
    * Point at a Chromium you already have. Useful on images where Playwright's
@@ -60,6 +91,14 @@ export const config = {
   actionDelayMs: num(process.env.ACTION_DELAY_MS, 120),
 
   requireReview: bool(process.env.REQUIRE_REVIEW, true),
+  /**
+   * How many screens of a wizard to walk before giving up.
+   *
+   * Workday's longest standard flow is six; twelve leaves room for a rejected
+   * step being re-read and for tenants that split Voluntary Disclosures in
+   * two. It exists to stop a loop, not to limit legitimate applications.
+   */
+  maxApplicationSteps: num(process.env.MAX_APPLICATION_STEPS, 12),
   maxSubmitsPerHour: num(process.env.MAX_SUBMITS_PER_HOUR, 10),
   answerConfidenceThreshold: num(process.env.ANSWER_CONFIDENCE_THRESHOLD, 0.82),
   memoryReuseThreshold: num(process.env.MEMORY_REUSE_THRESHOLD, 0.86),

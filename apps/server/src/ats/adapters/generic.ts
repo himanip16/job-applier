@@ -1,5 +1,6 @@
 import type { AtsAdapter, JobMeta } from '../types.js';
 import { extractFields } from '../../browser/extract.js';
+import { openApplicationForm } from '../../browser/openForm.js';
 
 /**
  * Fallback for anything unrecognised: a company's own careers page, a smaller
@@ -18,20 +19,7 @@ export const genericAdapter: AtsAdapter = {
   },
 
   async openApplicationForm(page, url) {
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
-
-    // If the landing page has no form, follow the most apply-looking link once.
-    const hasForm = await page.locator('form input, form textarea').count();
-    if (!hasForm) {
-      const apply = page
-        .getByRole('link', { name: /apply|application/i })
-        .or(page.getByRole('button', { name: /apply|application/i }));
-      if (await apply.count()) {
-        await apply.first().click({ timeout: 8000 }).catch(() => {});
-        await page.waitForLoadState('domcontentloaded').catch(() => {});
-      }
-    }
-    await page.waitForTimeout(1000);
+    await openApplicationForm(page, url);
   },
 
   async readJobMeta(page): Promise<JobMeta> {

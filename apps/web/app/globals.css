@@ -47,7 +47,29 @@ header.top .inner {
   display: flex; align-items: center; gap: 1.25rem;
 }
 header.top strong { font-size: 1rem; letter-spacing: -.01em; }
-header.top nav { display: flex; gap: 1rem; margin-left: auto; font-size: .9rem; }
+header.top nav {
+  display: flex; gap: .15rem; margin-left: auto; font-size: .875rem;
+  flex-wrap: wrap; justify-content: flex-end;
+}
+header.top nav a {
+  color: var(--muted); text-decoration: none;
+  padding: .3rem .55rem; border-radius: 6px;
+  display: inline-flex; align-items: center; gap: .35rem;
+  white-space: nowrap;
+}
+header.top nav a:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
+header.top nav a.active { color: var(--text); background: var(--panel-2); font-weight: 600; }
+/* The badge is how you discover a run is sitting waiting for an answer. */
+.nav-badge {
+  background: var(--warn); color: #1a1300;
+  font-size: .7rem; font-weight: 700; line-height: 1;
+  padding: .15rem .35rem; border-radius: 999px; min-width: 1.1rem; text-align: center;
+}
+
+@media (max-width: 720px) {
+  header.top .inner { flex-direction: column; align-items: flex-start; gap: .5rem; }
+  header.top nav { margin-left: 0; justify-content: flex-start; }
+}
 
 .panel {
   background: var(--panel);

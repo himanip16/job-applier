@@ -101,6 +101,8 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
         )}
       </div>
 
+      {detail.status === 'NEEDS_HUMAN' && <WallPanel applicationId={id} detail={detail} onDone={refresh} />}
+
       {open.length > 0 && <QuestionModal applicationId={id} questions={open} onDone={refresh} />}
 
       {detail.status === 'REVIEW' && <ReviewPanel applicationId={id} detail={detail} onDone={refresh} />}
@@ -295,6 +297,66 @@ function renderInput(
       value={typeof value === 'string' ? value : ''}
       onChange={(e) => onChange(e.target.value)}
     />
+  );
+}
+
+/**
+ * The run is stopped at something only a person can clear.
+ *
+ * A sign-in, an account, an emailed code, a captcha. The browser is still open
+ * on that exact page and the wizard is still half-filled behind it — so the
+ * useful thing here is not an error message but a button that says "done,
+ * keep going".
+ */
+function WallPanel({
+  applicationId,
+  detail,
+  onDone,
+}: {
+  applicationId: string;
+  detail: { blockedReason: string | null };
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function send(carryOn: boolean) {
+    setBusy(carryOn ? 'go' : 'stop');
+    setError(null);
+    try {
+      await api(`/api/applications/${applicationId}/continue`, {
+        method: 'POST',
+        body: JSON.stringify({ carryOn }),
+      });
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="panel" style={{ borderColor: 'var(--warn)' }}>
+      <h2>Waiting for you in the browser</h2>
+      <p className="sub" style={{ maxWidth: '44rem' }}>
+        {detail.blockedReason ?? 'Something on the page needs a person.'}
+      </p>
+      <p className="small muted" style={{ maxWidth: '44rem' }}>
+        Deal with it in the browser window that is already open — do not close it. The application
+        is filled in behind that page and picks up from exactly where it stopped. Signing in is
+        remembered, so you should only have to do it once per site.
+      </p>
+      {error && <div className="notice bad">{error}</div>}
+      <div className="row" style={{ gap: '.5rem', marginTop: '.6rem' }}>
+        <button className="primary" disabled={busy !== null} onClick={() => send(true)}>
+          {busy === 'go' ? 'Continuing…' : "Done — carry on"}
+        </button>
+        <button className="danger" disabled={busy !== null} onClick={() => send(false)}>
+          Cancel this application
+        </button>
+      </div>
+    </div>
   );
 }
 
