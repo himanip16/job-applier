@@ -5,7 +5,14 @@ import { prisma, type Prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
 import { screenshot } from '../browser/session.js';
-import { fillField, attachFile, verifyFilled, FillError } from '../browser/fill.js';
+import {
+  fillField,
+  attachFile,
+  verifyFilled,
+  inspectControl,
+  alreadyHolds,
+  FillError,
+} from '../browser/fill.js';
 import { detectBlockers } from '../browser/blockers.js';
 import {
   detectAutofillPrompt,
@@ -257,6 +264,36 @@ export async function walkApplication(args: {
         continue;
       }
       const wanted = answer.value as string | string[];
+
+      // Is the site holding this field for us?
+      //
+      // Boards that parse the resume up front fill the identity fields from it
+      // and then disable them, so the parse cannot be contradicted. Driving one
+      // costs the full fill timeout and then reports a failure on a field that
+      // was already right - three of those in a row put a minute on the clock
+      // and three errors on the review screen.
+      const state = await inspectControl(page, field);
+      if (state.locked) {
+        const correct = alreadyHolds(state.current, wanted);
+        plan.push({
+          ...entry(field, answer, correct),
+          verified: state.current,
+          error: correct
+            ? undefined
+            : `The site locked this field and it holds ${
+                state.current ? `"${truncate(state.current)}"` : 'nothing'
+              }.`,
+        });
+        await bus.emitEvent(
+          applicationId,
+          correct ? 'LOG' : 'WARNING',
+          correct
+            ? `"${field.label}" is locked by the site and already holds the right value.`
+            : `"${field.label}" is locked by the site and cannot be changed from here.`,
+        );
+        if (!correct && field.required) unfilledRequired.push(field.label);
+        continue;
+      }
 
       const attempt = async (target: FormField) => {
         await fillField(page, target, wanted);

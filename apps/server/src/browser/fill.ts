@@ -43,6 +43,71 @@ export async function fillField(page: Page, field: FormField, value: string | st
   }
 }
 
+/**
+ * What state is this control actually in, before we try to drive it?
+ *
+ * Several applicant tracking systems parse the resume up front, fill the
+ * identity fields from it, and then **disable** them so the parse cannot be
+ * contradicted. Playwright's `fill` has no way to know that is deliberate: it
+ * waits for the element to become editable, retries for the full timeout, and
+ * eventually reports a failure on a field that was already correct. A live run
+ * against Roku's board spent sixty seconds doing that to First Name, Last Name
+ * and Email in turn, and then reported all three as errors.
+ *
+ * One cheap read tells us to leave them alone.
+ */
+export interface ControlState {
+  /** The site will not let anyone change this. */
+  locked: boolean;
+  /** What it currently holds, as the page reports it. */
+  current: string;
+  exists: boolean;
+}
+
+export async function inspectControl(page: Page, field: FormField): Promise<ControlState> {
+  try {
+    const el = page.locator(field.selector).first();
+    await el.waitFor({ state: 'attached', timeout: 2_000 });
+    return await el.evaluate((node) => {
+      const input = node as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+      const readOnly = 'readOnly' in input ? Boolean(input.readOnly) : false;
+      return {
+        locked: Boolean(input.disabled) || readOnly || input.getAttribute('aria-disabled') === 'true',
+        current: 'value' in input ? String(input.value ?? '') : (node.textContent ?? '').trim(),
+        exists: true,
+      };
+    });
+  } catch {
+    return { locked: false, current: '', exists: false };
+  }
+}
+
+/**
+ * Is the value already there, allowing for the site having masked it?
+ *
+ * Roku's board renders the parsed email as `h**********8@gmail.com`. That is
+ * the right address with its middle hidden, and comparing it literally against
+ * the profile says the field is wrong when it is exactly right - which would
+ * send a perfectly good application to a human for no reason.
+ */
+export function alreadyHolds(current: string, wanted: string | string[]): boolean {
+  const want = Array.isArray(wanted) ? wanted.join(', ') : wanted;
+  const a = normalizeLabel(current);
+  const b = normalizeLabel(want);
+  if (!a || !b) return false;
+  if (a === b) return true;
+
+  const masked = current.match(/^(.*?)\*+(.*)$/);
+  if (masked) {
+    const head = normalizeLabel(masked[1] ?? '');
+    const tail = normalizeLabel(masked[2] ?? '');
+    // Both ends have to agree, and there has to be something to agree on -
+    // otherwise "****" matches everything.
+    if ((head || tail) && b.startsWith(head) && b.endsWith(tail)) return true;
+  }
+  return false;
+}
+
 async function fillNative(page: Page, field: FormField, value: string | string[]): Promise<void> {
   const el = page.locator(field.selector).first();
   await el.waitFor({ state: 'attached', timeout: 10_000 });
@@ -170,7 +235,24 @@ export function bestOption(
   // boundaries, so "us" does not select "Belarus".
   const boundary = new RegExp(`(^|[^a-z0-9])${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`);
   const contained = norm.find((c) => boundary.test(c.label));
-  return contained?.o ?? null;
+  if (contained) return contained.o;
+
+  /**
+   * Hierarchical values, narrowed one level at a time.
+   *
+   * A profile says "Bengaluru, Karnataka, India" and the board lists
+   * "Bengaluru, India" - no tier above matches, and the field fails. Dropping
+   * the least significant part and trying again is what a person would do, and
+   * it is safe because each attempt still has to satisfy the tiers above:
+   * "Bengaluru" is matched as a whole word, never as a fragment.
+   */
+  const parts = want.split(',').map((p) => p.trim()).filter(Boolean);
+  for (let keep = parts.length - 1; keep >= 1; keep--) {
+    const shorter = parts.slice(0, keep).join(', ');
+    const hit = bestOption(options, shorter);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 async function fillReactSelect(page: Page, field: FormField, value: string | string[]): Promise<void> {

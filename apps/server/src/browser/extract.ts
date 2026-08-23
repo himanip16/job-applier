@@ -45,8 +45,26 @@ const EXTRACTOR = () => {
   // star, dagger. All of them are decoration, none of them are part of the
   // question, and leaving them in poisons both display and label matching.
   const REQUIRED_MARK = /[*\u2731\uFF0A\u2020\u271A]+\s*$/;
+  /**
+   * Decoration that is not part of the question.
+   *
+   * A live Roku posting produced the label "First Name (required) d1a61ede" -
+   * the word (required), which we already track as a boolean, and a per-render
+   * uid the board stamps into the label element. Both make the review screen
+   * ugly, and the uid is worse than that: it changes when the field
+   * re-renders, so anything matching a field by its label stops finding it.
+   */
+  const LABEL_NOISE =
+    /\s*(\(\s*(required|optional|mandatory)\s*\)|\b[0-9a-f]{8,}\b)\s*/gi;
+
   const textOf = (el: Element | null): string =>
-    (el?.textContent ?? '').replace(/\s+/g, ' ').trim().replace(REQUIRED_MARK, '').trim();
+    (el?.textContent ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(REQUIRED_MARK, '')
+      .replace(LABEL_NOISE, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
   const labelFor = (el: HTMLElement): string => {
     const aria = el.getAttribute('aria-label');
