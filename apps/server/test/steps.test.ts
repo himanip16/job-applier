@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -342,6 +343,152 @@ describe('being handed off to an identity provider', () => {
     await page.click('#signin');
     expect(await page.locator('input[type="password"]').count()).toBe(1);
     expect((await detectBlockers(page)).some((b) => b.kind === 'LOGIN_REQUIRED')).toBe(false);
+    await page.close();
+  }, 60_000);
+});
+
+describe('Apply navigates, then redirects again', () => {
+  /**
+   * The live Google Careers failure, reproduced.
+   *
+   * A real run against a Google job died with "page.evaluate: Execution
+   * context was destroyed, most likely because of a navigation". Its Apply
+   * link navigates and the landing page immediately redirects to a sign-in, so
+   * the first read of the step loop happened between two navigations.
+   */
+  it('does not blow up reading a page mid-redirect', async () => {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/redirect-to-signin.html`, { waitUntil: 'domcontentloaded' });
+
+    // Click and read immediately, with no wait at all — the race, deliberately.
+    await page.click('a');
+    const sig = await pageSignature(page);
+    const progress = await readStepProgress(page);
+
+    expect(typeof sig).toBe('string');
+    expect(progress).toBeTruthy();
+    await page.close();
+  }, 60_000);
+
+  it('reports the sign-in as a wall to clear, not as a missing form', async () => {
+    // The other half. Before this, openApplicationForm ended the run with
+    // "Could not reach an application form on this page." — true, useless, and
+    // not resumable. A wall is resumable.
+    const { openApplicationForm, NeedsHumanError: NHE } = await import('../src/browser/openForm.js');
+    const page = await browser.newPage();
+
+    const err = await openApplicationForm(page, `${baseUrl}/redirect-to-signin.html`).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(NHE);
+    expect((err as InstanceType<typeof NHE>).kind).toBe('LOGIN_REQUIRED');
+    expect((err as Error).message).toMatch(/sign in|signed in/i);
+    // And it did follow the Apply link rather than giving up on the job page.
+    expect(page.url()).toMatch(/signin-identifier/);
+    await page.close();
+  }, 60_000);
+
+  it('settles a redirect chain before reading', async () => {
+    const { settle } = await import('../src/browser/steps.js');
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/apply-redirect.html`, { waitUntil: 'domcontentloaded' });
+
+    await settle(page);
+    expect(page.url()).toMatch(/signin-identifier/);
+    expect(await pageSignature(page)).toMatch(/signin-identifier/);
+    await page.close();
+  }, 60_000);
+});
+
+describe('a resume widget is not an autofill prompt', () => {
+  /**
+   * A real run against a Postman posting on Greenhouse burned all twelve of
+   * its steps clicking "Enter manually" — part of the resume field's
+   * Attach / Dropbox / Google Drive / Enter manually widget, not an offer to
+   * fill the application from a resume.
+   */
+  it('ignores Greenhouse’s "Enter manually" button', async () => {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/greenhouse-like.html`, { waitUntil: 'domcontentloaded' });
+
+    // The button really is there, so this is not passing by accident.
+    expect(await page.locator('#resume-manual').count()).toBe(1);
+    expect(await detectAutofillPrompt(page)).toBeNull();
+    await page.close();
+  }, 60_000);
+
+  it('still sees a real prompt, which offers to do the filling', async () => {
+    const page = await openAt('?signedin=1');
+    const prompt = await detectAutofillPrompt(page);
+    expect(prompt?.autofillSelector).toBeTruthy();
+    await page.close();
+  }, 60_000);
+
+  it('never reports a prompt with no autofill side', async () => {
+    // The guard, stated directly: there is no choice to make unless the site
+    // has offered to do the filling.
+    const page = await browser.newPage();
+    await page.route('**/manual-only', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<html><body><h1>Apply</h1><button>Enter manually</button><button>Apply manually</button></body></html>',
+      }),
+    );
+    await page.goto(`${baseUrl}/manual-only`);
+    expect(await detectAutofillPrompt(page)).toBeNull();
+    await page.close();
+  }, 60_000);
+});
+
+describe('choosing how to supply the resume', () => {
+  /**
+   * Greenhouse offers Attach / Dropbox / Google Drive / Enter manually. Only
+   * the first is something this app can satisfy — the other two want an
+   * account it does not have, and the fourth wants resume text typed in.
+   */
+  it('clicks Attach and hands the file to the chooser it opens', async () => {
+    const { attachFile } = await import('../src/browser/fill.js');
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/greenhouse-like.html`, { waitUntil: 'domcontentloaded' });
+
+    const resume = path.join(
+      await mkdtemp(path.join(tmpdir(), 'ja-attach-')),
+      'resume.txt',
+    );
+    await writeFile(resume, 'Himani Patel — Staff Backend Engineer');
+
+    await attachFile(page, '#resume', resume);
+
+    const name = await page.evaluate(
+      () => (document.getElementById('resume') as HTMLInputElement).files?.[0]?.name ?? '',
+    );
+    expect(name).toBe('resume.txt');
+    await page.close();
+  }, 60_000);
+
+  it('still writes straight to a plain hidden input when there is no picker', async () => {
+    // A lone "Attach" label next to a file input is just that input's styling,
+    // not a choice of source, and clicking it buys nothing.
+    const { attachFile } = await import('../src/browser/fill.js');
+    const page = await browser.newPage();
+    await page.route('**/plain-upload', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<html><body><label for="cv">Attach</label><input id="cv" type="file" /></body></html>',
+      }),
+    );
+    await page.goto(`${baseUrl}/plain-upload`);
+
+    const cv = path.join(await mkdtemp(path.join(tmpdir(), 'ja-attach2-')), 'cv.txt');
+    await writeFile(cv, 'cv');
+    await attachFile(page, '#cv', cv);
+
+    const name = await page.evaluate(
+      () => (document.getElementById('cv') as HTMLInputElement).files?.[0]?.name ?? '',
+    );
+    expect(name).toBe('cv.txt');
     await page.close();
   }, 60_000);
 });

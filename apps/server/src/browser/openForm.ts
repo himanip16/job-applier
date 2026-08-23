@@ -1,4 +1,6 @@
 import type { Page } from 'playwright';
+import type { BlockerKind } from '@ja/shared';
+import { detectBlockers } from './blockers.js';
 
 /**
  * Getting from a job URL to a form you can actually fill.
@@ -29,7 +31,11 @@ import type { Page } from 'playwright';
 export class NeedsHumanError extends Error {
   constructor(
     message: string,
-    readonly kind: 'CAPTCHA' | 'LOGIN_REQUIRED' | 'UNKNOWN',
+    // The full blocker vocabulary, not a subset: an account wall and an
+    // emailed verification code are different problems from a captcha, and
+    // flattening them into LOGIN_REQUIRED would make the run tell the person
+    // to do the wrong thing.
+    readonly kind: BlockerKind,
   ) {
     super(message);
     this.name = 'NeedsHumanError';
@@ -234,6 +240,25 @@ export async function openApplicationForm(
 
   // 4. One last look, in case it mounted late.
   if (await formReady(page, minInputs, opts.formSelectors, 8000)) return;
+
+  // 5. Before declaring there is no form: is there a wall in front of it?
+  //
+  // Clicking Apply very often lands on a sign-in rather than on the
+  // application - Google Careers redirects to accounts.google.com, and every
+  // account-based ATS does the equivalent. Reporting that as "could not reach
+  // an application form" is technically true and completely unhelpful: it
+  // names neither the cause nor the one thing the person can do about it. It
+  // is also the difference between a run that ends and a run that pauses,
+  // because a wall is resumable and a missing form is not.
+  const wall = (await detectBlockers(page)).find(
+    (b) =>
+      b.humanCanClear &&
+      (b.kind === 'LOGIN_REQUIRED' ||
+        b.kind === 'ACCOUNT_CREATION' ||
+        b.kind === 'EMAIL_VERIFICATION' ||
+        b.kind === 'CAPTCHA'),
+  );
+  if (wall) throw new NeedsHumanError(wall.detail, wall.kind);
 
   throw new NoFormError(
     'Could not reach an application form on this page.',

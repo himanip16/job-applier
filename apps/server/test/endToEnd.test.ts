@@ -354,13 +354,10 @@ describe('a multi-step application', () => {
     const page = activePageFor('workday-like.html');
     await page.click('#signin');
 
-    // ...and tells the run to carry on. The old engine had no way back from
-    // here; the run had simply ended.
-    const { continueRun } = await import('../src/engine/runner.js');
-    // The run may take a moment to register its waiter after announcing.
-    for (let i = 0; i < 40 && !continueRun(app.id, true); i++) {
-      await new Promise((r) => setTimeout(r, 100));
-    }
+    // ...and that is the whole action. Nothing tells the run to carry on: it
+    // is watching the page and notices the wall has gone. The old engine had
+    // no way back from here at all; requiring a second "I'm done" click would
+    // be one more thing to remember.
 
     // ---- 3. it walks the rest of the wizard on its own --------------------
     //
@@ -419,7 +416,48 @@ describe('a multi-step application', () => {
       | { value: string; source: string }
       | undefined;
     expect(phone?.value).toBe('+1 415 555 0132');
+
+    // And it resumed on its own, rather than because something told it to.
+    const events = await prisma.applicationEvent.findMany({
+      where: { applicationId: app.id },
+      select: { type: true, message: true },
+    });
+    const messages = events.map((e) => e.message);
+    expect(messages.some((m) => /carrying on by itself/i.test(m))).toBe(true);
+    // ...and it asked for the one action first, rather than parking quietly.
+    expect(events.some((e) => e.type === 'NEEDS_YOU')).toBe(true);
   }, 180_000);
+
+  it('can still be cancelled at the wall instead of continued', async () => {
+    // The manual half of the race. Auto-detection covers walls that visibly
+    // clear; this covers deciding not to bother, and walls it cannot see the
+    // end of.
+    inferMock.mockResolvedValue({
+      answerable: false, value: '', values: [], confidence: 0, evidence: '',
+      missingInformation: 'Not stated.',
+    });
+    coverLetterMock.mockResolvedValue({ body: 'letter', claimsMade: [], unsupportedClaims: [] });
+
+    const app = await createApplication('workday-like.html');
+    const run = runApplication(app.id);
+
+    await waitForStatus(app.id, 'NEEDS_HUMAN');
+
+    const { continueRun } = await import('../src/engine/runner.js');
+    let delivered = false;
+    for (let i = 0; i < 40 && !delivered; i++) {
+      delivered = continueRun(app.id, false, 'Not worth the account.');
+      if (!delivered) await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(delivered).toBe(true);
+
+    await waitForStatus(app.id, 'CANCELLED');
+    await run;
+
+    const done = await prisma.application.findUniqueOrThrow({ where: { id: app.id } });
+    expect(done.blockedReason).toMatch(/Not worth the account/);
+    expect(done.submittedAt).toBeNull();
+  }, 120_000);
 });
 
 /** Plausible answers for whatever the wizard asks that the profile cannot cover. */

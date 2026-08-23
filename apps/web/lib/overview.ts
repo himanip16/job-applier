@@ -19,7 +19,20 @@ import { api } from './api';
 export interface Overview {
   setup: { id: string; label: string; done: boolean; detail: string; href: string | null }[];
   ready: boolean;
-  needsYou: { needsInput: number; inReview: number; needsHuman: number; total: number };
+  needsYou: {
+    needsInput: number;
+    inReview: number;
+    needsHuman: number;
+    total: number;
+    /** The one to go to, so a nudge can be a single click. */
+    first: {
+      id: string;
+      status: string;
+      title: string;
+      company: string;
+      reason: string | null;
+    } | null;
+  };
   counts: {
     leadsNew: number;
     leadsTotal: number;

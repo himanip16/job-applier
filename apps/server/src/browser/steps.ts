@@ -19,6 +19,61 @@ import type { Page } from 'playwright';
  * against fixtures without a database.
  */
 
+
+// ------------------------------------------------------------------ reading
+
+/**
+ * Is this the page moving under us, rather than something being wrong?
+ *
+ * Playwright throws when a `page.evaluate` is in flight across a navigation.
+ * Against a wizard that is the normal case, not an error: pressing Continue
+ * and then reading the page is exactly the race. Google Careers made this
+ * unmissable - its Apply link navigates and then redirects again to
+ * accounts.google.com, so the first read of the loop landed in the middle of
+ * two navigations and the run died with "Execution context was destroyed".
+ */
+export function isNavigationRace(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /Execution context was destroyed|frame was detached|Target closed|Most likely the page has been closed|navigating and changing the content/i.test(
+    message,
+  );
+}
+
+/**
+ * Let the page finish arriving before reading it.
+ *
+ * Deliberately forgiving: a load state that never settles is common on pages
+ * that poll, and waiting the full timeout for one is better than throwing.
+ */
+export async function settle(page: Page, timeoutMs = 15_000): Promise<void> {
+  await page.waitForLoadState('domcontentloaded', { timeout: timeoutMs }).catch(() => {});
+  // A short quiet period catches the second hop of a redirect chain, which is
+  // the case that actually bit us.
+  await page.waitForLoadState('networkidle', { timeout: 3_000 }).catch(() => {});
+}
+
+/**
+ * Read the page, and if it moved while we were reading, settle and read again.
+ *
+ * One retry, not a loop: a page that is still navigating after settling is a
+ * page doing something unusual, and quietly retrying forever would turn that
+ * into a hang instead of a message.
+ */
+async function read<T>(page: Page, what: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await what();
+  } catch (err) {
+    if (!isNavigationRace(err)) throw err;
+    await settle(page);
+    try {
+      return await what();
+    } catch (again) {
+      if (!isNavigationRace(again)) throw again;
+      return fallback;
+    }
+  }
+}
+
 // ---------------------------------------------------------------- signature
 
 /**
@@ -33,7 +88,7 @@ import type { Page } from 'playwright';
  * and re-renders itself.
  */
 export async function pageSignature(page: Page): Promise<string> {
-  return page.evaluate(() => {
+  return read(page, () => page.evaluate(() => {
     const visible = (el: Element) =>
       typeof (el as HTMLElement).checkVisibility === 'function'
         ? (el as HTMLElement).checkVisibility()
@@ -67,7 +122,7 @@ export async function pageSignature(page: Page): Promise<string> {
       .join(',');
 
     return `${location.pathname}#${heading}#${names}`;
-  });
+  }), '');
 }
 
 /** Wait until the page looks like a different step, or give up. */
@@ -110,7 +165,7 @@ export interface StepProgress {
  * Everything here is best-effort and all of it is allowed to come back null.
  */
 export async function readStepProgress(page: Page): Promise<StepProgress> {
-  return page.evaluate(() => {
+  return read(page, () => page.evaluate(() => {
     const text = (document.body?.innerText ?? '').slice(0, 4000);
 
     // "Step 2 of 5", "2 of 5", "Page 2/5"
@@ -167,7 +222,7 @@ export async function readStepProgress(page: Page): Promise<StepProgress> {
       return { index: null, total: null, label };
     }
     return { index, total, label };
-  });
+  }), { index: null, total: null, label: null });
 }
 
 // ------------------------------------------------------------------ advance
@@ -199,7 +254,7 @@ const AVOID_TEXT =
   /(back|previous|cancel|close|clear|reset|save (for later|draft|as draft)|sign out|log ?out|delete|remove|add another|withdraw|print)/i;
 
 export async function findAdvanceControl(page: Page): Promise<AdvanceControl | null> {
-  const found = await page.evaluate(
+  const found = await read(page, () => page.evaluate(
     ({ submitSrc, nextSrc, avoidSrc }) => {
       const SUBMIT = new RegExp(submitSrc, 'i');
       const NEXT = new RegExp(nextSrc, 'i');
@@ -267,7 +322,7 @@ export async function findAdvanceControl(page: Page): Promise<AdvanceControl | n
       return null;
     },
     { submitSrc: SUBMIT_TEXT.source, nextSrc: NEXT_TEXT.source, avoidSrc: AVOID_TEXT.source },
-  );
+  ), null);
 
   return found;
 }
@@ -293,7 +348,7 @@ export interface AutofillPrompt {
  * recorded with their own provenance and never silently outrank the profile.
  */
 export async function detectAutofillPrompt(page: Page): Promise<AutofillPrompt | null> {
-  return page.evaluate(() => {
+  return read(page, () => page.evaluate(() => {
     const visible = (el: HTMLElement) =>
       typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null;
 
@@ -318,7 +373,20 @@ export async function detectAutofillPrompt(page: Page): Promise<AutofillPrompt |
       if (!autofill && AUTOFILL.test(text)) autofill = el;
       if (!manual && MANUAL.test(text)) manual = el;
     }
-    if (!autofill && !manual) return null;
+
+    /**
+     * No autofill offered means there is no choice to make.
+     *
+     * This is the whole guard, and it was missing. Greenhouse's resume field
+     * offers "Attach / Dropbox / Google Drive / Enter manually" - a widget for
+     * choosing how to supply the resume, not a question about how to fill the
+     * application. Matching the lone "Enter manually" made the engine click it
+     * on every pass of the loop and get nowhere; a real run against a Postman
+     * posting spent all twelve of its steps doing exactly that.
+     *
+     * A prompt only exists when the site has offered to do the filling.
+     */
+    if (!autofill) return null;
 
     document.querySelectorAll('[data-ja-autofill]').forEach((el) => el.removeAttribute('data-ja-autofill'));
     const mark = (el: HTMLElement | null, token: string) => {
@@ -336,7 +404,7 @@ export async function detectAutofillPrompt(page: Page): Promise<AutofillPrompt |
       autofillSelector: mark(autofill, 'yes'),
       manualSelector: mark(manual, 'no'),
     };
-  });
+  }), null);
 }
 
 // --------------------------------------------------------------- validation
@@ -349,7 +417,7 @@ export async function detectAutofillPrompt(page: Page): Promise<AutofillPrompt |
  * the phone number is in the wrong format.
  */
 export async function readValidationErrors(page: Page): Promise<string[]> {
-  return page.evaluate(() => {
+  return read(page, () => page.evaluate(() => {
     const visible = (el: Element) =>
       typeof (el as HTMLElement).checkVisibility === 'function'
         ? (el as HTMLElement).checkVisibility()
@@ -380,12 +448,12 @@ export async function readValidationErrors(page: Page): Promise<string[]> {
     }
 
     return [...out].slice(0, 12);
-  });
+  }), []);
 }
 
 /** Is there anything on this step for us to fill, or is it purely a gate? */
 export async function looksLikeAGate(page: Page): Promise<boolean> {
-  return page.evaluate(() => {
+  return read(page, () => page.evaluate(() => {
     const visible = (el: HTMLElement) =>
       typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null;
     const inputs = Array.from(
@@ -396,5 +464,5 @@ export async function looksLikeAGate(page: Page): Promise<boolean> {
       return visible(el);
     });
     return inputs.length === 0;
-  });
+  }), true);
 }

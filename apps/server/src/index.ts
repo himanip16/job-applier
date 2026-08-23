@@ -408,6 +408,25 @@ app.delete<{ Params: { id: string } }>('/api/answers/:id', async (req) => {
 
 // ------------------------------------------------- discovery, resume, tracker ---
 
+/**
+ * An empty body is not a malformed body.
+ *
+ * Fastify's default JSON parser rejects `Content-Type: application/json` with
+ * no payload, which is a reasonable reading of the spec and a hostile one for
+ * a client that sets the header once for every request. Several endpoints here
+ * take no body at all, so treat empty as `{}` and let the route's own schema
+ * decide what is required.
+ */
+app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+  const text = typeof body === 'string' ? body.trim() : '';
+  if (!text) return done(null, {});
+  try {
+    done(null, JSON.parse(text));
+  } catch (err) {
+    done(err as Error, undefined);
+  }
+});
+
 registerDiscoveryRoutes(app, requireProfile);
 registerResumeRoutes(app, requireProfile);
 registerTrackerRoutes(app, requireProfile);
@@ -483,6 +502,18 @@ app.get('/api/overview', async () => {
 
   const schema = await cachedSchemaProblem();
 
+  // Which run to send them to. A banner that says "1 thing needs you" and
+  // makes you go and find it is only half a nudge, so the overview names the
+  // most urgent one. Ordered by how blocking it is: a question stops the run
+  // dead, a review is ready and waiting, a wall needs you in the browser.
+  const urgent = await prisma.application
+    .findFirst({
+      where: { status: { in: ['NEEDS_INPUT', 'NEEDS_HUMAN', 'REVIEW'] } },
+      orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
+      include: { job: { select: { title: true, company: true } } },
+    })
+    .catch(() => null);
+
   const standingAnswers = profile?.facts.length ?? 0;
 
   // Ordered: each step is genuinely blocked by the one above it.
@@ -545,7 +576,21 @@ app.get('/api/overview', async () => {
   return {
     setup,
     ready: setup.slice(0, 4).every((s) => s.done),
-    needsYou: { needsInput, inReview, needsHuman, total: needsInput + inReview + needsHuman },
+    needsYou: {
+      needsInput,
+      inReview,
+      needsHuman,
+      total: needsInput + inReview + needsHuman,
+      first: urgent
+        ? {
+            id: urgent.id,
+            status: urgent.status,
+            title: urgent.job.title,
+            company: urgent.job.company,
+            reason: urgent.blockedReason,
+          }
+        : null,
+    },
     counts: {
       leadsNew,
       leadsTotal,
