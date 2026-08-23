@@ -91,6 +91,14 @@ export const config = {
   actionDelayMs: num(process.env.ACTION_DELAY_MS, 120),
 
   requireReview: bool(process.env.REQUIRE_REVIEW, true),
+  /**
+   * How many screens of a wizard to walk before giving up.
+   *
+   * Workday's longest standard flow is six; twelve leaves room for a rejected
+   * step being re-read and for tenants that split Voluntary Disclosures in
+   * two. It exists to stop a loop, not to limit legitimate applications.
+   */
+  maxApplicationSteps: num(process.env.MAX_APPLICATION_STEPS, 12),
   maxSubmitsPerHour: num(process.env.MAX_SUBMITS_PER_HOUR, 10),
   answerConfidenceThreshold: num(process.env.ANSWER_CONFIDENCE_THRESHOLD, 0.82),
   memoryReuseThreshold: num(process.env.MEMORY_REUSE_THRESHOLD, 0.86),

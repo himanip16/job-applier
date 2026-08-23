@@ -114,6 +114,64 @@ is worse than silence because the learner would treat it as signal.
 
 ---
 
+## Applications are wizards, not forms
+
+Almost no real application is one page with a Submit button. Workday walks you
+through My Information, My Experience, Application Questions, Voluntary
+Disclosures and Review. Taleo and iCIMS want an account first. Several ask,
+before showing you anything, whether to parse your resume and fill it all in.
+
+So the engine walks it one screen at a time:
+
+```
+open  ->  [ wall? -> you clear it, it carries on ]
+      ->  [ "autofill with your resume?" -> answer it ]
+      ->  read this screen -> resolve -> ask you what it cannot answer -> fill
+      ->  find what moves forward -> press it -> did anything change?
+      ->  ...until the control that ends the application
+```
+
+A single-page Greenhouse form is just the one-step case of the same loop.
+
+Some details that took a fixture to get right:
+
+- **Knowing whether "Continue" did anything.** The URL is identical across all
+  six steps of a single-page app, so movement is judged on a fingerprint of the
+  path, the visible heading and the field labels. When it does not move, the
+  page's own complaint is reported — including native constraint messages,
+  which render no markup at all — rather than "nothing happened".
+- **A login is a pause, not an end.** The browser profile persists, so once you
+  have signed in the run picks up from exactly where it stopped. Press
+  **Done — carry on** on the run page. You sign in once per site, not once per
+  application.
+- **Only the last button is Submit.** "Save and Continue" is another step;
+  "Back" is never pressed. Getting that wrong either walks the wizard backwards
+  or submits early, so anything not clearly final is treated as another step.
+- **Screens with no fields** (a Review page) are recognised as gates rather
+  than treated as an empty form.
+- **Autofill is taken when offered**, because it is the employer's own parser
+  reading your own resume, and it is the only practical way past a page like
+  Workday's My Experience. It does not weaken the no-fabrication rule: the
+  step is re-read afterwards and anything your profile can answer overwrites
+  the parsed value, so a mis-parsed phone number does not survive. The whole
+  application still goes through review before submission.
+
+`MAX_APPLICATION_STEPS` (default 12) exists to stop a loop, not to limit a
+long application.
+
+### What about Google, Amazon, and other in-house systems?
+
+They work the same way, with one caveat. Only Greenhouse, Lever, Ashby and
+Workable publish board APIs, so **Find jobs for me** only searches those — an
+in-house careers site will not turn up there. You can still paste the URL into
+a run and the generic adapter drives it.
+
+Google Careers is the honest example. Its Apply link redirects to
+`accounts.google.com`, whose first screen asks for an email address and nothing
+else — no password field, no "sign in to apply" text. That is why login
+detection also matches known identity-provider hosts. You sign in once, press
+**Done — carry on**, and the wizard continues.
+
 ## One job, one page
 
 Each feature here grew its own page, which left the thing they all describe —

@@ -9,7 +9,7 @@ import { config, artifactsDir, resumesDir } from './lib/config.js';
 import { prisma, type Prisma } from './lib/db.js';
 import { bus } from './lib/events.js';
 import { enqueue, recoverInterruptedRuns, activeRuns } from './engine/queue.js';
-import { submitAnswers, decideReview } from './engine/runner.js';
+import { submitAnswers, decideReview, continueRun } from './engine/runner.js';
 import { rememberAnswer } from './engine/answerBank.js';
 import { adapterFor } from './ats/registry.js';
 import { extractResumeText, assessResumeText } from './lib/resumeText.js';
@@ -307,6 +307,28 @@ app.post<{ Params: { id: string } }>('/api/applications/:id/review', async (req,
     .parse(req.body);
   const delivered = decideReview(req.params.id, approved, note);
   if (!delivered) return reply.code(409).send({ error: 'That run is not waiting for review.' });
+  return { ok: true };
+});
+
+/**
+ * "I have signed in / solved the captcha — keep going."
+ *
+ * A run stopped at a wall is parked, not dead: the browser is still open on
+ * the page and the wizard is still half-filled. This is how the human says
+ * they have dealt with it.
+ */
+app.post<{ Params: { id: string } }>('/api/applications/:id/continue', async (req, reply) => {
+  const { carryOn, note } = z
+    .object({ carryOn: z.boolean().default(true), note: z.string().optional() })
+    .parse(req.body ?? {});
+  const delivered = continueRun(req.params.id, carryOn, note);
+  if (!delivered) {
+    return reply.code(409).send({
+      error:
+        'That run is not waiting at a wall. If it stopped before this server started, the ' +
+        'browser page is gone — start it again and it will pick up the signed-in session.',
+    });
+  }
   return { ok: true };
 });
 

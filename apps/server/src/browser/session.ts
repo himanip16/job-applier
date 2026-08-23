@@ -15,6 +15,16 @@ import { config, artifactsDir } from '../lib/config.js';
  */
 let ctx: BrowserContext | null = null;
 
+/**
+ * The live context, without creating one.
+ *
+ * For callers that want to look at the page a run is parked on rather than
+ * start a browser — the tests that stand in for a human clicking "Sign In".
+ */
+export function getContextSync(): BrowserContext | null {
+  return ctx;
+}
+
 export async function getContext(): Promise<BrowserContext> {
   if (ctx) return ctx;
   await fs.mkdir(config.browserProfileDir, { recursive: true });

@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Careers at Initech — Senior Backend Engineer</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 44rem; margin: 2rem auto; }
+    .screen { display: none; }
+    .screen.on { display: block; }
+    label { display: block; margin: .8rem 0 .2rem; font-weight: 600; }
+    input, select, textarea { width: 100%; padding: .4rem; }
+    .rail { list-style: none; padding: 0; display: flex; gap: 1rem; font-size: .85rem; }
+    .rail li { color: #888; }
+    .rail li[aria-current="step"] { color: #000; font-weight: 700; }
+    .err { color: #b00; font-size: .9rem; }
+    footer { margin-top: 1.5rem; display: flex; gap: .5rem; }
+    .hint { color: #666; font-size: .9rem; }
+  </style>
+</head>
+<body>
+<!--
+  A deliberately awkward application, modelled on the Workday/Taleo shape:
+
+    sign in  ->  "autofill with your resume?"  ->  5-step wizard  ->  submit
+
+  Everything the single-page engine got wrong is here: the form is never all on
+  screen at once, the URL never changes, one step is a pure gate with no
+  fields, one step rejects you the first time, and the final button says
+  "Submit" while every other one says "Save and Continue".
+-->
+
+<h1 id="heading">Senior Backend Engineer</h1>
+<p class="hint">Initech · San Francisco, CA</p>
+
+<ul class="rail" id="rail" style="display:none">
+  <li data-step="1">My Information</li>
+  <li data-step="2">My Experience</li>
+  <li data-step="3">Application Questions</li>
+  <li data-step="4">Voluntary Disclosures</li>
+  <li data-step="5">Review</li>
+</ul>
+
+<!-- 0. account wall ---------------------------------------------------- -->
+<section class="screen on" id="s-login">
+  <h2>Sign in to apply</h2>
+  <p class="hint">You need an account to continue your application.</p>
+  <label for="email">Email Address</label>
+  <input id="email" name="email" type="email" />
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" />
+  <footer>
+    <button type="button" id="signin">Sign In</button>
+    <button type="button" id="create">Create Account</button>
+  </footer>
+</section>
+
+<!-- 1. autofill choice --------------------------------------------------- -->
+<section class="screen" id="s-autofill">
+  <h2>How would you like to apply?</h2>
+  <p class="hint">We can read your resume and fill in what we can.</p>
+  <footer>
+    <button type="button" id="do-autofill">Autofill with Resume</button>
+    <button type="button" id="do-manual">Apply Manually</button>
+  </footer>
+</section>
+
+<!-- 2. my information ---------------------------------------------------- -->
+<section class="screen" id="s-1">
+  <h2>My Information</h2>
+  <p class="hint">Step 1 of 5</p>
+  <label for="first">First Name *</label>
+  <input id="first" name="first" required />
+  <label for="last">Last Name *</label>
+  <input id="last" name="last" required />
+  <label for="phone">Phone *</label>
+  <input id="phone" name="phone" required />
+  <div class="err" id="err-1" role="alert" style="display:none">Phone is required.</div>
+  <footer><button type="button" class="next" data-from="1">Save and Continue</button></footer>
+</section>
+
+<!-- 3. my experience (resume upload) ------------------------------------- -->
+<section class="screen" id="s-2">
+  <h2>My Experience</h2>
+  <p class="hint">Step 2 of 5</p>
+  <label for="resume">Resume/CV *</label>
+  <input id="resume" name="resume" type="file" required />
+  <label for="years">Years of experience *</label>
+  <input id="years" name="years" required />
+  <footer><button type="button" class="next" data-from="2">Save and Continue</button></footer>
+</section>
+
+<!-- 4. application questions --------------------------------------------- -->
+<section class="screen" id="s-3">
+  <h2>Application Questions</h2>
+  <p class="hint">Step 3 of 5</p>
+  <label for="auth">Are you legally authorized to work in the United States? *</label>
+  <select id="auth" name="auth" required>
+    <option value="">Select One</option>
+    <option>Yes</option>
+    <option>No</option>
+  </select>
+  <label for="sponsor">Will you now or in the future require sponsorship? *</label>
+  <select id="sponsor" name="sponsor" required>
+    <option value="">Select One</option>
+    <option>Yes</option>
+    <option>No</option>
+  </select>
+  <label for="why">Why do you want to work at Initech?</label>
+  <textarea id="why" name="why" rows="4"></textarea>
+  <footer><button type="button" class="next" data-from="3">Save and Continue</button></footer>
+</section>
+
+<!-- 5. voluntary disclosures --------------------------------------------- -->
+<section class="screen" id="s-4">
+  <h2>Voluntary Disclosures</h2>
+  <p class="hint">Step 4 of 5</p>
+  <label for="gender">Gender</label>
+  <select id="gender" name="gender">
+    <option value="">Select One</option>
+    <option>Male</option>
+    <option>Female</option>
+    <option>I do not wish to self-identify</option>
+  </select>
+  <label for="veteran">Veteran Status</label>
+  <select id="veteran" name="veteran">
+    <option value="">Select One</option>
+    <option>I am not a protected veteran</option>
+    <option>I decline to self-identify</option>
+  </select>
+  <footer><button type="button" class="next" data-from="4">Save and Continue</button></footer>
+</section>
+
+<!-- 6. review (a gate: no fields at all) --------------------------------- -->
+<section class="screen" id="s-5">
+  <h2>Review</h2>
+  <p class="hint">Step 5 of 5</p>
+  <p>Please review your application before submitting.</p>
+  <footer>
+    <button type="button" id="back">Back</button>
+    <button type="button" id="submit">Submit</button>
+  </footer>
+</section>
+
+<section class="screen" id="s-done">
+  <h2>Application submitted</h2>
+  <p>Thank you for applying. We have received your application.</p>
+</section>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const show = (id, step) => {
+    document.querySelectorAll('.screen').forEach((s) => s.classList.remove('on'));
+    document.getElementById(id).classList.add('on');
+    const rail = document.getElementById('rail');
+    rail.style.display = step ? 'flex' : 'none';
+    rail.querySelectorAll('li').forEach((li) => {
+      if (Number(li.dataset.step) === step) li.setAttribute('aria-current', 'step');
+      else li.removeAttribute('aria-current');
+    });
+  };
+
+  // ?signedin=1 skips the account wall, for tests that are not about it.
+  if (params.get('signedin') === '1') show('s-autofill');
+
+  document.getElementById('signin').onclick = () => show('s-autofill');
+  document.getElementById('create').onclick = () => show('s-autofill');
+
+  document.getElementById('do-autofill').onclick = () => {
+    // The real thing asks for the file here; the fixture just proves the
+    // branch was taken and that step 1 arrives pre-filled the way a parser
+    // would leave it - including one field parsed WRONG, which is the whole
+    // reason parsed values must not outrank the profile.
+    document.getElementById('first').value = 'Himani';
+    document.getElementById('last').value = 'Patel';
+    document.getElementById('phone').value = '000-000-0000';
+    document.body.dataset.autofilled = 'yes';
+    show('s-1', 1);
+  };
+  document.getElementById('do-manual').onclick = () => {
+    document.body.dataset.autofilled = 'no';
+    show('s-1', 1);
+  };
+
+  document.querySelectorAll('.next').forEach((btn) => {
+    btn.onclick = () => {
+      const from = Number(btn.dataset.from);
+      const section = document.getElementById('s-' + from);
+      const missing = Array.from(section.querySelectorAll('[required]')).filter((el) =>
+        el.type === 'file' ? el.files.length === 0 : !el.value,
+      );
+      if (missing.length) {
+        // Step 1 shows its own message; the rest rely on native validity,
+        // which renders nothing at all.
+        if (from === 1) document.getElementById('err-1').style.display = 'block';
+        missing.forEach((el) => el.setAttribute('aria-invalid', 'true'));
+        return;
+      }
+      show('s-' + (from + 1), from + 1);
+    };
+  });
+
+  document.getElementById('back').onclick = () => show('s-4', 4);
+  document.getElementById('submit').onclick = () => show('s-done');
+</script>
+</body>
+</html>
