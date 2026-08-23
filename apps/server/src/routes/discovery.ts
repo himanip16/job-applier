@@ -78,7 +78,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   // ----------------------------------------------------------------- crawl ---
 
   app.post('/api/discovery/crawl', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const { deepScoreTop, companyId } = z
       .object({ deepScoreTop: z.number().min(0).max(60).default(15), companyId: z.string().optional() })
@@ -95,7 +95,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
    * resume.
    */
   app.post('/api/discovery/find', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
 
     const body = z
@@ -136,7 +136,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
    * this one" button.
    */
   app.post<{ Params: { id: string } }>('/api/leads/:id/rescore', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
 
     const [outcome] = await rescoreByIds(profile.id, [req.params.id]);
@@ -160,7 +160,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
    * button spends four calls, not sixty.
    */
   app.post('/api/leads/rescore', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const { ids } = z
       .object({ ids: z.array(z.string().min(1)).min(1).max(MAX_RESCORE_BATCH) })
@@ -171,7 +171,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   });
 
   app.post('/api/discovery/rescore', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const { limit } = z.object({ limit: z.number().min(1).max(60).default(20) }).parse(req.body ?? {});
     return { rescored: await rescore(profile.id, limit) };
@@ -194,7 +194,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   });
 
   app.get('/api/leads', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const query = LeadQuery.parse(req.query ?? {});
 
@@ -271,7 +271,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
    * because the learner treats it as signal.
    */
   app.post<{ Params: { id: string } }>('/api/leads/:id/reject', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const { reason, category } = z
       .object({ reason: z.string().optional(), category: z.string().optional() })
@@ -300,7 +300,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   });
 
   app.post<{ Params: { id: string } }>('/api/leads/:id/shortlist', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
     if (!lead) return reply.code(404).send({ error: 'Not found' });
@@ -324,7 +324,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
   /** Shortlist and immediately start an application run. */
   app.post<{ Params: { id: string } }>('/api/leads/:id/apply', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const { requiresReview } = z
       .object({ requiresReview: z.boolean().default(true) })
@@ -374,8 +374,8 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
   // ----------------------------------------------- what it has learned so far ---
 
-  app.get('/api/preferences', async (_req, reply) => {
-    const profile = await requireProfile(reply);
+  app.get('/api/preferences', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const signals = await prisma.preferenceSignal.findMany({
       where: { profileId: profile.id },
@@ -395,7 +395,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
   /** Manually tell it something, instead of waiting for it to infer. */
   app.post('/api/preferences', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const { term, weight } = z
       .object({ term: z.string().min(1), weight: z.number().min(-4).max(4) })
@@ -409,6 +409,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   });
 }
 
-export type RequireProfile = (reply: {
-  code: (n: number) => { send: (b: unknown) => unknown };
-}) => Promise<{ id: string } | null>;
+export type RequireProfile = (
+  req: { headers: { cookie?: string } },
+  reply: { code: (n: number) => { send: (b: unknown) => unknown } },
+) => Promise<{ id: string } | null>;

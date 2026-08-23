@@ -16,7 +16,7 @@ export function registerResumeRoutes(app: FastifyInstance, requireProfile: Requi
    * output even on the days you do not send the resume.
    */
   app.post('/api/resume/tailor', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
 
     const body = z
@@ -115,8 +115,8 @@ export function registerResumeRoutes(app: FastifyInstance, requireProfile: Requi
     };
   });
 
-  app.get('/api/resume/tailored', async (_req, reply) => {
-    const profile = await requireProfile(reply);
+  app.get('/api/resume/tailored', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const rows = await prisma.tailoredResume.findMany({
       where: { profileId: profile.id },

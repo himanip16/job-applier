@@ -15,7 +15,7 @@ import type { RequireProfile } from './discovery.js';
  */
 export function registerTrackerRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   app.get<{ Querystring: { outcome?: string } }>('/api/tracker', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
 
     const applications = await prisma.application.findMany({
@@ -165,7 +165,7 @@ export function registerTrackerRoutes(app: FastifyInstance, requireProfile: Requ
    * as interview material.
    */
   app.post<{ Params: { id: string } }>('/api/rounds/:id/questions', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const body = z
       .object({
@@ -250,8 +250,8 @@ export function registerTrackerRoutes(app: FastifyInstance, requireProfile: Requ
    * the questions you were asked alongside it. This is the view that is worth
    * the whole tracker after a couple of months of searching.
    */
-  app.get('/api/retrospective', async (_req, reply) => {
-    const profile = await requireProfile(reply);
+  app.get('/api/retrospective', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
 
     const [lessons, questions, outcomes] = await Promise.all([

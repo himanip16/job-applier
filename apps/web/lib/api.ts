@@ -15,8 +15,26 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     headers['Content-Type'] ??= 'application/json';
   }
 
-  const res = await fetch(`${API}${path}`, { ...init, headers });
+  /**
+   * Always send the session cookie.
+   *
+   * The API is on a different origin to the web app - Render and Vercel in
+   * production, two ports in development - and a cross-origin fetch omits
+   * cookies unless it is told not to. Without this every request arrives
+   * signed out, which looks exactly like a broken login.
+   */
+  const res = await fetch(`${API}${path}`, { ...init, headers, credentials: 'include' });
   const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+
+  if (res.status === 401 && typeof window !== 'undefined') {
+    // The session went away - expired, signed out in another tab, or the
+    // server restarted against a fresh database. Send them to sign in rather
+    // than showing "Sign in to use this" in place of every panel.
+    const here = window.location.pathname + window.location.search;
+    if (!window.location.pathname.startsWith('/signin')) {
+      window.location.href = `/signin?next=${encodeURIComponent(here)}`;
+    }
+  }
 
   if (!res.ok) {
     // `error` is ours; `message` is what the framework produces for things

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
@@ -17,7 +17,9 @@ import { estimateActivityCosts, activeModels } from './llm/models.js';
 import { provider, isConfigured } from './llm/client.js';
 import { schemaProblem, cachedSchemaProblem } from './lib/schemaCheck.js';
 import { matchCanonical, normalizeLabel, type RunEvent } from '@ja/shared';
+import { registerAuthRoutes } from './routes/auth.js';
 import { registerDiscoveryRoutes } from './routes/discovery.js';
+import { currentUser } from './auth/sessions.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerJobDetailRoutes } from './routes/jobDetail.js';
 import { loadSettings } from './lib/secrets.js';
@@ -26,7 +28,44 @@ import { registerTrackerRoutes } from './routes/tracker.js';
 import { registerResumeRoutes } from './routes/resume.js';
 
 const app = Fastify({ logger: { level: 'warn' } });
-await app.register(cors, { origin: true });
+/**
+ * Reflect the caller's origin, and allow credentials.
+ *
+ * The session cookie is the whole authentication mechanism, and a browser
+ * will not send one cross-origin unless the server says credentials are
+ * allowed - which it may only do for a named origin, never for `*`. WEB_ORIGIN
+ * pins it in production; reflecting is right in development, where the port
+ * moves around.
+ */
+const allowedOrigins = (process.env.WEB_ORIGIN ?? '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+await app.register(cors, {
+  origin: allowedOrigins.length ? allowedOrigins : true,
+  credentials: true,
+});
+
+/**
+ * Nothing under /api answers a stranger.
+ *
+ * Deliberately a hook rather than a check inside each handler. There are
+ * forty-odd routes and one of them will always be the one somebody forgets;
+ * a default-deny list of four public paths cannot be forgotten.
+ */
+const PUBLIC_API = new Set([
+  '/api/auth/me',
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/logout',
+  '/api/health',
+]);
+app.addHook('preHandler', async (req, reply) => {
+  const path = req.url.split('?')[0] ?? '';
+  if (!path.startsWith('/api/') || PUBLIC_API.has(path)) return;
+  if (await currentUser(req)) return;
+  return reply.code(401).send({ error: 'Sign in to use this.' });
+});
 await app.register(multipart, { limits: { fileSize: 15 * 1024 * 1024 } });
 await mkdir(artifactsDir, { recursive: true });
 await mkdir(resumesDir, { recursive: true });
@@ -57,19 +96,24 @@ const ProfileInput = z.object({
   summary: z.string().optional(),
 });
 
-app.get('/api/profile', async () => {
-  const profile = await prisma.profile.findFirst({
+app.get('/api/profile', async (req, reply) => {
+  const user = await currentUser(req);
+  if (!user) return reply.code(401).send({ error: 'Sign in to use this.' });
+  const profile = await prisma.profile.findUnique({
+    where: { userId: user.id },
     include: { facts: { orderBy: { key: 'asc' } }, resumes: { orderBy: { createdAt: 'desc' } } },
   });
   return { profile };
 });
 
-app.put('/api/profile', async (req) => {
+app.put('/api/profile', async (req, reply) => {
+  const user = await currentUser(req);
+  if (!user) return reply.code(401).send({ error: 'Sign in to use this.' });
   const body = ProfileInput.parse(req.body);
-  const existing = await prisma.profile.findFirst();
+  const existing = await prisma.profile.findUnique({ where: { userId: user.id } });
   const profile = existing
     ? await prisma.profile.update({ where: { id: existing.id }, data: body })
-    : await prisma.profile.create({ data: body });
+    : await prisma.profile.create({ data: { ...body, userId: user.id } });
   return { profile };
 });
 
@@ -81,7 +125,7 @@ const FactInput = z.object({
 });
 
 app.post('/api/facts', async (req, reply) => {
-  const profile = await requireProfile(reply);
+  const profile = await requireProfile(req, reply);
   if (!profile) return;
   const body = FactInput.parse(req.body);
   const fact = await prisma.profileFact.upsert({
@@ -100,7 +144,7 @@ app.delete<{ Params: { id: string } }>('/api/facts/:id', async (req) => {
 // ---------------------------------------------------------------- resume ---
 
 app.post('/api/resume', async (req, reply) => {
-  const profile = await requireProfile(reply);
+  const profile = await requireProfile(req, reply);
   if (!profile) return;
 
   const file = await req.file();
@@ -140,7 +184,7 @@ app.post('/api/resume', async (req, reply) => {
 });
 
 app.post<{ Params: { id: string } }>('/api/resume/:id/default', async (req, reply) => {
-  const profile = await requireProfile(reply);
+  const profile = await requireProfile(req, reply);
   if (!profile) return;
   await prisma.resumeFile.updateMany({ where: { profileId: profile.id }, data: { isDefault: false } });
   const r = await prisma.resumeFile.update({ where: { id: req.params.id }, data: { isDefault: true } });
@@ -151,7 +195,7 @@ app.post<{ Params: { id: string } }>('/api/resume/:id/default', async (req, repl
 // ----------------------------------------------------------- applications ---
 
 app.post<{ Body: unknown }>('/api/applications', async (req, reply) => {
-  const profile = await requireProfile(reply);
+  const profile = await requireProfile(req, reply);
   if (!profile) return;
 
   const { url, autoStart, requiresReview } = z
@@ -236,7 +280,7 @@ app.post<{ Params: { id: string } }>('/api/applications/:id/start', async (req) 
  * particular application is later abandoned.
  */
 app.post<{ Params: { id: string } }>('/api/applications/:id/answers', async (req, reply) => {
-  const profile = await requireProfile(reply);
+  const profile = await requireProfile(req, reply);
   if (!profile) return;
 
   const { answers } = z
@@ -382,8 +426,8 @@ app.get<{ Params: { id: string } }>('/api/applications/:id/stream', async (req, 
 
 // ------------------------------------------------------------ answer bank ---
 
-app.get('/api/answers', async (_req, reply) => {
-  const profile = await requireProfile(reply);
+app.get('/api/answers', async (req, reply) => {
+  const profile = await requireProfile(req, reply);
   if (!profile) return;
   const answers = await prisma.answer.findMany({
     where: { profileId: profile.id },
@@ -427,6 +471,7 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body,
   }
 });
 
+registerAuthRoutes(app);
 registerDiscoveryRoutes(app, requireProfile);
 registerResumeRoutes(app, requireProfile);
 registerTrackerRoutes(app, requireProfile);
@@ -456,10 +501,14 @@ app.get('/api/health', async () => ({
  * because "three things need you" is the one number worth putting at the top
  * of a page.
  */
-app.get('/api/overview', async () => {
-  const profile = await prisma.profile.findFirst({
-    include: { facts: true, resumes: true, _count: { select: { answers: true } } },
-  });
+app.get('/api/overview', async (req) => {
+  const user = await currentUser(req);
+  const profile = user
+    ? await prisma.profile.findUnique({
+        where: { userId: user.id },
+        include: { facts: true, resumes: true, _count: { select: { answers: true } } },
+      })
+    : null;
 
   // Every count is guarded. This endpoint is the one that reports a broken
   // install, so it has to survive one - a stale client or a missing table must
@@ -648,8 +697,23 @@ async function safeCount(fn: () => Promise<number>): Promise<number> {
   }
 }
 
-async function requireProfile(reply: { code: (n: number) => { send: (b: unknown) => unknown } }) {
-  const profile = await prisma.profile.findFirst();
+/**
+ * The dossier the caller is allowed to act on.
+ *
+ * Every feature in this app is scoped by profileId already, so making the app
+ * multi-user is almost entirely a matter of this one function no longer
+ * answering "the first row in the table".
+ */
+async function requireProfile(
+  req: { headers: { cookie?: string } },
+  reply: { code: (n: number) => { send: (b: unknown) => unknown } },
+) {
+  const user = await currentUser(req as FastifyRequest);
+  if (!user) {
+    reply.code(401).send({ error: 'Sign in to use this.' });
+    return null;
+  }
+  const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
   if (!profile) {
     reply.code(400).send({ error: 'Create your profile first (PUT /api/profile).' });
     return null;
