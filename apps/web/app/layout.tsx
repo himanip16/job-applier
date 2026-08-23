@@ -1,6 +1,7 @@
 import './globals.css';
 import type { ReactNode } from 'react';
 import { Nav } from '../components/Nav';
+import { NeedsYou } from '../components/NeedsYou';
 
 export const metadata = {
   title: 'Job Applier',
@@ -19,6 +20,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <Nav />
           </div>
         </header>
+        <NeedsYou />
         <div className="wrap">{children}</div>
       </body>
     </html>

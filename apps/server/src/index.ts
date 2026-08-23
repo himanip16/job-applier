@@ -483,6 +483,18 @@ app.get('/api/overview', async () => {
 
   const schema = await cachedSchemaProblem();
 
+  // Which run to send them to. A banner that says "1 thing needs you" and
+  // makes you go and find it is only half a nudge, so the overview names the
+  // most urgent one. Ordered by how blocking it is: a question stops the run
+  // dead, a review is ready and waiting, a wall needs you in the browser.
+  const urgent = await prisma.application
+    .findFirst({
+      where: { status: { in: ['NEEDS_INPUT', 'NEEDS_HUMAN', 'REVIEW'] } },
+      orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
+      include: { job: { select: { title: true, company: true } } },
+    })
+    .catch(() => null);
+
   const standingAnswers = profile?.facts.length ?? 0;
 
   // Ordered: each step is genuinely blocked by the one above it.
@@ -545,7 +557,21 @@ app.get('/api/overview', async () => {
   return {
     setup,
     ready: setup.slice(0, 4).every((s) => s.done),
-    needsYou: { needsInput, inReview, needsHuman, total: needsInput + inReview + needsHuman },
+    needsYou: {
+      needsInput,
+      inReview,
+      needsHuman,
+      total: needsInput + inReview + needsHuman,
+      first: urgent
+        ? {
+            id: urgent.id,
+            status: urgent.status,
+            title: urgent.job.title,
+            company: urgent.job.company,
+            reason: urgent.blockedReason,
+          }
+        : null,
+    },
     counts: {
       leadsNew,
       leadsTotal,

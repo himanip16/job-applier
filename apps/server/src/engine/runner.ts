@@ -556,6 +556,80 @@ export async function runApplication(applicationId: string): Promise<void> {
  * let a human clear the wall, try again. This is what happens when that has
  * been exhausted.
  */
+/**
+ * Get in front of the person.
+ *
+ * A run that parks silently is a run that sits there until someone happens to
+ * look at it. The action needed is almost always *in the browser window that
+ * is already open* - sign in, solve this - so the most useful nudge is to put
+ * that window in front of them. The terminal bell covers the case where the
+ * browser is on another desktop, and the UI raises its own notification from
+ * the status.
+ */
+async function nudge(applicationId: string, page: Page, blocker: Blocker): Promise<void> {
+  if (!config.headless) {
+    // Best-effort: a window manager may refuse, and that is not worth failing
+    // a run over.
+    await page.bringToFront().catch(() => {});
+  }
+  // \x07 is the terminal bell. One character, and it is the difference between
+  // noticing in five seconds and noticing in five minutes.
+  process.stdout.write(`\x07[needs you] ${blocker.kind}: ${blocker.detail}\n`);
+  await bus.emitEvent(
+    applicationId,
+    'NEEDS_YOU',
+    blocker.humanCanClear
+      ? 'Waiting for you in the browser window. It carries on by itself once the page is past this.'
+      : 'Waiting for you.',
+    { kind: blocker.kind },
+  );
+}
+
+/**
+ * Notice when the human has dealt with it, without being told.
+ *
+ * "Press continue when you are done" is one more thing to remember, and the
+ * app can just watch: the wall is either still on the page or it is not. Two
+ * consecutive clear reads before believing it, because a page mid-navigation
+ * briefly shows neither the wall nor the form.
+ *
+ * Never resolves while the wall is still up - the manual button is the other
+ * half of the race and covers walls that cannot be detected as cleared.
+ */
+function watchForClearance(
+  applicationId: string,
+  page: Page,
+  blocker: Blocker,
+): Promise<{ carryOn: boolean; note?: string }> {
+  return new Promise((resolve) => {
+    let clearReads = 0;
+    let announced = false;
+
+    const tick = async () => {
+      if (page.isClosed()) return;
+      try {
+        const stillThere = (await detectBlockers(page)).some((b) => b.kind === blocker.kind);
+        clearReads = stillThere ? 0 : clearReads + 1;
+        if (clearReads >= 2) {
+          if (!announced) {
+            announced = true;
+            await bus
+              .emitEvent(applicationId, 'LOG', 'That looks dealt with — carrying on by itself.')
+              .catch(() => {});
+            resolve({ carryOn: true });
+          }
+          return;
+        }
+      } catch {
+        // Navigating, or the page went away. Try again on the next tick.
+      }
+      if (!announced) setTimeout(() => void tick(), 2000);
+    };
+
+    setTimeout(() => void tick(), 2000);
+  });
+}
+
 async function handleOpenFailure(applicationId: string, page: Page, err: unknown): Promise<void> {
   if (err instanceof NeedsHumanError) {
     await handOffToHuman(applicationId, page, {
@@ -587,9 +661,16 @@ async function pauseForHuman(
   // Park BEFORE announcing, for the same reason as the review gate: a client
   // watching the run can see NEEDS_HUMAN and reply within microseconds, and a
   // reply that arrives before the promise exists is dropped forever.
-  const resume = park<{ carryOn: boolean; note?: string }>(blockerKey(applicationId));
+  const key = blockerKey(applicationId);
+  const manual = park<{ carryOn: boolean; note?: string }>(key);
   await handOffToHuman(applicationId, page, blocker);
-  const decision = await resume;
+  await nudge(applicationId, page, blocker);
+
+  // Whichever comes first: you press the button, or the wall simply goes away
+  // because you dealt with it. The second is the common case and it should not
+  // require coming back to this app to say so.
+  const decision = await Promise.race([manual, watchForClearance(applicationId, page, blocker)]);
+  abandon(key);
 
   if (!decision.carryOn) {
     await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');

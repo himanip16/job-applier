@@ -140,10 +140,14 @@ Some details that took a fixture to get right:
   path, the visible heading and the field labels. When it does not move, the
   page's own complaint is reported — including native constraint messages,
   which render no markup at all — rather than "nothing happened".
-- **A login is a pause, not an end.** The browser profile persists, so once you
-  have signed in the run picks up from exactly where it stopped. Press
-  **Done — carry on** on the run page. You sign in once per site, not once per
-  application.
+- **A login is a pause, not an end.** It nudges you, you do the one thing, and
+  it continues on its own. The browser window holding the page is raised, the
+  terminal beeps, and a bar appears on every page of the UI naming the run and
+  linking straight to it (with a desktop notification if you allow one). Then
+  the run watches that page: the moment the wall is gone it carries on by
+  itself — no coming back to press anything. **Done — carry on** is still there
+  for walls it cannot see the end of, next to **Cancel**. The browser profile
+  persists, so you sign in once per site, not once per application.
 - **Only the last button is Submit.** "Save and Continue" is another step;
   "Back" is never pressed. Getting that wrong either walks the wizard backwards
   or submits early, so anything not clearly final is treated as another step.
