@@ -241,7 +241,7 @@ export async function crawlCareersPage(
   opts: { maxPages?: number; maxDepth?: number; delayMs?: number } = {},
 ): Promise<DiscoveredJob[]> {
   const maxPages = opts.maxPages ?? 40;
-  const maxDepth = opts.maxDepth ?? 2;
+  const maxDepth = opts.maxDepth ?? 10;
   const delayMs = opts.delayMs ?? 400;
 
   const start = new URL(startUrl);

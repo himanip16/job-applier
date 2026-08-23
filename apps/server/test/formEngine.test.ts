@@ -8,6 +8,7 @@ import { chromium, type Browser, type Page } from 'playwright';
 import { extractFields } from '../src/browser/extract.js';
 import { fillField, attachFile, verifyFilled } from '../src/browser/fill.js';
 import { detectBlockers, detectSubmissionOutcome } from '../src/browser/blockers.js';
+import { detectNextAction } from '../src/ats/nextAction.js';
 
 /**
  * These run the real extractor and the real fill engine against local fixtures
@@ -57,6 +58,25 @@ async function open(fixture: string): Promise<Page> {
   await page.goto(`${baseUrl}/${fixture}`, { waitUntil: 'domcontentloaded' });
   return page;
 }
+
+describe('multi-step workflow detection', () => {
+  it('classifies the next action on a step-based ATS form', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <form>
+        <button type="button">Save & Continue</button>
+        <button type="submit">Submit application</button>
+      </form>
+    `);
+
+    const action = await detectNextAction(page);
+    expect(action).not.toBeNull();
+    expect(action?.type).toBe('NEXT');
+    expect(action?.label).toMatch(/save.*continue|continue/i);
+
+    await page.close();
+  }, 30_000);
+});
 
 describe('Greenhouse-shaped form (react-select comboboxes)', () => {
   it('extracts every control with the right kind, widget and options', async () => {

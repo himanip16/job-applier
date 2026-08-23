@@ -302,36 +302,34 @@ export async function runApplication(applicationId: string): Promise<void> {
         }
       }
 
-      for (const field of fillable) {
-        const answer = answers.get(field.id);
-        if (!answer || answer.value === null || answer.displayValue === '') {
-          plan.push(entry(field, answer, false));
-          continue;
+    // ---- Fill --------------------------------------------------------------
+    const plan: FieldPlanEntry[] = [];
+    for (const field of fillable) {
+      const answer = answers.get(field.id);
+      if (!answer || answer.value === null || answer.displayValue === '') {
+        plan.push(entry(field, answer, false));
+        continue;
+      }
+      try {
+        await fillField(page, field, answer.value as string | string[]);
+        const check = await verifyFilled(page, field, answer.value as string | string[]);
+        plan.push({ ...entry(field, answer, true), verified: check.actual, error: check.ok ? undefined : 'value did not stick' });
+        if (!check.ok) {
+          await bus.emitEvent(
+            applicationId,
+            'WARNING',
+            `"${field.label}" did not hold the value we set (page shows: ${truncate(check.actual)}).`,
+          );
         }
-        try {
-          await fillField(page, field, answer.value as string | string[]);
-          const check = await verifyFilled(page, field, answer.value as string | string[]);
-          plan.push({
-            ...entry(field, answer, true),
-            verified: check.actual,
-            error: check.ok ? undefined : 'value did not stick',
-          });
-          if (!check.ok) {
-            await bus.emitEvent(
-              applicationId,
-              'WARNING',
-              `"${field.label}" did not hold the value we set (page shows: ${truncate(check.actual)}).`,
-            );
-          }
-        } catch (err) {
-          const msg = err instanceof FillError ? err.message : (err as Error).message;
-          plan.push({ ...entry(field, answer, false), error: msg });
-          await bus.emitEvent(applicationId, 'WARNING', `Could not fill "${field.label}": ${msg}`);
-          if (field.required) {
-            throw new Error(`Required field "${field.label}" could not be filled: ${msg}`);
-          }
+      } catch (err) {
+        const msg = err instanceof FillError ? err.message : (err as Error).message;
+        plan.push({ ...entry(field, answer, false), error: msg });
+        await bus.emitEvent(applicationId, 'WARNING', `Could not fill "${field.label}": ${msg}`);
+        if (field.required) {
+          throw new Error(`Required field "${field.label}" could not be filled: ${msg}`);
         }
       }
+    }
 
       // ---- Attachments, on whichever step asks for them ----------------------
       if (resumeInput && !resumeAttached) {
@@ -447,37 +445,41 @@ export async function runApplication(applicationId: string): Promise<void> {
     await artifact(applicationId, 'screenshot', 'filled', await screenshot(page, applicationId, 'filled'));
     await artifact(applicationId, 'dom', 'filled-dom', await saveDom(page, applicationId, 'filled'));
 
-    // ---- Blockers, second look ---------------------------------------------
-    const blockers = await detectBlockers(page);
-    const captcha = blockers.find((b) => b.kind === 'CAPTCHA');
+      const blockers = await detectBlockers(page);
+      const captcha = blockers.find((b) => b.kind === 'CAPTCHA');
 
-    // ---- Review gate ---------------------------------------------------------
-    const mustReview =
-      app.requiresReview ||
-      config.requireReview ||
-      adapter.id === 'generic' ||
-      !!captcha ||
-      plan.some((p) => p.error) ||
-      plan.some((p) => p.confidence < 0.9 && p.filled);
-
-    if (mustReview) {
-      const reason = captcha
-        ? `${captcha.detail} The form is filled and waiting; solve the challenge in the browser, then approve here.`
-        : adapter.id === 'generic'
-          ? 'Unrecognised site, so this always goes through review.'
-          : 'Filled and ready. Check it over, then approve.';
-      // Register the waiter BEFORE announcing the status. Anything watching the
-      // run - the UI, the CLI, a test - can observe REVIEW and answer within
-      // microseconds, and if the parked promise does not exist yet that reply
-      // is dropped and the run waits forever.
-      const decisionPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
-      await setStatus(applicationId, 'REVIEW', reason, { blockers, plan });
-      const decision = await decisionPromise;
-      if (!decision.approved) {
-        await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
-        return;
+      const nextAction = await detectNextAction(page);
+      if (nextAction && nextAction.type === 'NEXT') {
+        await bus.emitEvent(applicationId, 'LOG', `Advancing from step to step via "${nextAction.label}".`);
+        await nextAction.locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+        await nextAction.locator.click({ timeout: 15000 }).catch(() => {});
+        await page.waitForLoadState('domcontentloaded').catch(() => {});
+        await page.waitForTimeout(1200);
+        continue;
       }
-    }
+
+      const mustReview =
+        app.requiresReview ||
+        config.requireReview ||
+        adapter.id === 'generic' ||
+        !!captcha ||
+        plan.some((p) => p.error) ||
+        plan.some((p) => p.confidence < 0.9 && p.filled);
+
+      if (mustReview) {
+        const reason = captcha
+          ? `${captcha.detail} The form is filled and waiting; solve the challenge in the browser, then approve here.`
+          : adapter.id === 'generic'
+            ? 'Unrecognised site, so this always goes through review.'
+            : 'Filled and ready. Check it over, then approve.';
+        const decisionPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
+        await setStatus(applicationId, 'REVIEW', reason, { blockers, plan });
+        const decision = await decisionPromise;
+        if (!decision.approved) {
+          await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
+          return;
+        }
+      }
 
     // ---- Submit ---------------------------------------------------------------
     //
@@ -504,15 +506,15 @@ export async function runApplication(applicationId: string): Promise<void> {
     const outcome = await detectSubmissionOutcome(page, urlBefore);
     await artifact(applicationId, 'screenshot', 'after-submit', await screenshot(page, applicationId, 'after-submit'));
 
-    if (outcome.outcome === 'SUBMITTED') {
-      await prisma.application.update({
-        where: { id: applicationId },
-        data: { status: 'SUBMITTED', submittedAt: new Date(), confirmation: outcome.detail, blockedReason: null },
-      });
-      await bus.emitEvent(applicationId, 'STATUS', 'Submitted.', { status: 'SUBMITTED' });
-      await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, ctx.companyKey);
-      return;
-    }
+      if (outcome.outcome === 'SUBMITTED') {
+        await prisma.application.update({
+          where: { id: applicationId },
+          data: { status: 'SUBMITTED', submittedAt: new Date(), confirmation: outcome.detail, blockedReason: null },
+        });
+        await bus.emitEvent(applicationId, 'STATUS', 'Submitted.', { status: 'SUBMITTED' });
+        await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, ctx.companyKey);
+        return;
+      }
 
     if (outcome.outcome === 'VALIDATION_ERROR') {
       const retryPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
@@ -526,7 +528,7 @@ export async function runApplication(applicationId: string): Promise<void> {
         await setStatus(applicationId, 'CANCELLED', retry.note ?? 'Cancelled after a validation error.');
         return;
       }
-      await pressSubmit();
+      await adapter.submit(page);
       const second = await detectSubmissionOutcome(page, urlBefore);
       await prisma.application.update({
         where: { id: applicationId },
@@ -542,17 +544,20 @@ export async function runApplication(applicationId: string): Promise<void> {
       return;
     }
 
-    // Ambiguous. Never claim success we cannot see.
-    await prisma.application.update({
-      where: { id: applicationId },
-      data: { status: 'NEEDS_HUMAN', blockedReason: outcome.detail },
-    });
-    await bus.emitEvent(
-      applicationId,
-      'STATUS',
-      'Submitted, but no confirmation was visible. Check the browser before assuming it went through.',
-      { status: 'NEEDS_HUMAN', detail: outcome.detail },
-    );
+      await prisma.application.update({
+        where: { id: applicationId },
+        data: { status: 'NEEDS_HUMAN', blockedReason: outcome.detail },
+      });
+      await bus.emitEvent(
+        applicationId,
+        'STATUS',
+        'Submitted, but no confirmation was visible. Check the browser before assuming it went through.',
+        { status: 'NEEDS_HUMAN', detail: outcome.detail },
+      );
+      return;
+    }
+
+    throw new Error('The application did not converge on a final step within the step budget.');
   } catch (err) {
     const message = (err as Error).message;
     await prisma.application.update({
