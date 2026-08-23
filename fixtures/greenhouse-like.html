@@ -76,6 +76,15 @@
     <button type="button" id="resume-dropbox">Dropbox</button>
     <button type="button" id="resume-drive">Google Drive</button>
     <button type="button" id="resume-manual">Enter manually</button>
+    <!-- Attach forwards to the hidden input, which is what makes a click open
+         the browser's file chooser rather than doing nothing. -->
+    <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('resume-attach').addEventListener('click', () =>
+          document.getElementById('resume').click(),
+        );
+      });
+    </script>
     <input type="file" id="resume" accept=".pdf,.doc,.docx,.txt,.rtf">
     <span id="resume-name"></span>
   </div>

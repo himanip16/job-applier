@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -436,6 +437,58 @@ describe('a resume widget is not an autofill prompt', () => {
     );
     await page.goto(`${baseUrl}/manual-only`);
     expect(await detectAutofillPrompt(page)).toBeNull();
+    await page.close();
+  }, 60_000);
+});
+
+describe('choosing how to supply the resume', () => {
+  /**
+   * Greenhouse offers Attach / Dropbox / Google Drive / Enter manually. Only
+   * the first is something this app can satisfy — the other two want an
+   * account it does not have, and the fourth wants resume text typed in.
+   */
+  it('clicks Attach and hands the file to the chooser it opens', async () => {
+    const { attachFile } = await import('../src/browser/fill.js');
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/greenhouse-like.html`, { waitUntil: 'domcontentloaded' });
+
+    const resume = path.join(
+      await mkdtemp(path.join(tmpdir(), 'ja-attach-')),
+      'resume.txt',
+    );
+    await writeFile(resume, 'Himani Patel — Staff Backend Engineer');
+
+    await attachFile(page, '#resume', resume);
+
+    const name = await page.evaluate(
+      () => (document.getElementById('resume') as HTMLInputElement).files?.[0]?.name ?? '',
+    );
+    expect(name).toBe('resume.txt');
+    await page.close();
+  }, 60_000);
+
+  it('still writes straight to a plain hidden input when there is no picker', async () => {
+    // A lone "Attach" label next to a file input is just that input's styling,
+    // not a choice of source, and clicking it buys nothing.
+    const { attachFile } = await import('../src/browser/fill.js');
+    const page = await browser.newPage();
+    await page.route('**/plain-upload', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<html><body><label for="cv">Attach</label><input id="cv" type="file" /></body></html>',
+      }),
+    );
+    await page.goto(`${baseUrl}/plain-upload`);
+
+    const cv = path.join(await mkdtemp(path.join(tmpdir(), 'ja-attach2-')), 'cv.txt');
+    await writeFile(cv, 'cv');
+    await attachFile(page, '#cv', cv);
+
+    const name = await page.evaluate(
+      () => (document.getElementById('cv') as HTMLInputElement).files?.[0]?.name ?? '',
+    );
+    expect(name).toBe('cv.txt');
     await page.close();
   }, 60_000);
 });
