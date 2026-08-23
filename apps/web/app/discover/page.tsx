@@ -175,15 +175,12 @@ export default function DiscoverPage() {
 
   useEffect(() => {
     load().catch((e) => setError(e.message));
-    api<{
-      sources: { id: string; handleHint: string }[];
-      rejectCategories: string[];
-      searchConfigured: boolean;
-    }>('/api/sources')
+    api('/api/sources')
       .then((d) => {
-        setSources(d.sources);
-        setCategories(d.rejectCategories);
-        setSearchConfigured(d.searchConfigured);
+        const dd = d as { sources: { id: string; handleHint: string }[]; rejectCategories: string[]; searchConfigured: boolean };
+        setSources(dd.sources);
+        setCategories(dd.rejectCategories);
+        setSearchConfigured(dd.searchConfigured);
       })
       .catch(() => {});
   }, [load]);
@@ -194,10 +191,11 @@ export default function DiscoverPage() {
     setFlash(null);
     setReport(null);
     try {
-      const r = await api<{ report: SearchReport }>('/api/discovery/find', {
+      const rRaw = await api('/api/discovery/find', {
         method: 'POST',
         body: JSON.stringify({ deepScoreTop: 15, dryRun }),
       });
+      const r = rRaw as { report: SearchReport };
       setReport(r.report);
       if (!dryRun) await load();
     } catch (e) {
@@ -219,10 +217,8 @@ export default function DiscoverPage() {
     setError(null);
     setFlash(null);
     try {
-      const { report } = await api<{ report: Record<string, number | unknown[]> }>(
-        '/api/discovery/crawl',
-        { method: 'POST', body: JSON.stringify({ deepScoreTop: 15 }) },
-      );
+      const crawlRaw = await api('/api/discovery/crawl', { method: 'POST', body: JSON.stringify({ deepScoreTop: 15 }) });
+      const { report } = crawlRaw as { report: Record<string, number | unknown[]> };
       const errs = (report.errors as { company: string; error: string }[]) ?? [];
       setFlash(
         `Crawled ${report.companiesCrawled} boards, saw ${report.jobsSeen} postings, ${report.newLeads} new. ` +
@@ -246,7 +242,8 @@ export default function DiscoverPage() {
     });
     try {
       if (action === 'apply') {
-        const r = await api<{ applicationId: string }>(`/api/leads/${lead.id}/apply`, { method: 'POST' });
+        const rRaw = await api(`/api/leads/${lead.id}/apply`, { method: 'POST' });
+        const r = rRaw as { applicationId: string };
         window.location.href = `/applications/${r.applicationId}`;
         return;
       }
@@ -909,10 +906,11 @@ function RejectDialog({
   async function submit() {
     setBusy(true);
     try {
-      const r = await api<{ message: string }>(`/api/leads/${lead.id}/reject`, {
+      const rRaw = await api(`/api/leads/${lead.id}/reject`, {
         method: 'POST',
         body: JSON.stringify({ category: category ?? undefined, reason: reason.trim() || undefined }),
       });
+      const r = rRaw as { message: string };
       onDone(r.message);
     } finally {
       setBusy(false);

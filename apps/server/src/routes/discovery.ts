@@ -253,6 +253,9 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       /** New leads at or above the "start here" threshold, across every page. */
       strong,
       maxRescoreBatch: MAX_RESCORE_BATCH,
+      // The same numbers under the shape the first paginated build returned,
+      // so nothing that already reads `pagination` breaks on the way past.
+      pagination: { page, pageSize: query.limit, total, totalPages: pages },
     };
   });
 
@@ -276,18 +279,10 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
     const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
     if (!lead) return reply.code(404).send({ error: 'Not found' });
-
-    await prisma.jobLead.update({
-      where: { id: lead.id },
-      data: {
-        status: 'REJECTED',
-        rejectReason: reason ?? null,
-        rejectCategory: category ?? null,
-        decidedAt: new Date(),
-      },
-    });
-
-    const { moved } = await learnFromDecision({
+    // Learn from the candidate's decision, then permanently remove the
+    // lead from the queue. This keeps the triage queue focused and avoids
+    // re-offering things they've explicitly rejected.
+    await learnFromDecision({
       profileId: profile.id,
       job: {
         title: lead.title,
@@ -295,23 +290,13 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
         location: lead.location ?? undefined,
       },
       accepted: false,
-      // Category and free text are both useful; the category alone still
-      // carries a lot ("Location or commute" is a strong term).
       reason: [category, reason].filter(Boolean).join('. ') || undefined,
     });
 
-    // Re-rank what is still in the queue so the effect is visible now, not
-    // after the next crawl.
+    await prisma.jobLead.delete({ where: { id: lead.id } });
+    // Re-rank what remains so the effect of the decision is visible now.
     const reranked = await rescoreLexically(profile.id);
-
-    return {
-      ok: true,
-      learned: moved,
-      reranked,
-      message: moved.length
-        ? `Noted. ${reranked} remaining lead${reranked === 1 ? '' : 's'} re-ranked; postings mentioning ${moved.slice(0, 3).join(', ')} now score lower.`
-        : `Noted. ${reranked} remaining lead${reranked === 1 ? '' : 's'} re-ranked.`,
-    };
+    return { ok: true, reranked, message: `Removed lead and re-ranked ${reranked} remaining lead(s).` };
   });
 
   app.post<{ Params: { id: string } }>('/api/leads/:id/shortlist', async (req, reply) => {
