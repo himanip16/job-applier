@@ -1,0 +1,218 @@
+import { normalizeLabel } from '@ja/shared';
+import type { FitAssessment, ScorableJob } from './scoring.js';
+
+/**
+ * The two answers that are "no" regardless of how well the job reads.
+ *
+ * A model asked to judge fit will talk itself round on both of these. It will
+ * call seven years "a stretch but the domain overlap is strong" for a
+ * four-and-a-half-year candidate, and it will read a US posting that says
+ * nothing at all about visas as though silence were an open door. Neither is
+ * a judgement call, so neither is left to judgement: they are rules, they run
+ * on every scoring path, and they say plainly which rule fired.
+ */
+
+/** Half a year either way is noise, not a gap. */
+const TOLERANCE_YEARS = 0.5;
+
+/** Past this, the posting is asking for someone else. */
+const HARD_SHORTFALL_YEARS = 1;
+
+export interface HardRuleVerdict {
+  /** Set when the rule is fatal; blendScores caps a dealbreaker at 15. */
+  dealbreaker?: string;
+  /** Added to the model's reasons, whether fatal or not. */
+  against?: string;
+  for?: string;
+}
+
+/**
+ * Years, with the decimal kept.
+ *
+ * The old pattern captured only the digits before the point, so a candidate
+ * with 4.5 years was read as 4 and every posting asking for 5 became a
+ * shortfall it did not have.
+ */
+export function parseYears(text: string): number | null {
+  const patterns = [
+    /(\d{1,2}(?:\.\d+)?)\s*\+?\s*years?\s*(?:of\s+)?(?:professional|relevant|total|industry|hands[- ]on)?\s*experience\b/i,
+    /\bexperience\b[^0-9]{0,60}(\d{1,2}(?:\.\d+)?)\s*\+?\s*years?\b/i,
+    /(\d{1,2}(?:\.\d+)?)\s*\+?\s*years?\b/i,
+  ];
+  for (const pattern of patterns) {
+    const n = Number(text.match(pattern)?.[1]);
+    if (Number.isFinite(n) && n > 0 && n < 60) return n;
+  }
+  return null;
+}
+
+/**
+ * The largest number of years the posting asks for.
+ *
+ * Largest, not first: a posting that says "3+ years of Python, 7+ years of
+ * distributed systems" is asking for seven, and reading the first number
+ * would let the hardest requirement in the list go unnoticed.
+ */
+export function parseRequiredYears(jobText: string): number | null {
+  const text = jobText.slice(0, 8000);
+  let most: number | null = null;
+  const pattern = /(\d{1,2}(?:\.\d+)?)\s*\+?\s*(?:-\s*\d{1,2}\s*)?years?\b/gi;
+  for (const match of text.matchAll(pattern)) {
+    const n = Number(match[1]);
+    if (!Number.isFinite(n) || n <= 0 || n > 30) continue;
+    // "5 years ago", "the last 3 years" and "founded 12 years ago" are prose,
+    // not requirements.
+    const after = text.slice(match.index + match[0].length, match.index + match[0].length + 12);
+    if (/^\s*ago\b/i.test(after)) continue;
+    if (most === null || n > most) most = n;
+  }
+  return most;
+}
+
+/** Does this posting want more experience than the candidate has? */
+export function experienceVerdict(candidateYears: number | null, jobText: string): HardRuleVerdict | null {
+  if (candidateYears === null) return null;
+  const required = parseRequiredYears(jobText);
+  if (required === null) return null;
+
+  const shortfall = required - candidateYears;
+  if (shortfall <= TOLERANCE_YEARS) {
+    return shortfall <= -2
+      ? { for: `Comfortably past the ${required}-year bar with ${candidateYears} years.` }
+      : null;
+  }
+
+  const gap = `the posting asks for ${required}+ years and you have ${candidateYears}`;
+  if (shortfall > HARD_SHORTFALL_YEARS) {
+    return {
+      dealbreaker: `Wants ${required}+ years of experience; you have ${candidateYears}.`,
+      against: `Too senior by ${round1(shortfall)} years — ${gap}.`,
+    };
+  }
+  return { against: `Slightly under the experience bar — ${gap}.` };
+}
+
+// ------------------------------------------------------------------ visas ---
+
+const US_LOCATION =
+  /\b(united states|u\.?s\.?a?\b|usa|new york|san francisco|bay area|seattle|austin|boston|chicago|denver|atlanta|los angeles|washington,? d\.?c|remote[ -]*(?:us|usa|united states)|us[ -]*remote)\b/i;
+
+/** Two-letter state codes, only where a city or comma makes them a location. */
+const US_STATE = /,\s*(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy|dc)\b/i;
+
+const WILL_SPONSOR =
+  /\b(visa sponsorship (?:is )?(?:available|offered|provided)|we (?:will |can |do )?sponsor|sponsorship (?:is )?(?:available|offered|provided)|will sponsor|able to sponsor|h-?1b (?:sponsorship|visa|transfer)s? (?:available|offered|considered|supported)|open to sponsoring|we sponsor visas)\b/i;
+
+const WELCOMES_INDIA = /\b(hiring in india|based in india|candidates? (?:from|in|based in) india|india[- ]based|open to (?:candidates in )?india)\b/i;
+
+const WILL_NOT_SPONSOR =
+  /\b(no visa sponsorship|not (?:be )?(?:able|willing) to sponsor|unable to sponsor|cannot sponsor|do(?:es)? not (?:offer|provide) sponsorship|without (?:the need for )?sponsorship|sponsorship is not (?:available|offered|provided)|must (?:be|already be) (?:legally )?authori[sz]ed to work in the (?:us|united states)(?! .{0,40}sponsor))\b/i;
+
+/**
+ * Silence is a no.
+ *
+ * This is the candidate's own rule, and it is the right way round: a US
+ * posting that does not mention sponsorship overwhelmingly does not offer it,
+ * and the cost of the two mistakes is not symmetric. Wrongly skipping one
+ * costs an opening; wrongly applying to fifty costs weeks, and every one of
+ * them ends the same way.
+ */
+export function sponsorshipVerdict(
+  needsSponsorship: boolean,
+  job: ScorableJob,
+): HardRuleVerdict | null {
+  if (!needsSponsorship) return null;
+
+  const where = `${job.location ?? ''} ${job.title}`;
+  const body = (job.descriptionText ?? '').slice(0, 12000);
+  const inUS = US_LOCATION.test(where) || US_STATE.test(where) || US_LOCATION.test(body.slice(0, 600));
+  if (!inUS) return null;
+
+  if (WELCOMES_INDIA.test(body) || WELCOMES_INDIA.test(where)) return null;
+
+  if (WILL_NOT_SPONSOR.test(body)) {
+    return {
+      dealbreaker: 'US role that says outright it will not sponsor a visa.',
+      against: 'The posting rules out sponsorship in so many words.',
+    };
+  }
+  if (WILL_SPONSOR.test(body)) {
+    return { for: 'US role that says it sponsors visas.' };
+  }
+  return {
+    dealbreaker: 'US role that never mentions visa sponsorship.',
+    against:
+      'Nothing in the posting says it sponsors, and a US role that stays silent on it almost never does.',
+  };
+}
+
+// ----------------------------------------------------------------- apply ---
+
+/**
+ * Fold both rules into the model's assessment.
+ *
+ * Returned as a dealbreaker rather than as a subtracted score, because a
+ * subtraction is a negotiation: it turned a model's 90 into a 33, which still
+ * outranks plenty of jobs that are genuinely open to you. A dealbreaker is
+ * capped at 15 by blendScores, which is what "no" looks like in a ranking.
+ */
+export function applyHardRules(
+  fit: FitAssessment,
+  args: { candidateYears: number | null; needsSponsorship: boolean; job: ScorableJob },
+): FitAssessment {
+  const text = `${args.job.title}\n${args.job.descriptionText ?? ''}`;
+  const verdicts = [
+    experienceVerdict(args.candidateYears, text),
+    sponsorshipVerdict(args.needsSponsorship, args.job),
+  ].filter(Boolean) as HardRuleVerdict[];
+  if (!verdicts.length) return fit;
+
+  const blocking = verdicts.filter((v) => v.dealbreaker);
+  return {
+    ...fit,
+    // The model's own blocker wins if it found one; it read the whole posting.
+    dealbreaker: fit.dealbreaker || blocking.map((v) => v.dealbreaker).join(' '),
+    againstIt: [
+      ...new Set([...(fit.againstIt ?? []), ...verdicts.map((v) => v.against).filter(Boolean)]),
+    ] as string[],
+    forIt: [...new Set([...(fit.forIt ?? []), ...verdicts.map((v) => v.for).filter(Boolean)])] as string[],
+    verdict: blocking.length ? 'MISMATCH' : fit.verdict,
+  };
+}
+
+/**
+ * What the candidate has and where they are, read once per batch.
+ *
+ * Years come from a stated fact when there is one, because a resume regex
+ * reads the first "3 years" it finds in a bullet about a project.
+ */
+export function candidateConstraints(profile: {
+  country?: string | null;
+  countryCode?: string | null;
+  summary?: string | null;
+  resumeText?: string | null;
+  facts?: { key: string; value: string }[];
+}): { candidateYears: number | null; needsSponsorship: boolean } {
+  const stated = profile.facts?.find((f) => /experience.*years|years.*experience|yoe/i.test(f.key));
+  // A stated fact is usually just the number - "4.5", not "4.5 years" - so it
+  // is read as one before falling back to the prose patterns.
+  const statedYears = stated ? (bareNumber(stated.value) ?? parseYears(stated.value)) : null;
+  const candidateYears =
+    statedYears ??
+    parseYears(normalizeLabel(profile.summary ?? '')) ??
+    parseYears(normalizeLabel((profile.resumeText ?? '').slice(0, 1500)));
+
+  // Anyone not already in the US needs sponsoring for a US role. Stated as
+  // "not US" rather than "is India" so it stays true if they move.
+  const code = (profile.countryCode ?? '').toUpperCase();
+  const country = normalizeLabel(profile.country ?? '');
+  const inUS = code === 'US' || /^(united states|usa|us)$/.test(country);
+  return { candidateYears, needsSponsorship: !inUS };
+}
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+function bareNumber(value: string): number | null {
+  const n = Number(value.trim());
+  return Number.isFinite(n) && n > 0 && n < 60 ? n : null;
+}

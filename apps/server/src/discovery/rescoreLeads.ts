@@ -9,6 +9,7 @@ import {
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
+import { applyHardRules, candidateConstraints } from './hardRules.js';
 
 
 /**
@@ -79,6 +80,7 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
     loadScoringContext(profileId),
   ]);
   const candidateContext = renderCandidateContext(profile, profile.resumeText);
+  const constraints = candidateConstraints(profile);
 
   const outcomes: RescoreOutcome[] = [];
   for (const lead of leads) {
@@ -101,11 +103,12 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
     };
 
     try {
-      const fit = await assessFit({ candidateContext, preferences, rejectionHistory, job });
-      if (!fit) {
+      const raw = await assessFit({ candidateContext, preferences, rejectionHistory, job });
+      if (!raw) {
         outcomes.push({ id: lead.id, ok: false, reason: 'declined', error: DECLINED_MESSAGE });
         continue;
       }
+      const fit = applyHardRules(raw, { ...constraints, job });
       const lex = scoreLexically(job, scoring);
       const blended = blendScores(fit, lex);
       await prisma.jobLead.update({
