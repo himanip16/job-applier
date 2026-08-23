@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { api } from '../../../lib/api';
+import Header from '../components/Header';
+import type { Detail } from '../components/types';
 
 /**
  * One job, everything about it.
@@ -14,87 +16,26 @@ import { api } from '../../../lib/api';
  * "how is this one going?" without opening anything else.
  */
 
-interface Detail {
-  job: {
-    title: string;
-    company: string;
-    location: string | null;
-    remote: boolean;
-    url: string;
-    ats: string;
-    postedAt: string | null;
-    descriptionText: string | null;
-  };
-  match: {
-    score: number;
-    deepScored: boolean;
-    verdict: string | null;
-    seniorityFit: string | null;
-    forIt: string[];
-    againstIt: string[];
-    dealbreaker: string | null;
-    likedTerms: string[];
-    dislikedTerms: string[];
-  } | null;
-  lead: { id: string; status: string; rejectReason: string | null; rejectCategory: string | null } | null;
-  application: {
-    id: string;
-    status: string;
-    blockedReason: string | null;
-    outcome: string;
-    outcomeAt: string | null;
-    outcomeNote: string | null;
-    submittedAt: string | null;
-    confirmation: string | null;
-    notes: string | null;
-    coverLetter: { present: boolean; words: number };
-    resume:
-      | { tailored: true; label: string; coverage: number; insertions: number; unsupported: number }
-      | { tailored: false };
-    fields: {
-      total: number;
-      fromProfile: number;
-      fromMemory: number;
-      written: number;
-      inferred: number;
-      asked: number;
-      skipped: number;
-      failed: number;
-      needsYou: number;
-    };
-  } | null;
-  rounds: {
-    id: string;
-    name: string;
-    status: string;
-    format: string | null;
-    scheduledAt: string | null;
-    completedAt: string | null;
-    interviewers: string | null;
-    notes: string | null;
-    questions: { id: string; question: string; myAnswer: string | null; selfRating: string | null; category: string | null }[];
-  }[];
-  lessons: { id: string; text: string; category: string | null; roundId: string | null }[];
-  nextAction: { label: string; href: string; urgent: boolean } | null;
-}
-
 export default function JobPage() {
   const params = useParams<{ id: string }>();
   const [d, setD] = useState<Detail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null); // page-load errors
+  const [rescoreError, setRescoreError] = useState<string | null>(null); // rescore-only errors
   const [rescoreBusy, setRescoreBusy] = useState(false);
 
   const load = useCallback(async () => {
+    setError(null);
     setD(await api<Detail>(`/api/jobs/${params.id}`));
   }, [params.id]);
 
   const handleRescore = useCallback(async () => {
+    setRescoreError(null);
     setRescoreBusy(true);
     try {
       await api(`/api/leads/${params.id}/rescore`, { method: 'POST' });
       await load();
     } catch (e) {
-      setError((e as Error).message);
+      setRescoreError((e as Error).message);
     } finally {
       setRescoreBusy(false);
     }
@@ -117,7 +58,7 @@ export default function JobPage() {
   return (
     <>
       <Header d={d} />
-      <MatchPanel d={d} busy={rescoreBusy} onRescore={handleRescore} />
+      <MatchPanel d={d} busy={rescoreBusy} onRescore={handleRescore} rescoreError={rescoreError} />
       <ApplicationPanel d={d} />
       <InterviewPanel d={d} />
       <OutcomePanel d={d} />
@@ -125,39 +66,9 @@ export default function JobPage() {
   );
 }
 
-function Header({ d }: { d: Detail }) {
-  return (
-    <div className="panel">
-      <div className="spread">
-        <div style={{ minWidth: 0 }}>
-          <h1 style={{ fontSize: '1.5rem', margin: 0, letterSpacing: '-.01em' }}>{d.job.title}</h1>
-          <div className="row" style={{ gap: '.5rem', marginTop: '.25rem' }}>
-            <strong>{d.job.company || 'Unknown company'}</strong>
-            {d.job.location && <span className="muted small">{d.job.location}</span>}
-            {d.job.remote && <span className="src">remote</span>}
-            <span className="src">{d.job.ats}</span>
-          </div>
-        </div>
-        <div className="row" style={{ flex: 'none', gap: '.5rem' }}>
-          {d.job.url && (
-            <a href={d.job.url} target="_blank" rel="noreferrer">
-              <button>Open posting</button>
-            </a>
-          )}
-          {d.nextAction && (
-            <a href={d.nextAction.href}>
-              <button className={d.nextAction.urgent ? 'primary' : undefined}>
-                {d.nextAction.label}
-              </button>
-            </a>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
-function MatchPanel({ d, busy, onRescore }: { d: Detail; busy: boolean; onRescore: () => void }) {
+
+function MatchPanel({ d, busy, onRescore, rescoreError }: { d: Detail; busy: boolean; onRescore: () => void; rescoreError?: string | null }) {
   if (!d.match) return null;
   const m = d.match;
   const tone = m.score >= 70 ? 'var(--good)' : m.score >= 45 ? 'var(--warn)' : 'var(--bad)';
@@ -173,6 +84,15 @@ function MatchPanel({ d, busy, onRescore }: { d: Detail; busy: boolean; onRescor
           <div className="muted small">
             {m.verdict ? m.verdict.replace(/_/g, ' ').toLowerCase() : 'keyword score only'}
             {m.seniorityFit && m.seniorityFit !== 'UNCLEAR' && ` · seniority ${m.seniorityFit.toLowerCase()}`}
+            <div style={{ marginTop: '.25rem', fontSize: '.8rem' }}>
+              {m.scoreSource === 'MODEL' || m.deepScored ? (
+                <span>
+                  Model assessment{m.evaluatedAt ? ` · ${new Date(m.evaluatedAt).toLocaleString()}` : ''}
+                </span>
+              ) : (
+                <span>Preliminary keyword match</span>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -199,6 +119,8 @@ function MatchPanel({ d, busy, onRescore }: { d: Detail; busy: boolean; onRescor
           {busy ? 'Rescoring…' : 'Rescore'}
         </button>
       </div>
+
+      {rescoreError && <div className="notice bad" style={{ marginTop: '.6rem' }}>{rescoreError}</div>}
 
       <div className="grid2" style={{ marginTop: '.8rem' }}>
         <Points title="Why it fits" items={m.forIt} marker="✓" colour="var(--good)" fallbackTerms={m.likedTerms} />
@@ -451,35 +373,7 @@ const dot = (status: string) =>
 const dotColour = (status: string) =>
   status === 'PASSED' ? 'var(--good)' : status === 'FAILED' ? 'var(--bad)' : 'var(--muted)';
 
-function OutcomePanel({ d }: { d: Detail }) {
-  const a = d.application;
-  if (!a) return null;
 
-  return (
-    <div className="panel">
-      <h2>Outcome</h2>
-      <div className="row" style={{ gap: '2rem', flexWrap: 'wrap' }}>
-        <Fact
-          label="Applied"
-          value={a.submittedAt ? new Date(a.submittedAt).toLocaleDateString() : 'not yet'}
-        />
-        <Fact label="Response" value={a.outcome.replace(/_/g, ' ').toLowerCase()} />
-        {a.outcomeAt && <Fact label="Updated" value={new Date(a.outcomeAt).toLocaleDateString()} />}
-      </div>
-      {a.confirmation && (
-        <p className="small muted" style={{ marginTop: '.6rem' }}>
-          Confirmation seen on the page: “{a.confirmation}”
-        </p>
-      )}
-      {a.outcomeNote && (
-        <p className="small" style={{ marginTop: '.4rem' }}>
-          {a.outcomeNote}
-        </p>
-      )}
-      {a.notes && (
-        <p className="small muted" style={{ marginTop: '.4rem' }}>
-          {a.notes}
-        </p>
       )}
     </div>
   );
