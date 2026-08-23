@@ -10,7 +10,6 @@ import { artifact, setStatus } from './runLog.js';
 import { walkApplication } from './wizard.js';
 import { finishApplication } from './submission.js';
 import { abandon, release, questionsKey, reviewKey, blockerKey } from './waiters.js';
-import { detectNextAction } from '../ats/nextAction.js';
 
 export { SubmissionBudgetError } from './submission.js';
 
