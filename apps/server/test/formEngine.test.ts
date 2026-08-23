@@ -6,7 +6,14 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { extractFields } from '../src/browser/extract.js';
-import { fillField, attachFile, verifyFilled } from '../src/browser/fill.js';
+import {
+  fillField,
+  attachFile,
+  verifyFilled,
+  bestOption,
+  inspectControl,
+  alreadyHolds,
+} from '../src/browser/fill.js';
 import { detectBlockers, detectSubmissionOutcome } from '../src/browser/blockers.js';
 import { detectNextAction } from '../src/ats/nextAction.js';
 
@@ -249,4 +256,162 @@ describe('Lever-shaped form (native controls)', () => {
 
     await page.close();
   }, 90_000);
+});
+
+describe('a phone country picker, as Greenhouse actually renders it', () => {
+  /**
+   * A live run against a project44 posting failed here twice over: "India"
+   * matched no option because the labels carry a dial code, and the control
+   * afterwards reads "+91", which the verifier called a failed fill.
+   */
+  it('selects a country whose option label carries the dial code', async () => {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/greenhouse-like.html`, { waitUntil: 'domcontentloaded' });
+
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const country = fields.find((f) => /country/i.test(f.label))!;
+    expect(country).toBeTruthy();
+
+    await fillField(page, country, 'India');
+    expect(await page.inputValue('#phone-country')).toBe('IN');
+    await page.close();
+  }, 60_000);
+
+  it('counts "+91" as confirmation that India was selected', async () => {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/greenhouse-like.html`, { waitUntil: 'domcontentloaded' });
+
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const country = fields.find((f) => /country/i.test(f.label))!;
+    await fillField(page, country, 'India');
+
+    const check = await verifyFilled(page, country, 'India');
+    expect(check.ok).toBe(true);
+    await page.close();
+  }, 60_000);
+
+  it('does not let a loose match beat an exact one', async () => {
+    // "India" must not select "British Indian Ocean Territory +246".
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/greenhouse-like.html`, { waitUntil: 'domcontentloaded' });
+
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const country = fields.find((f) => /country/i.test(f.label))!;
+    await fillField(page, country, 'India');
+    expect(await page.inputValue('#phone-country')).not.toBe('IO');
+    await page.close();
+  }, 60_000);
+
+  it('picks the right option ahead of a substring of another', () => {
+    const options = [
+      { label: 'India +91', value: 'IN' },
+      { label: 'British Indian Ocean Territory +246', value: 'IO' },
+      { label: 'United States +1', value: 'US' },
+      { label: 'Belarus +375', value: 'BY' },
+    ];
+    expect(bestOption(options, 'India')?.value).toBe('IN');
+    expect(bestOption(options, 'United States')?.value).toBe('US');
+    // A word-boundary rule, so "us" cannot land on Belarus.
+    expect(bestOption(options, 'us')?.value).not.toBe('BY');
+    expect(bestOption(options, 'Atlantis')).toBeNull();
+  });
+});
+
+describe('a board that parses the resume and locks the result', () => {
+  /**
+   * Roku's board, reproduced. It parses the resume up front, fills the
+   * identity fields from it and disables them. A live run spent the full fill
+   * timeout on each of First Name, Last Name and Email — sixty seconds — and
+   * then reported all three as errors, on fields that were already correct.
+   * The email is masked in the markup, which is why a literal comparison is
+   * not enough.
+   */
+  const LOCKED = `
+    <form>
+      <label for="fn">First Name (required) d1a61ede</label>
+      <input id="fn" name="first_name" value="Himani" disabled class="form-control" />
+      <label for="em">Email (required) f77dac43</label>
+      <input id="em" name="email" type="email" value="h**********8@gmail.com" disabled />
+      <label for="ro">Candidate ID</label>
+      <input id="ro" name="cid" value="ABC-123" readonly />
+      <label for="open">Why us?</label>
+      <input id="open" name="why" />
+    </form>`;
+
+  const openLocked = async () => {
+    const page = await browser.newPage();
+    await page.route('**/locked-form', (route) =>
+      route.fulfill({ status: 200, contentType: 'text/html', body: `<html><body>${LOCKED}</body></html>` }),
+    );
+    await page.goto(`${baseUrl}/locked-form`);
+    return page;
+  };
+
+  it('reports a disabled field as locked instead of trying to type into it', async () => {
+    const page = await openLocked();
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const first = fields.find((f) => /first name/i.test(f.label))!;
+
+    const started = Date.now();
+    const state = await inspectControl(page, first);
+    // Fast, because it asks rather than waits. The old path burned 20s here.
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(state.locked).toBe(true);
+    expect(state.current).toBe('Himani');
+    await page.close();
+  }, 60_000);
+
+  it('treats readonly as locked too, not just disabled', async () => {
+    const page = await openLocked();
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const cid = fields.find((f) => /candidate id/i.test(f.label))!;
+    expect((await inspectControl(page, cid)).locked).toBe(true);
+    await page.close();
+  }, 60_000);
+
+  it('leaves an ordinary field alone', async () => {
+    const page = await openLocked();
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const open = fields.find((f) => /why us/i.test(f.label))!;
+    expect((await inspectControl(page, open)).locked).toBe(false);
+    await page.close();
+  }, 60_000);
+
+  it('recognises a masked value as the one we wanted', () => {
+    // The board shows the parsed email with its middle hidden. That is the
+    // right address, and calling it wrong sends a good application to a human.
+    expect(alreadyHolds('h**********8@gmail.com', 'h.nprasad068@gmail.com')).toBe(true);
+    expect(alreadyHolds('Himani', 'Himani')).toBe(true);
+    expect(alreadyHolds('h**********8@gmail.com', 'someone.else@gmail.com')).toBe(false);
+    // A mask with nothing either side matches everything, so it matches nothing.
+    expect(alreadyHolds('****', 'anything')).toBe(false);
+    expect(alreadyHolds('', 'Himani')).toBe(false);
+  });
+
+  it('strips (required) and the board’s per-render uid out of labels', async () => {
+    // "First Name (required) d1a61ede" is what the page really says. The uid
+    // changes when the field re-renders, so anything matching a field by its
+    // label stops finding it.
+    const page = await openLocked();
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const labels = fields.map((f) => f.label);
+
+    expect(labels).toContain('First Name');
+    expect(labels).toContain('Email');
+    expect(labels.join(' ')).not.toMatch(/required|d1a61ede|f77dac43/i);
+    await page.close();
+  }, 60_000);
+});
+
+describe('a location that is more specific than the list', () => {
+  it('narrows "Bengaluru, Karnataka, India" until the board recognises it', () => {
+    const options = [
+      { label: 'Bengaluru, India', value: '1' },
+      { label: 'San Francisco, United States', value: '2' },
+      { label: 'Remote', value: '3' },
+    ];
+    expect(bestOption(options, 'Bengaluru, Karnataka, India')?.value).toBe('1');
+    // Narrowing must not become guessing: a city that is not listed stays unmatched.
+    expect(bestOption(options, 'Pune, Maharashtra, India')).toBeNull();
+  });
 });

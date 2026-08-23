@@ -5,7 +5,16 @@ import { API_SOURCES } from '../discovery/sources.js';
 import { crawlAll, rescore, rescoreLexically } from '../discovery/crawler.js';
 import { findJobs } from '../discovery/findJobs.js';
 import { isFirecrawlConfigured } from '../discovery/firecrawl.js';
-import { learnFromDecision, loadSignals } from '../discovery/scoring.js';
+import {
+  assessFit,
+  buildPreferences,
+  buildRejectionHistory,
+  learnFromDecision,
+  loadSignals,
+  scoreLexically,
+  serialiseReasons,
+} from '../discovery/scoring.js';
+import { renderCandidateContext } from '../llm/candidateContext.js';
 import { adapterFor } from '../ats/registry.js';
 import { enqueue } from '../engine/queue.js';
 
@@ -113,6 +122,68 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     } catch (err) {
       // Everything reachable from here is a message written for a person -
       // an empty profile, a rejected key, an exhausted balance.
+      return reply.code(400).send({ error: (err as Error).message });
+    }
+  });
+
+  /**
+   * Read one posting properly.
+   *
+   * A crawl only sends its top slice to a model, so most leads carry a keyword
+   * score and a list of matched words - which is honest but thin, and next to
+   * a lead that did get read it looks broken. This is the "actually look at
+   * this one" button.
+   */
+  app.post<{ Params: { id: string } }>('/api/leads/:id/rescore', async (req, reply) => {
+    const profile = await requireProfile(reply);
+    if (!profile) return;
+    const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
+    if (!lead) return reply.code(404).send({ error: 'Not found' });
+    if (!lead.descriptionText) {
+      return reply.code(400).send({
+        error:
+          'This lead has no description stored, so there is nothing to read. It came from a board ' +
+          'whose API would not answer; open the posting itself.',
+      });
+    }
+
+    const job = {
+      title: lead.title,
+      companyName: lead.companyName,
+      location: lead.location ?? undefined,
+      descriptionText: lead.descriptionText,
+      remote: lead.remote,
+    };
+
+    try {
+      const [full, preferences, rejectionHistory, signals] = await Promise.all([
+        prisma.profile.findUniqueOrThrow({ where: { id: profile.id }, include: { facts: true } }),
+        buildPreferences(profile.id),
+        buildRejectionHistory(profile.id),
+        loadSignals(profile.id),
+      ]);
+      const fit = await assessFit({
+        candidateContext: renderCandidateContext(full, full.resumeText),
+        preferences,
+        rejectionHistory,
+        job,
+      });
+      if (!fit) {
+        return reply.code(502).send({ error: 'The model declined to assess this one.' });
+      }
+      const lex = scoreLexically(job, signals);
+      const blended = fit.dealbreaker ? Math.min(fit.score, 15) : 0.7 * fit.score + 0.3 * lex.score;
+      const updated = await prisma.jobLead.update({
+        where: { id: lead.id },
+        data: {
+          score: blended,
+          scoreReasons: serialiseReasons(lex, fit) as Prisma.InputJsonValue,
+          deepScored: true,
+          scoredAt: new Date(),
+        },
+      });
+      return { lead: { ...updated, descriptionText: undefined } };
+    } catch (err) {
       return reply.code(400).send({ error: (err as Error).message });
     }
   });

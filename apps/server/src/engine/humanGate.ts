@@ -1,0 +1,234 @@
+import type { Page } from 'playwright';
+import type { AnswerGap, FormField, ResolvedAnswer } from '@ja/shared';
+import { prisma, type Prisma } from '../lib/db.js';
+import { config } from '../lib/config.js';
+import { bus } from '../lib/events.js';
+import { screenshot } from '../browser/session.js';
+import { detectBlockers, type Blocker } from '../browser/blockers.js';
+import { abandon, park, questionsKey, blockerKey } from './waiters.js';
+import { NeedsHumanError, NoFormError, describeDiagnosis } from '../browser/openForm.js';
+import { setStatus, artifact } from './runLog.js';
+
+/**
+ * Every point where the run needs a person.
+ *
+ * Three of them, and they share a shape: park on a promise, tell the human
+ * what is wanted, and keep the browser page exactly as it is until they have
+ * dealt with it. Re-driving forty dropdowns to get back to where you were is
+ * slow and fragile, and any captcha token the page has earned is bound to that
+ * page instance - so a run waits rather than restarts.
+ *
+ *  - a question it refuses to guess at            -> askHuman
+ *  - a wall only a person can clear               -> pauseForHuman
+ *  - the end of the road                          -> handOffToHuman
+ */
+/**
+ * Post the open questions and park until they come back.
+ *
+ * The `remember` flag each reply carries is recorded on the question, not
+ * acted on here: answers reach the bank only after a submission is confirmed,
+ * in persistLearnedAnswers. A run that dies halfway should not leave the bank
+ * full of values no employer ever accepted.
+ */
+export async function askHuman(
+  applicationId: string,
+  fields: FormField[],
+  gaps: AnswerGap[],
+): Promise<Map<string, ResolvedAnswer>> {
+  const byId = new Map(fields.map((f) => [f.id, f]));
+
+  // Same ordering rule as the review gate: park first, announce second. The
+  // questions are written to the database before the status changes, so a
+  // client that reacts instantly still finds them.
+  const replyPromise = park<Array<{ fieldId: string; value: string | string[]; remember: boolean }>>(
+    questionsKey(applicationId),
+  );
+
+  await prisma.pendingQuestion.createMany({
+    data: gaps.map((g) => {
+      const f = byId.get(g.fieldId)!;
+      return {
+        applicationId,
+        fieldId: f.id,
+        fieldSelector: f.selector,
+        rawLabel: f.label,
+        helpText: f.helpText ?? null,
+        fieldKind: f.kind,
+        options: (f.options ?? undefined) as Prisma.InputJsonValue | undefined,
+        required: f.required,
+        reason: g.reason,
+        suggestion: (g.suggestion ?? undefined) as Prisma.InputJsonValue | undefined,
+        suggestionRationale: g.suggestionRationale ?? null,
+      };
+    }),
+  });
+
+  await setStatus(
+    applicationId,
+    'NEEDS_INPUT',
+    `${gaps.length} question${gaps.length === 1 ? '' : 's'} need your answer before this can be submitted.`,
+    { count: gaps.length },
+  );
+  await bus.emitEvent(applicationId, 'QUESTION_ASKED', 'Waiting on you.', {
+    questions: gaps.map((g) => ({
+      fieldId: g.fieldId,
+      label: byId.get(g.fieldId)?.label,
+      reason: g.reason,
+      suggestion: g.suggestion,
+      rationale: g.suggestionRationale,
+    })),
+  });
+
+  const replies = await replyPromise;
+
+  const out = new Map<string, ResolvedAnswer>();
+  for (const reply of replies) {
+    const field = byId.get(reply.fieldId);
+    if (!field) continue;
+    const display = Array.isArray(reply.value) ? reply.value.join(', ') : reply.value;
+    out.set(reply.fieldId, {
+      fieldId: reply.fieldId,
+      value: reply.value,
+      displayValue: display,
+      source: 'USER',
+      confidence: 1,
+      rationale: 'You answered this.',
+      remember: reply.remember,
+      canonicalKey: field.canonicalKey,
+    });
+  }
+  await setStatus(applicationId, 'FILLING', 'Got your answers, carrying on.');
+  return out;
+}
+export async function pauseForHuman(
+  applicationId: string,
+  page: Page,
+  blocker: Blocker,
+): Promise<boolean> {
+  // Park BEFORE announcing, for the same reason as the review gate: a client
+  // watching the run can see NEEDS_HUMAN and reply within microseconds, and a
+  // reply that arrives before the promise exists is dropped forever.
+  const key = blockerKey(applicationId);
+  const manual = park<{ carryOn: boolean; note?: string }>(key);
+  await handOffToHuman(applicationId, page, blocker);
+  await nudge(applicationId, page, blocker);
+
+  // Whichever comes first: you press the button, or the wall simply goes away
+  // because you dealt with it. The second is the common case and it should not
+  // require coming back to this app to say so.
+  const decision = await Promise.race([manual, watchForClearance(applicationId, page, blocker)]);
+  abandon(key);
+
+  if (!decision.carryOn) {
+    await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
+    return false;
+  }
+  await prisma.application.update({
+    where: { id: applicationId },
+    data: { blockedReason: null },
+  });
+  await bus.emitEvent(applicationId, 'LOG', 'Carrying on from where it stopped.');
+  return true;
+}
+/**
+ * Get in front of the person.
+ *
+ * A run that parks silently is a run that sits there until someone happens to
+ * look at it. The action needed is almost always *in the browser window that
+ * is already open* - sign in, solve this - so the most useful nudge is to put
+ * that window in front of them. The terminal bell covers the case where the
+ * browser is on another desktop, and the UI raises its own notification from
+ * the status.
+ */
+async function nudge(applicationId: string, page: Page, blocker: Blocker): Promise<void> {
+  if (!config.headless) {
+    // Best-effort: a window manager may refuse, and that is not worth failing
+    // a run over.
+    await page.bringToFront().catch(() => {});
+  }
+  // \x07 is the terminal bell. One character, and it is the difference between
+  // noticing in five seconds and noticing in five minutes.
+  process.stdout.write(`\x07[needs you] ${blocker.kind}: ${blocker.detail}\n`);
+  await bus.emitEvent(
+    applicationId,
+    'NEEDS_YOU',
+    blocker.humanCanClear
+      ? 'Waiting for you in the browser window. It carries on by itself once the page is past this.'
+      : 'Waiting for you.',
+    { kind: blocker.kind },
+  );
+}
+/**
+ * Notice when the human has dealt with it, without being told.
+ *
+ * "Press continue when you are done" is one more thing to remember, and the
+ * app can just watch: the wall is either still on the page or it is not. Two
+ * consecutive clear reads before believing it, because a page mid-navigation
+ * briefly shows neither the wall nor the form.
+ *
+ * Never resolves while the wall is still up - the manual button is the other
+ * half of the race and covers walls that cannot be detected as cleared.
+ */
+function watchForClearance(
+  applicationId: string,
+  page: Page,
+  blocker: Blocker,
+): Promise<{ carryOn: boolean; note?: string }> {
+  return new Promise((resolve) => {
+    let clearReads = 0;
+    let announced = false;
+
+    const tick = async () => {
+      if (page.isClosed()) return;
+      try {
+        const stillThere = (await detectBlockers(page)).some((b) => b.kind === blocker.kind);
+        clearReads = stillThere ? 0 : clearReads + 1;
+        if (clearReads >= 2) {
+          if (!announced) {
+            announced = true;
+            await bus
+              .emitEvent(applicationId, 'LOG', 'That looks dealt with — carrying on by itself.')
+              .catch(() => {});
+            resolve({ carryOn: true });
+          }
+          return;
+        }
+      } catch {
+        // Navigating, or the page went away. Try again on the next tick.
+      }
+      if (!announced) setTimeout(() => void tick(), 2000);
+    };
+
+    setTimeout(() => void tick(), 2000);
+  });
+}
+export async function handOffToHuman(applicationId: string, page: Page, blocker: Blocker): Promise<void> {
+  await artifact(applicationId, 'screenshot', 'blocked', await screenshot(page, applicationId, 'blocked'));
+  await prisma.application.update({
+    where: { id: applicationId },
+    data: { status: 'NEEDS_HUMAN', blockedReason: `${blocker.kind}: ${blocker.detail}` },
+  });
+  await bus.emitEvent(applicationId, 'BLOCKED', blocker.detail, { kind: blocker.kind });
+}
+export async function handleOpenFailure(applicationId: string, page: Page, err: unknown): Promise<void> {
+  if (err instanceof NeedsHumanError) {
+    await handOffToHuman(applicationId, page, {
+      kind: err.kind,
+      detail: err.message,
+      humanCanClear: true,
+    });
+    return;
+  }
+  if (err instanceof NoFormError) {
+    await bus.emitEvent(applicationId, 'ERROR', describeDiagnosis(err.diagnosis));
+    await handOffToHuman(applicationId, page, {
+      kind: 'UNKNOWN',
+      detail:
+        `${err.message} ${describeDiagnosis(err.diagnosis)} ` +
+        'The browser is still open on it - if you can see an application form there, the selectors need updating for this site.',
+      humanCanClear: true,
+    });
+    return;
+  }
+  throw err;
+}

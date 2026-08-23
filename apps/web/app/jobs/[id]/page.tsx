@@ -91,10 +91,7 @@ export default function JobPage() {
   const handleRescore = useCallback(async () => {
     setRescoreBusy(true);
     try {
-      await api('/api/discovery/rescore', {
-        method: 'POST',
-        body: JSON.stringify({ limit: 20 }),
-      });
+      await api(`/api/leads/${params.id}/rescore`, { method: 'POST' });
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -187,9 +184,14 @@ function MatchPanel({ d, busy, onRescore }: { d: Detail; busy: boolean; onRescor
       )}
 
       {!m.deepScored && (
-        <p className="small muted" style={{ marginTop: '.6rem' }}>
-          Ranked on keywords alone — no model has read the description yet.
-        </p>
+        <div className="notice" style={{ marginTop: '.7rem' }}>
+          <strong className="small">Counted, not read.</strong>{' '}
+          <span className="small muted">
+            A crawl only sends its most promising finds to a model, so this score comes from words
+            the posting and your profile have in common — a weak signal, and one that boilerplate
+            flatters. Rescore to have it actually read.
+          </span>
+        </div>
       )}
 
       <div style={{ marginTop: '.8rem' }}>
@@ -219,26 +221,37 @@ function Points({
   colour: string;
   fallbackTerms: string[];
 }) {
-  const list = items.length ? items : fallbackTerms;
-  if (!list.length) return <div />;
+  // Reasons and keywords are different things and must not look the same.
+  // A tick beside the word "distributed systems" reads as a considered
+  // judgement; it is a word that appeared in both documents, and presenting it
+  // as the former is how a lead ends up looking like it was assessed when it
+  // was counted.
+  if (!items.length) {
+    if (!fallbackTerms.length) return <div />;
+    return (
+      <div>
+        <div className="small muted" style={{ textTransform: 'uppercase', letterSpacing: '.04em' }}>
+          {title === 'Why it fits' ? 'Words in common' : 'Words counting against'}
+        </div>
+        <p className="small muted" style={{ margin: '.35rem 0 0' }}>
+          {fallbackTerms.join(' · ')}
+        </p>
+      </div>
+    );
+  }
   return (
     <div>
       <div className="small muted" style={{ textTransform: 'uppercase', letterSpacing: '.04em' }}>
         {title}
       </div>
       <ul style={{ listStyle: 'none', padding: 0, margin: '.35rem 0 0' }}>
-        {list.map((t) => (
+        {items.map((t) => (
           <li key={t} className="small" style={{ padding: '.15rem 0' }}>
             <span style={{ color: colour, marginRight: '.4rem' }}>{marker}</span>
             {t}
           </li>
         ))}
       </ul>
-      {!items.length && (
-        <div className="muted small" style={{ marginTop: '.3rem', opacity: 0.75 }}>
-          Matched keywords, not a read of the posting.
-        </div>
-      )}
     </div>
   );
 }

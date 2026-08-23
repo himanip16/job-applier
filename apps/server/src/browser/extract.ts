@@ -9,6 +9,7 @@ import { evaluatePage } from './evaluate.js';
  */
 interface RawField {
   handle: string;
+  name?: string;
   tag: string;
   type: string;
   kind: FormField['kind'];
@@ -45,8 +46,26 @@ const EXTRACTOR = () => {
   // star, dagger. All of them are decoration, none of them are part of the
   // question, and leaving them in poisons both display and label matching.
   const REQUIRED_MARK = /[*\u2731\uFF0A\u2020\u271A]+\s*$/;
+  /**
+   * Decoration that is not part of the question.
+   *
+   * A live Roku posting produced the label "First Name (required) d1a61ede" -
+   * the word (required), which we already track as a boolean, and a per-render
+   * uid the board stamps into the label element. Both make the review screen
+   * ugly, and the uid is worse than that: it changes when the field
+   * re-renders, so anything matching a field by its label stops finding it.
+   */
+  const LABEL_NOISE =
+    /\s*(\(\s*(required|optional|mandatory)\s*\)|\b[0-9a-f]{8,}\b)\s*/gi;
+
   const textOf = (el: Element | null): string =>
-    (el?.textContent ?? '').replace(/\s+/g, ' ').trim().replace(REQUIRED_MARK, '').trim();
+    (el?.textContent ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(REQUIRED_MARK, '')
+      .replace(LABEL_NOISE, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
   const labelFor = (el: HTMLElement): string => {
     const aria = el.getAttribute('aria-label');
@@ -142,6 +161,7 @@ const EXTRACTOR = () => {
         if (type === 'checkbox' && siblings.length === 1) {
           results.push({
             handle: mark(el),
+            name: el.getAttribute('name') || el.getAttribute('id') || '',
             tag, type,
             kind: 'CHECKBOX',
             widget: 'native',
@@ -170,6 +190,7 @@ const EXTRACTOR = () => {
 
         results.push({
           handle: mark(el),
+          name: el.getAttribute('name') || el.getAttribute('id') || '',
           tag, type,
           kind: type === 'radio' ? 'RADIO' : 'CHECKBOX_GROUP',
           widget: type === 'radio' ? 'radio-group' : 'checkbox-group',
@@ -189,6 +210,7 @@ const EXTRACTOR = () => {
       if (type === 'file') {
         results.push({
           handle: mark(el),
+          name: el.getAttribute('name') || el.getAttribute('id') || '',
           tag, type,
           kind: 'FILE',
           widget: 'file',
@@ -210,6 +232,7 @@ const EXTRACTOR = () => {
           .filter((o) => o.value !== '' && !/^(select\.*|choose\.*|please select)/i.test(o.label));
         results.push({
           handle: mark(el),
+          name: el.getAttribute('name') || el.getAttribute('id') || '',
           tag, type,
           kind: sel.multiple ? 'MULTISELECT' : 'SELECT',
           widget: 'native',
@@ -225,6 +248,7 @@ const EXTRACTOR = () => {
       if (tag === 'textarea') {
         results.push({
           handle: mark(el),
+          name: el.getAttribute('name') || el.getAttribute('id') || '',
           tag, type,
           kind: 'TEXTAREA',
           widget: 'native',
@@ -242,6 +266,7 @@ const EXTRACTOR = () => {
         const multi = !!el.closest('.select__value-container--is-multi, [class*="is-multi"]');
         results.push({
           handle: mark(el),
+          name: el.getAttribute('name') || el.getAttribute('id') || '',
           tag, type,
           kind: multi ? 'MULTISELECT' : 'SELECT',
           widget: 'react-select',
@@ -266,6 +291,7 @@ const EXTRACTOR = () => {
 
       results.push({
         handle: mark(el),
+        name: el.getAttribute('name') || el.getAttribute('id') || '',
         tag, type,
         kind,
         widget: 'native',
@@ -310,6 +336,7 @@ export async function extractFields(
     fields.push({
       id: r.handle,
       selector: `[data-ja-field="${r.handle}"]`,
+      name: r.name || undefined,
       kind: r.kind,
       label: r.label,
       helpText: r.helpText || undefined,

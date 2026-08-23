@@ -38,21 +38,51 @@ async function getJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-const stripHtml = (html: string): string =>
+const removeTags = (html: string): string =>
   html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<\/(p|div|li|h[1-6]|br)>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
+    .replace(/<[^>]+>/g, ' ');
+
+const decodeEntities = (text: string): string =>
+  text
     .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    .replace(/&#39;|&rsquo;/g, "'")
+    .replace(/&#3[49];|&rsquo;|&lsquo;/g, "'")
     .replace(/&quot;|&ldquo;|&rdquo;/g, '"')
+    .replace(/&#(\d{2,5});/g, (_, code: string) => String.fromCodePoint(Number(code)))
+    // Last, deliberately: decoding it first would turn `&amp;lt;` straight
+    // into `<` and hide a level of escaping from the next pass.
+    .replace(/&amp;/g, '&');
+
+/**
+ * Turn a board's description into text a human and a tokeniser can both read.
+ *
+ * Stripping and unescaping have to alternate, not happen once each in that
+ * order. Greenhouse returns `content` as HTML that is itself HTML-escaped, so
+ * one pass removes no tags at all (there are none yet) and then unescapes
+ * `&lt;span style="..."&gt;` into real markup, which lands in the description
+ * verbatim. The lexical scorer then learns from it: a live queue had jobs
+ * whose top matched terms were `span`, `nbsp` and `props`, and one scored 94%
+ * on them.
+ *
+ * Three passes is enough for the double-escaping seen in the wild, and the
+ * loop stops as soon as a pass changes nothing.
+ */
+const stripHtml = (html: string): string => {
+  let text = html;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = decodeEntities(removeTags(text));
+    if (next === text) break;
+    text = next;
+  }
+  return removeTags(text)
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+};
 
 const looksRemote = (s: string): boolean => /\bremote\b|\bwork from home\b|\bdistributed\b/i.test(s);
 

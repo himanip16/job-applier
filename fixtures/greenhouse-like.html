@@ -65,6 +65,29 @@
   </div>
 
   <div class="field-wrapper">
+    <!--
+      Greenhouse's phone block: a country picker whose option labels carry the
+      dial code, and a number input beside it. Two things here broke a live
+      run against project44 — "India" matches no option labelled exactly
+      "India", and after selecting, the control reads "+91" rather than the
+      country name, so a correct fill verified as a failure.
+
+      Selecting also rebuilds the number input, which invalidates the handle
+      stamped on it during extraction.
+    -->
+    <label for="phone-country">Country<span aria-hidden="true">*</span></label>
+    <select id="phone-country" name="phone_country" required>
+      <option value="">Select...</option>
+      <option value="IN">India +91</option>
+      <option value="US">United States +1</option>
+      <option value="GB">United Kingdom +44</option>
+      <option value="IO">British Indian Ocean Territory +246</option>
+    </select>
+    <span id="dial-code"></span>
+
+    <label for="phone-number">Phone<span aria-hidden="true">*</span></label>
+    <span id="phone-slot"><input type="tel" id="phone-number" name="phone_number" required></span>
+
     <label for="resume">Resume/CV<span aria-hidden="true">*</span></label>
     <!--
       Greenhouse's real resume widget: four ways to supply the file. "Enter
@@ -226,6 +249,27 @@ document.getElementById('application-form').addEventListener('submit', (e) => {
   document.getElementById('application-form').hidden = true;
   document.getElementById('confirmation').hidden = false;
 });
+</script>
+<script>
+  (() => {
+    const country = document.getElementById('phone-country');
+    country.addEventListener('change', () => {
+      const label = country.options[country.selectedIndex].text;
+      document.getElementById('dial-code').textContent = (label.match(/\+\d+/) || [''])[0];
+      // Rebuilding the sibling is what invalidates the extraction handle.
+      const slot = document.getElementById('phone-slot');
+      const old = document.getElementById('phone-number');
+      const value = old ? old.value : '';
+      slot.innerHTML = '';
+      const fresh = document.createElement('input');
+      fresh.type = 'tel';
+      fresh.id = 'phone-number';
+      fresh.name = 'phone_number';
+      fresh.required = true;
+      fresh.value = value;
+      slot.appendChild(fresh);
+    });
+  })();
 </script>
 </body>
 </html>

@@ -46,6 +46,71 @@ export async function fillField(page: Page, field: FormField, value: string | st
   }
 }
 
+/**
+ * What state is this control actually in, before we try to drive it?
+ *
+ * Several applicant tracking systems parse the resume up front, fill the
+ * identity fields from it, and then **disable** them so the parse cannot be
+ * contradicted. Playwright's `fill` has no way to know that is deliberate: it
+ * waits for the element to become editable, retries for the full timeout, and
+ * eventually reports a failure on a field that was already correct. A live run
+ * against Roku's board spent sixty seconds doing that to First Name, Last Name
+ * and Email in turn, and then reported all three as errors.
+ *
+ * One cheap read tells us to leave them alone.
+ */
+export interface ControlState {
+  /** The site will not let anyone change this. */
+  locked: boolean;
+  /** What it currently holds, as the page reports it. */
+  current: string;
+  exists: boolean;
+}
+
+export async function inspectControl(page: Page, field: FormField): Promise<ControlState> {
+  try {
+    const el = page.locator(field.selector).first();
+    await el.waitFor({ state: 'attached', timeout: 2_000 });
+    return await el.evaluate((node) => {
+      const input = node as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+      const readOnly = 'readOnly' in input ? Boolean(input.readOnly) : false;
+      return {
+        locked: Boolean(input.disabled) || readOnly || input.getAttribute('aria-disabled') === 'true',
+        current: 'value' in input ? String(input.value ?? '') : (node.textContent ?? '').trim(),
+        exists: true,
+      };
+    });
+  } catch {
+    return { locked: false, current: '', exists: false };
+  }
+}
+
+/**
+ * Is the value already there, allowing for the site having masked it?
+ *
+ * Roku's board renders the parsed email as `h**********8@gmail.com`. That is
+ * the right address with its middle hidden, and comparing it literally against
+ * the profile says the field is wrong when it is exactly right - which would
+ * send a perfectly good application to a human for no reason.
+ */
+export function alreadyHolds(current: string, wanted: string | string[]): boolean {
+  const want = Array.isArray(wanted) ? wanted.join(', ') : wanted;
+  const a = normalizeLabel(current);
+  const b = normalizeLabel(want);
+  if (!a || !b) return false;
+  if (a === b) return true;
+
+  const masked = current.match(/^(.*?)\*+(.*)$/);
+  if (masked) {
+    const head = normalizeLabel(masked[1] ?? '');
+    const tail = normalizeLabel(masked[2] ?? '');
+    // Both ends have to agree, and there has to be something to agree on -
+    // otherwise "****" matches everything.
+    if ((head || tail) && b.startsWith(head) && b.endsWith(tail)) return true;
+  }
+  return false;
+}
+
 async function fillNative(page: Page, field: FormField, value: string | string[]): Promise<void> {
   const el = page.locator(field.selector).first();
   await el.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
@@ -62,15 +127,19 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
   switch (field.kind) {
     case 'SELECT': {
       const want = asOne(value, field);
-      // Try by visible label, then by option value; both are common.
+      // Try by visible label, then by the best option we can find; both are
+      // common, and an exact label match is rarer than it looks.
+      //
+      // Short timeout on the speculative attempt. It is expected to miss - the
+      // fallback below is the one that handles "India" against "India +91" -
+      // and letting it wait out the default put 30 seconds on the clock for
+      // every such field.
       try {
-        await el.selectOption({ label: want });
+        await el.selectOption({ label: want }, { timeout: 3_000 });
       } catch {
-        const optionValue = field.options?.find(
-          (o) => normalizeLabel(o.label) === normalizeLabel(want),
-        )?.value;
-        if (!optionValue) throw new FillError(`No option "${want}" on ${field.label}`, field);
-        await el.selectOption(optionValue);
+        const option = bestOption(field.options, want);
+        if (!option) throw new FillError(`No option "${want}" on ${field.label}`, field);
+        await el.selectOption(option.value);
       }
       break;
     }
@@ -107,6 +176,97 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
  * into a menu that may be portalled to document.body, so they are located
  * globally by role rather than inside the field's container.
  */
+/**
+ * Did the control end up on the option we asked for, even though it does not
+ * say so in those words?
+ *
+ * Greenhouse's phone country field is the case that forced this: ask for
+ * "India", and the control afterwards reads `+91`. That is a correct fill
+ * reported as a failure, which then routes a perfectly good application to a
+ * human for no reason.
+ *
+ * So: find the option we meant, and accept any read-back that is recognisably
+ * part of it - its value, or a fragment of its label such as the dial code.
+ */
+function showsChosenOption(field: FormField, want: string, shown: string): boolean {
+  if (!shown) return false;
+  const chosen = bestOption(field.options, want);
+  if (!chosen) return false;
+
+  const label = normalizeLabel(chosen.label);
+  const value = normalizeLabel(chosen.value);
+  if (shown === label || shown === value) return true;
+  if (label.includes(shown) && shown.length >= 2) return true;
+
+  // The decoration on its own: "+91" out of "India +91".
+  const dial = label.match(/\+\d{1,4}/)?.[0];
+  return Boolean(dial && normalizeLabel(dial) === shown);
+}
+
+/**
+ * The option a human would have picked.
+ *
+ * An exact label match is the exception, not the rule. Greenhouse's phone
+ * country field lists `India +91`, not `India`, so resolving the profile's
+ * country to "India" and asking for that label finds nothing and the fill
+ * fails on a required field — which was enough to end a whole run.
+ *
+ * Tiers, most specific first, so "India" can never be satisfied by
+ * "British Indian Ocean Territory" while an exact option exists.
+ */
+export function bestOption(
+  options: { label: string; value?: string }[] | undefined,
+  want: string,
+): { label: string; value: string } | null {
+  if (!options?.length) return null;
+  const target = normalizeLabel(want);
+  if (!target) return null;
+
+  // An option with no explicit value submits its label, which is what the
+  // browser does for `<option>Text</option>`.
+  const norm = options.map((o) => ({
+    o: { label: o.label, value: o.value ?? o.label },
+    label: normalizeLabel(o.label),
+    value: normalizeLabel(o.value ?? o.label),
+  }));
+
+  const exact = norm.find((c) => c.label === target || c.value === target);
+  if (exact) return exact.o;
+
+  // "India" against "India +91": the option starts with what we asked for and
+  // the rest is a dial code or similar decoration.
+  const prefixed = norm.find((c) => c.label.startsWith(`${target} `) || c.label.startsWith(`${target}(`));
+  if (prefixed) return prefixed.o;
+
+  // "India +91" against an option labelled "India" - the same case, reversed,
+  // which happens when a remembered answer carries the decoration.
+  const reverse = norm.find((c) => target.startsWith(`${c.label} `));
+  if (reverse) return reverse.o;
+
+  // Word-boundary containment. Deliberately last and deliberately strict about
+  // boundaries, so "us" does not select "Belarus".
+  const boundary = new RegExp(`(^|[^a-z0-9])${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`);
+  const contained = norm.find((c) => boundary.test(c.label));
+  if (contained) return contained.o;
+
+  /**
+   * Hierarchical values, narrowed one level at a time.
+   *
+   * A profile says "Bengaluru, Karnataka, India" and the board lists
+   * "Bengaluru, India" - no tier above matches, and the field fails. Dropping
+   * the least significant part and trying again is what a person would do, and
+   * it is safe because each attempt still has to satisfy the tiers above:
+   * "Bengaluru" is matched as a whole word, never as a fragment.
+   */
+  const parts = want.split(',').map((p) => p.trim()).filter(Boolean);
+  for (let keep = parts.length - 1; keep >= 1; keep--) {
+    const shorter = parts.slice(0, keep).join(', ');
+    const hit = bestOption(options, shorter);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 async function fillReactSelect(page: Page, field: FormField, value: string | string[]): Promise<void> {
   const wants = Array.isArray(value) ? value : [value];
   const input = page.locator(field.selector).first();
@@ -339,7 +499,11 @@ export async function verifyFilled(
       const selectedText = normalizeLabel(
         await el.locator('option:checked').innerText().catch(() => ''),
       );
-      return { ok: wants.every((w) => selectedText.includes(w) || actual.includes(w)), actual: selectedText || actual };
+      const shown = selectedText || actual;
+      const ok =
+        wants.every((w) => selectedText.includes(w) || actual.includes(w)) ||
+        wants.every((w) => showsChosenOption(field, w, shown));
+      return { ok, actual: shown };
     }
     return { ok: wants.every((w) => actual.includes(w)), actual };
   } catch (err) {
