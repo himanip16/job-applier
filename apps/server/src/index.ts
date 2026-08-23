@@ -208,11 +208,12 @@ app.post<{ Body: unknown }>('/api/applications', async (req, reply) => {
   const profile = await requireProfile(req, reply);
   if (!profile) return;
 
-  const { url, autoStart, requiresReview } = z
+  const { url, autoStart, requiresReview, writeCoverLetter } = z
     .object({
       url: z.string().url(),
       autoStart: z.boolean().default(true),
       requiresReview: z.boolean().default(config.requireReview),
+      writeCoverLetter: z.boolean().default(false),
     })
     .parse(req.body);
 
@@ -237,13 +238,13 @@ app.post<{ Body: unknown }>('/api/applications', async (req, reply) => {
   const application =
     existing ??
     (await prisma.application.create({
-      data: { profileId: profile.id, jobId: job.id, requiresReview },
+      data: { profileId: profile.id, jobId: job.id, requiresReview, writeCoverLetter },
     }));
 
   if (existing) {
     await prisma.application.update({
       where: { id: existing.id },
-      data: { status: 'QUEUED', blockedReason: null, requiresReview },
+      data: { status: 'QUEUED', blockedReason: null, requiresReview, writeCoverLetter },
     });
     await prisma.pendingQuestion.deleteMany({ where: { applicationId: existing.id, answeredAt: null } });
   }

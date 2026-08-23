@@ -398,8 +398,12 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   app.post<{ Params: { id: string } }>('/api/leads/:id/apply', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
-    const { requiresReview } = z
-      .object({ requiresReview: z.boolean().default(true) })
+    const { requiresReview, writeCoverLetter } = z
+      .object({
+        requiresReview: z.boolean().default(true),
+        // Off unless asked for. Most applications do not need one.
+        writeCoverLetter: z.boolean().default(false),
+      })
       .parse(req.body ?? {});
 
     const lead = await ownedLead(profile.id, req.params.id);
@@ -421,8 +425,8 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
     const application = await prisma.application.upsert({
       where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
-      create: { profileId: profile.id, jobId: job.id, requiresReview },
-      update: { status: 'QUEUED', blockedReason: null, requiresReview },
+      create: { profileId: profile.id, jobId: job.id, requiresReview, writeCoverLetter },
+      update: { status: 'QUEUED', blockedReason: null, requiresReview, writeCoverLetter },
     });
 
     await prisma.jobLead.update({

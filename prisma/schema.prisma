@@ -242,6 +242,11 @@ model Application {
   /// Snapshot of every field we discovered plus what we filled. This is the
   /// audit trail — you can prove exactly what was submitted on your behalf.
   fieldPlan    Json?
+  /// Whether to write one at all. Off by default: most applications do not
+  /// need a cover letter, and generating one for every job spends a model
+  /// call and thirty seconds on something nobody reads. A form that *requires*
+  /// one still gets one - the run says so in its log.
+  writeCoverLetter Boolean @default(false)
   coverLetter  String? @db.Text
   resumeFileId String?
 
