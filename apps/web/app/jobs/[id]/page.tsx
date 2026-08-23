@@ -35,6 +35,9 @@ interface Detail {
     dealbreaker: string | null;
     likedTerms: string[];
     dislikedTerms: string[];
+    affinity?: number;
+    sharedTerms?: string[];
+    missingTerms?: string[];
   } | null;
   lead: { id: string; status: string; rejectReason: string | null; rejectCategory: string | null } | null;
   application: {
@@ -201,8 +204,20 @@ function MatchPanel({ d, busy, onRescore }: { d: Detail; busy: boolean; onRescor
       </div>
 
       <div className="grid2" style={{ marginTop: '.8rem' }}>
-        <Points title="Why it fits" items={m.forIt} marker="✓" colour="var(--good)" fallbackTerms={m.likedTerms} />
-        <Points title="Gaps and concerns" items={m.againstIt} marker="△" colour="var(--warn)" fallbackTerms={m.dislikedTerms} />
+        <Points
+          title="Why it fits"
+          items={m.forIt}
+          marker="✓"
+          colour="var(--good)"
+          fallbackTerms={m.sharedTerms?.length ? m.sharedTerms : m.likedTerms}
+        />
+        <Points
+          title="Gaps and concerns"
+          items={m.againstIt}
+          marker="△"
+          colour="var(--warn)"
+          fallbackTerms={m.missingTerms?.length ? m.missingTerms : m.dislikedTerms}
+        />
       </div>
     </div>
   );

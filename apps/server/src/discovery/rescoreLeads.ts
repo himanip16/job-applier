@@ -2,12 +2,14 @@ import { prisma, type Prisma } from '../lib/db.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
 import {
   assessFit,
+  blendScores,
   buildPreferences,
   buildRejectionHistory,
-  loadSignals,
+  loadScoringContext,
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
+
 
 /**
  * Reading postings properly, one batch at a time.
@@ -62,10 +64,10 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
   });
   if (!profile) throw new Error('No profile to score against.');
 
-  const [preferences, rejectionHistory, signals] = await Promise.all([
+  const [preferences, rejectionHistory, scoring] = await Promise.all([
     buildPreferences(profileId),
     buildRejectionHistory(profileId),
-    loadSignals(profileId),
+    loadScoringContext(profileId),
   ]);
   const candidateContext = renderCandidateContext(profile, profile.resumeText);
 
@@ -95,8 +97,8 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
         outcomes.push({ id: lead.id, ok: false, reason: 'declined', error: DECLINED_MESSAGE });
         continue;
       }
-      const lex = scoreLexically(job, signals);
-      const blended = fit.dealbreaker ? Math.min(fit.score, 15) : 0.7 * fit.score + 0.3 * lex.score;
+      const lex = scoreLexically(job, scoring);
+      const blended = blendScores(fit, lex);
       await prisma.jobLead.update({
         where: { id: lead.id },
         data: {
@@ -143,4 +145,47 @@ export async function rescoreByIds(profileId: string, ids: string[]): Promise<Re
         error: 'That job is no longer in your list.',
       },
   );
+}
+
+/**
+ * Re-apply the lexical score to every undecided lead.
+ *
+ * Called immediately after each decision, because the whole promise of the
+ * triage queue is that rejecting one job re-ranks the ones like it. Without
+ * this, the sibling posting two rows down keeps the score it was crawled with
+ * and the learning is invisible until the next crawl.
+ *
+ * Free to run: no network, no model, and a queue is tens of rows.
+ *
+ * Leads that have had a model read keep it - their score is a blend the model
+ * dominates, so re-deriving it from word counts alone would be a downgrade.
+ * Their lexical component is refreshed on the next full rescore instead.
+ */
+export async function rescoreLexically(profileId: string): Promise<number> {
+  const scoring = await loadScoringContext(profileId);
+  const leads = await prisma.jobLead.findMany({
+    where: { profileId, status: 'NEW', deepScored: false },
+  });
+
+  let updated = 0;
+  for (const lead of leads) {
+    const lex = scoreLexically(
+      {
+        title: lead.title,
+        descriptionText: lead.descriptionText ?? '',
+        location: lead.location ?? undefined,
+      },
+      scoring,
+    );
+    await prisma.jobLead.update({
+      where: { id: lead.id },
+      data: {
+        score: lex.score,
+        scoreReasons: serialiseReasons(lex, null),
+        scoredAt: new Date(),
+      },
+    });
+    updated++;
+  }
+  return updated;
 }

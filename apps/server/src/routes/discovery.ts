@@ -2,11 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma, type Prisma } from '../lib/db.js';
 import { API_SOURCES } from '../discovery/sources.js';
-import { crawlAll, rescore, rescoreLexically } from '../discovery/crawler.js';
+import { crawlAll, rescore } from '../discovery/crawler.js';
 import { findJobs } from '../discovery/findJobs.js';
 import { isFirecrawlConfigured } from '../discovery/firecrawl.js';
 import { learnFromDecision, loadSignals } from '../discovery/scoring.js';
-import { rescoreByIds } from '../discovery/rescoreLeads.js';
+import { rescoreByIds, rescoreLexically } from '../discovery/rescoreLeads.js';
 import { adapterFor } from '../ats/registry.js';
 import { enqueue } from '../engine/queue.js';
 

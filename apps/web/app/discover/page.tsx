@@ -22,6 +22,9 @@ interface Lead {
     dealbreaker?: string;
     likedTerms?: string[];
     dislikedTerms?: string[];
+    affinity?: number;
+    sharedTerms?: string[];
+    missingTerms?: string[];
   } | null;
   status: string;
 }
@@ -93,6 +96,7 @@ interface SearchReport {
   skippedAlreadySeen: number;
   deepScored: number;
   companiesRegistered: number;
+  rerankedExisting: number;
   notes: string[];
   errors: { where: string; error: string }[];
 }
@@ -222,7 +226,7 @@ export default function DiscoverPage() {
       const errs = (report.errors as { company: string; error: string }[]) ?? [];
       setFlash(
         `Crawled ${report.companiesCrawled} boards, saw ${report.jobsSeen} postings, ${report.newLeads} new. ` +
-          `${report.deepScored} read in full.` +
+          `${report.deepScored} read in full. ${report.rerankedExisting} already in the queue re-ranked.` +
           (errs.length ? ` ${errs.length} board(s) failed: ${errs.map((e) => e.company).join(', ')}.` : ''),
       );
       await load();
@@ -793,11 +797,7 @@ function LeadCard({
               − {r.againstIt.slice(0, 2).join(' · ')}
             </div>
           ) : null}
-          {!lead.deepScored && (r.likedTerms?.length || r.dislikedTerms?.length) ? (
-            <div className="muted small" style={{ marginTop: '.3rem' }}>
-              matched: {[...(r.likedTerms ?? []), ...(r.dislikedTerms ?? [])].slice(0, 6).join(', ')}
-            </div>
-          ) : null}
+          {!lead.deepScored && <QuickScoreReasons reasons={r} />}
         </div>
 
         <div className="row" style={{ flexWrap: 'nowrap', flex: 'none' }}>
@@ -843,6 +843,43 @@ function LeadCard({
           {lead.descriptionText ?? 'No description captured.'}
         </pre>
       )}
+    </div>
+  );
+}
+
+/**
+ * What a keyword score is actually made of.
+ *
+ * A number with nothing behind it is the reason the ranking felt arbitrary.
+ * These two lines say it plainly: here is what the posting talks about that
+ * you have done, and here is what it talks about that you have not.
+ */
+function QuickScoreReasons({
+  reasons,
+}: {
+  reasons: {
+    affinity?: number;
+    sharedTerms?: string[];
+    missingTerms?: string[];
+    likedTerms?: string[];
+    dislikedTerms?: string[];
+  };
+}) {
+  const shared = reasons.sharedTerms ?? [];
+  const missing = reasons.missingTerms ?? [];
+  const learned = [...(reasons.likedTerms ?? []), ...(reasons.dislikedTerms ?? [])];
+  if (!shared.length && !missing.length && !learned.length) return null;
+
+  return (
+    <div className="muted small" style={{ marginTop: '.3rem' }}>
+      {shared.length > 0 && (
+        <>
+          <span style={{ color: 'var(--good)' }}>in your resume:</span> {shared.slice(0, 6).join(', ')}
+        </>
+      )}
+      {shared.length > 0 && missing.length > 0 && ' · '}
+      {missing.length > 0 && <>not in it: {missing.slice(0, 5).join(', ')}</>}
+      {learned.length > 0 && ` · from your past picks: ${learned.slice(0, 4).join(', ')}`}
     </div>
   );
 }
@@ -997,6 +1034,10 @@ function SearchReportPanel({ report }: { report: SearchReport }) {
             ` · ${report.companiesRegistered} new board${
               report.companiesRegistered === 1 ? '' : 's'
             } added to the watch list`}
+          {report.rerankedExisting > 0 &&
+            ` · ${report.rerankedExisting} lead${
+              report.rerankedExisting === 1 ? '' : 's'
+            } already in the queue re-ranked`}
           {report.creditsUsed > 0 && ` · ${report.creditsUsed} search credits`}
         </span>
       )}
