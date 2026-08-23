@@ -100,6 +100,17 @@ export const config = {
    */
   maxApplicationSteps: num(process.env.MAX_APPLICATION_STEPS, 12),
   maxSubmitsPerHour: num(process.env.MAX_SUBMITS_PER_HOUR, 10),
+  /**
+   * How long to wait between retries after a retryable model error, in ms.
+   *
+   * Sized for a free tier's per-minute window, which is the case worth waiting
+   * out. Set to an empty string to disable retrying - reasonable on a paid
+   * key, where a 429 usually means something else is wrong.
+   */
+  llmRetryDelaysMs: (process.env.LLM_RETRY_DELAYS_MS ?? '2000,6000,14000')
+    .split(',')
+    .map((n) => Number(n.trim()))
+    .filter((n) => Number.isFinite(n) && n >= 0),
   answerConfidenceThreshold: num(process.env.ANSWER_CONFIDENCE_THRESHOLD, 0.82),
   memoryReuseThreshold: num(process.env.MEMORY_REUSE_THRESHOLD, 0.86),
 
