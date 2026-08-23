@@ -1,5 +1,13 @@
 import { prisma } from './db.js';
 
+export type ApiProvider = 'anthropic' | 'gemini';
+
+export interface NamedApiKey {
+  id: string;
+  name: string;
+  value: string;
+}
+
 /**
  * Settings that can be changed while the app is running.
  *
@@ -52,8 +60,101 @@ export type SettingKey = keyof typeof EDITABLE_SETTINGS;
 
 export const isSettingKey = (k: string): k is SettingKey => k in EDITABLE_SETTINGS;
 
+export const NAMED_API_KEY_KEYS = {
+  anthropic: 'ANTHROPIC_API_KEYS',
+  gemini: 'GEMINI_API_KEYS',
+} as const;
+
+export const NAMED_API_KEY_ACTIVE_KEYS = {
+  anthropic: 'ANTHROPIC_API_KEY_ACTIVE',
+  gemini: 'GEMINI_API_KEY_ACTIVE',
+} as const;
+
 const cache = new Map<string, string>();
 let loaded = false;
+
+function parseNamedApiKeys(raw: string): NamedApiKey[] {
+  if (!raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const item = entry as Record<string, unknown>;
+      const id = typeof item.id === 'string' ? item.id : '';
+      const name = typeof item.name === 'string' ? item.name.trim() : '';
+      const value = typeof item.value === 'string' ? item.value.trim() : '';
+      if (!id || !name || !value) return [];
+      return [{ id, name, value }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+export function readNamedApiKeys(provider: ApiProvider): NamedApiKey[] {
+  const raw = secret(NAMED_API_KEY_KEYS[provider]);
+  return parseNamedApiKeys(raw);
+}
+
+export function activeNamedApiKeyId(provider: ApiProvider): string | undefined {
+  const explicit = secret(NAMED_API_KEY_ACTIVE_KEYS[provider]);
+  if (explicit) return explicit;
+  const keys = readNamedApiKeys(provider);
+  return keys[0]?.id;
+}
+
+export function activeNamedApiKey(provider: ApiProvider): NamedApiKey | undefined {
+  const keys = readNamedApiKeys(provider);
+  const activeId = activeNamedApiKeyId(provider);
+  return keys.find((k) => k.id === activeId) ?? keys[0];
+}
+
+export async function saveNamedApiKey(
+  provider: ApiProvider,
+  patch: { id?: string; name: string; value: string },
+): Promise<NamedApiKey> {
+  const keys = readNamedApiKeys(provider);
+  const trimmedName = patch.name.trim();
+  const trimmedValue = patch.value.trim();
+  if (!trimmedName || !trimmedValue) {
+    throw new Error('API key name and value are both required.');
+  }
+
+  const nextKey: NamedApiKey = {
+    id: patch.id || crypto.randomUUID(),
+    name: trimmedName,
+    value: trimmedValue,
+  };
+
+  const existing = keys.filter((k) => k.id !== nextKey.id);
+  const updated = [...existing, nextKey].sort((a, b) => a.name.localeCompare(b.name));
+  await setSetting(NAMED_API_KEY_KEYS[provider], JSON.stringify(updated));
+
+  const activeId = activeNamedApiKeyId(provider);
+  if (!activeId) await setActiveApiKey(provider, nextKey.id);
+  return nextKey;
+}
+
+export async function setActiveApiKey(provider: ApiProvider, id: string): Promise<void> {
+  const keys = readNamedApiKeys(provider);
+  if (!keys.some((k) => k.id === id)) {
+    throw new Error('That API key is not in the saved list.');
+  }
+  await setSetting(NAMED_API_KEY_ACTIVE_KEYS[provider], id);
+}
+
+export async function clearNamedApiKey(provider: ApiProvider, id: string): Promise<void> {
+  const keys = readNamedApiKeys(provider);
+  const remaining = keys.filter((k) => k.id !== id);
+  await setSetting(NAMED_API_KEY_KEYS[provider], JSON.stringify(remaining));
+
+  const active = activeNamedApiKeyId(provider);
+  if (active === id) {
+    await clearSetting(NAMED_API_KEY_ACTIVE_KEYS[provider]);
+    if (remaining[0]) await setActiveApiKey(provider, remaining[0].id);
+  }
+}
 
 /**
  * Fill the cache from the database. Call once at boot, before serving.
@@ -76,7 +177,15 @@ export async function loadSettings(): Promise<number> {
 }
 
 /** The stored value, else the environment, else empty. */
+function activeNamedApiKeyValueForKey(key: string): string | undefined {
+  if (key === 'ANTHROPIC_API_KEY') return activeNamedApiKey('anthropic')?.value;
+  if (key === 'GEMINI_API_KEY') return activeNamedApiKey('gemini')?.value;
+  return undefined;
+}
+
 export function secret(key: string, ...envFallbacks: string[]): string {
+  const activeNamed = activeNamedApiKeyValueForKey(key);
+  if (activeNamed) return activeNamed;
   const stored = cache.get(key);
   if (stored) return stored;
   for (const name of [key, ...envFallbacks]) {
@@ -88,12 +197,14 @@ export function secret(key: string, ...envFallbacks: string[]): string {
 
 /** Where a value is coming from, so the UI can say so rather than guess. */
 export function secretOrigin(key: string, ...envFallbacks: string[]): 'saved' | 'env' | 'unset' {
+  if (key === 'ANTHROPIC_API_KEY' && readNamedApiKeys('anthropic').length) return 'saved';
+  if (key === 'GEMINI_API_KEY' && readNamedApiKeys('gemini').length) return 'saved';
   if (cache.get(key)) return 'saved';
   for (const name of [key, ...envFallbacks]) if (process.env[name]) return 'env';
   return 'unset';
 }
 
-export async function setSetting(key: SettingKey, value: string): Promise<void> {
+export async function setSetting(key: string, value: string): Promise<void> {
   const trimmed = value.trim();
   if (!trimmed) return clearSetting(key);
   await prisma.setting.upsert({
@@ -111,9 +222,19 @@ export async function setSetting(key: SettingKey, value: string): Promise<void> 
  * key you typed into the UI should not also disable one that was already in
  * .env, and the settings page says which is in force.
  */
-export async function clearSetting(key: SettingKey): Promise<void> {
+export async function clearSetting(key: string): Promise<void> {
   await prisma.setting.deleteMany({ where: { key } });
   cache.delete(key);
+}
+
+export function namedProviderState(provider: ApiProvider): {
+  activeId: string | undefined;
+  keys: NamedApiKey[];
+} {
+  return {
+    activeId: activeNamedApiKeyId(provider),
+    keys: readNamedApiKeys(provider),
+  };
 }
 
 export const settingsLoaded = (): boolean => loaded;

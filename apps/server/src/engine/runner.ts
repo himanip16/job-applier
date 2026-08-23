@@ -81,19 +81,12 @@ export async function runApplication(applicationId: string): Promise<void> {
 
     page = await newPage();
 
-    // Opening can itself hit a wall - a sign-in page, a challenge - and that
-    // is recoverable rather than terminal: the human deals with it in the
-    // browser that is already open and the run tries again from there. Three
-    // attempts, because a wall that survives two clearances is not a wall.
     let opened = false;
     for (let attempt = 1; attempt <= 3 && !opened; attempt++) {
       try {
         await adapter.openApplicationForm(page, app.job.url);
         opened = true;
       } catch (err) {
-        // Reaching the form is its own failure mode, and both named cases mean
-        // a person is needed rather than the run being broken. Screenshot first
-        // so there is something to look at.
         await artifact(applicationId, 'screenshot', `could-not-open-${attempt}`, await screenshot(page, applicationId, `could-not-open-${attempt}`)).catch(() => {});
 
         if (err instanceof NeedsHumanError && attempt < 3) {
@@ -109,9 +102,9 @@ export async function runApplication(applicationId: string): Promise<void> {
         return;
       }
     }
+
     await artifact(applicationId, 'screenshot', 'form-opened', await screenshot(page, applicationId, 'form-opened'));
 
-    // ---- Job metadata ------------------------------------------------------
     const meta = await adapter.readJobMeta(page);
     await prisma.job.update({
       where: { id: app.jobId },
@@ -125,7 +118,6 @@ export async function runApplication(applicationId: string): Promise<void> {
     });
     await bus.emitEvent(applicationId, 'LOG', `Read the posting: ${meta.title} at ${meta.company}.`);
 
-    // ---- Everything the walk will need -------------------------------------
     const resume =
       app.profile.resumes.find((r) => r.id === app.resumeFileId) ??
       app.profile.resumes.find((r) => r.isDefault) ??
@@ -155,18 +147,9 @@ export async function runApplication(applicationId: string): Promise<void> {
     let coverAttached = false;
     let submitControl: Awaited<ReturnType<typeof findAdvanceControl>> = null;
 
-    // ---- Walk the wizard ----------------------------------------------------
-    //
-    // One iteration per screen. The order inside matters: a login wall or an
-    // autofill prompt has to be dealt with before we go looking for fields,
-    // because on those screens the fields we want do not exist yet.
     let step = 0;
     let stuckSignature: string | null = null;
     let navigationRetries = 0;
-    // Answering a question about how to fill the form should happen once. A
-    // detector that fires on something which is not really that question would
-    // otherwise burn the whole step budget clicking it, which is precisely
-    // what a stray "Enter manually" button did.
     const handledPrompts = new Set<string>();
 
     for (;;) {
@@ -178,257 +161,229 @@ export async function runApplication(applicationId: string): Promise<void> {
         );
       }
 
-      // Before reading anything. Arriving at a step is frequently a redirect
-      // chain rather than a single navigation - Google Careers' Apply link
-      // navigates, then bounces to accounts.google.com - and reading the page
-      // between the two hops is how the run used to die with "Execution
-      // context was destroyed".
       await settle(page);
 
       try {
+        const signature = await pageSignature(page);
 
-      const signature = await pageSignature(page);
-
-      // ---- A wall? -----------------------------------------------------------
-      const wall = (await detectBlockers(page)).find(
-        (b) =>
-          b.kind === 'LOGIN_REQUIRED' ||
-          b.kind === 'ACCOUNT_CREATION' ||
-          b.kind === 'EMAIL_VERIFICATION' ||
-          (b.kind === 'CAPTCHA' && /on screen/i.test(b.detail)),
-      );
-      if (wall) {
-        // Resumable, not terminal. The browser profile persists, so once you
-        // have signed in the run can pick up exactly where it stopped -
-        // throwing the run away and making you start again would be a strange
-        // way to treat a page that is now past the wall.
-        const carryOn = await pauseForHuman(applicationId, page, wall);
-        if (!carryOn) return;
-        continue;
-      }
-
-      // ---- "Autofill with your resume?" --------------------------------------
-      const prompt = handledPrompts.has(signature) ? null : await detectAutofillPrompt(page);
-      if (prompt) {
-        handledPrompts.add(signature);
-        const target = await chooseAutofill(applicationId, prompt, Boolean(resume));
-        if (target) {
-          await page.click(target).catch(() => {});
-          // If answering it did not change the page, it was not really a
-          // question - carry straight on and treat what is here as the form,
-          // rather than looping back and finding the same control again.
-          if (await waitForStepChange(page, signature, 20_000)) {
-            step--;
-            continue;
-          }
-          await bus.emitEvent(
-            applicationId,
-            'LOG',
-            'That choice did not change the page; carrying on with the form as it is.',
-          );
-        }
-      }
-
-      const progress = await readStepProgress(page);
-      await setStatus(applicationId, 'FILLING', describeStep(step, progress), { progress });
-
-      // ---- What is on this screen? -------------------------------------------
-      const gate = await looksLikeAGate(page);
-      let fields: FormField[] = [];
-      if (!gate) {
-        // Handles restart at f0 on every extraction, so they are namespaced by
-        // step before anything stores them - otherwise step 2's "f0" would
-        // overwrite step 1's answer and its pending question.
-        fields = (await adapter.extractForm(page)).map((f) => ({ ...f, id: `s${step}:${f.id}` }));
-        allFields.push(...fields);
-        await bus.emitEvent(
-          applicationId,
-          'FORM_EXTRACTED',
-          `Step ${step}: ${fields.length} field(s), ${fields.filter((f) => f.required).length} required.`,
-          { step, fields },
+        const wall = (await detectBlockers(page)).find(
+          (b) =>
+            b.kind === 'LOGIN_REQUIRED' ||
+            b.kind === 'ACCOUNT_CREATION' ||
+            b.kind === 'EMAIL_VERIFICATION' ||
+            (b.kind === 'CAPTCHA' && /on screen/i.test(b.detail)),
         );
-      }
-
-      if (gate && step === 1) {
-        throw new Error(
-          'No form fields found on the page. The posting may be closed, or the form behind a wall.',
-        );
-      }
-
-      const { resume: resumeInput, coverLetter: coverInput } = adapter.fileInputs(fields);
-
-      // ---- A cover letter, the first time a step asks for one ----------------
-      const wantsCoverLetter =
-        !!coverInput || fields.some((f) => /cover letter/i.test(f.label) && f.kind === 'TEXTAREA');
-      if (wantsCoverLetter && !coverLetter) {
-        coverLetter = await writeCoverLetter(applicationId, {
-          candidateContext,
-          companyName: meta.company,
-          jobTitle: meta.title,
-          jobDescription: meta.descriptionText,
-        });
-        ctx.coverLetter = coverLetter;
-      }
-
-      // ---- Resolve, ask, fill -------------------------------------------------
-      const fillable = fields.filter((f) => f.kind !== 'FILE');
-      const gaps: AnswerGap[] = [];
-      for (const field of fillable) {
-        const res = await resolveField(field, ctx);
-        if (res.kind === 'answer') {
-          answers.set(field.id, res.answer);
-          await bus.emitEvent(
-            applicationId,
-            'FIELD_RESOLVED',
-            `${field.label}: ${truncate(res.answer.displayValue)} [${res.answer.source}]`,
-            { fieldId: field.id, source: res.answer.source, confidence: res.answer.confidence },
-          );
-        } else {
-          gaps.push(res.gap);
-        }
-      }
-
-      if (gaps.length) {
-        const supplied = await askHuman(applicationId, fillable, gaps);
-        for (const [fieldId, answer] of supplied) {
-          answers.set(fieldId, answer);
-          sessionAnswers.set(fieldId, answer);
-        }
-        const stillMissing = fillable.filter((f) => f.required && !answers.has(f.id));
-        if (stillMissing.length) {
-          throw new Error(
-            `Required field(s) left unanswered: ${stillMissing.map((f) => f.label).join(', ')}`,
-          );
-        }
-      }
-
-    // ---- Fill --------------------------------------------------------------
-    const plan: FieldPlanEntry[] = [];
-    for (const field of fillable) {
-      const answer = answers.get(field.id);
-      if (!answer || answer.value === null || answer.displayValue === '') {
-        plan.push(entry(field, answer, false));
-        continue;
-      }
-      try {
-        await fillField(page, field, answer.value as string | string[]);
-        const check = await verifyFilled(page, field, answer.value as string | string[]);
-        plan.push({ ...entry(field, answer, true), verified: check.actual, error: check.ok ? undefined : 'value did not stick' });
-        if (!check.ok) {
-          await bus.emitEvent(
-            applicationId,
-            'WARNING',
-            `"${field.label}" did not hold the value we set (page shows: ${truncate(check.actual)}).`,
-          );
-        }
-      } catch (err) {
-        const msg = err instanceof FillError ? err.message : (err as Error).message;
-        plan.push({ ...entry(field, answer, false), error: msg });
-        await bus.emitEvent(applicationId, 'WARNING', `Could not fill "${field.label}": ${msg}`);
-        if (field.required) {
-          throw new Error(`Required field "${field.label}" could not be filled: ${msg}`);
-        }
-      }
-    }
-
-      // ---- Attachments, on whichever step asks for them ----------------------
-      if (resumeInput && !resumeAttached) {
-        if (!resume) throw new Error('This form wants a resume and none is uploaded to your profile.');
-        await attachFile(page, resumeInput.selector, path.resolve(resume.path));
-        resumeAttached = true;
-        await bus.emitEvent(applicationId, 'FILE_ATTACHED', `Attached ${resume.filename}.`);
-        plan.push({
-          fieldId: resumeInput.id, label: resumeInput.label, kind: 'FILE', required: resumeInput.required,
-          value: resume.filename, source: 'PROFILE', confidence: 1, filled: true,
-        });
-      }
-      if (coverInput && coverLetter && !coverAttached) {
-        const file = await writeCoverLetterFile(applicationId, coverLetter);
-        await attachFile(page, coverInput.selector, file);
-        coverAttached = true;
-        await bus.emitEvent(applicationId, 'FILE_ATTACHED', 'Attached the generated cover letter.');
-      }
-
-      await prisma.application.update({
-        where: { id: applicationId },
-        data: { fieldPlan: plan as unknown as Prisma.InputJsonValue },
-      });
-
-      // ---- Forward -------------------------------------------------------------
-      const advance = await findAdvanceControl(page);
-      if (!advance) {
-        // Nothing to press. On a one-page form that is normal - the adapter
-        // knows how to submit it. Mid-wizard it means the markup changed.
-        await bus.emitEvent(
-          applicationId,
-          'LOG',
-          step === 1
-            ? 'Single-page form; handing over to the adapter to submit.'
-            : `No next or submit control on step ${step}; letting the adapter try to submit.`,
-        );
-        break;
-      }
-
-      if (advance.kind === 'SUBMIT') {
-        submitControl = advance;
-        await bus.emitEvent(
-          applicationId,
-          'LOG',
-          `Reached the end of the application ("${advance.label}") after ${step} step(s).`,
-        );
-        break;
-      }
-
-      await artifact(
-        applicationId,
-        'screenshot',
-        `step-${step}`,
-        await screenshot(page, applicationId, `step-${step}`),
-      ).catch(() => {});
-
-      await page.click(advance.selector).catch(async (err: unknown) => {
-        throw new Error(`Could not press "${advance.label}": ${(err as Error).message}`);
-      });
-      const moved = await waitForStepChange(page, signature, 20_000);
-
-      if (!moved) {
-        // Pressing continue changed nothing. Almost always the step is
-        // rejecting something; occasionally the button was not the one that
-        // moves forward. Either way the page's own complaint is the useful
-        // thing to report, not "the page did not change".
-        const errors = await readValidationErrors(page);
-        const detail = errors.length
-          ? `Step ${step} would not accept the form: ${errors.join(' · ')}`
-          : `Pressing "${advance.label}" on step ${step} did not move the application on, and the ` +
-            'page gave no reason.';
-
-        if (stuckSignature === signature) {
-          const carryOn = await pauseForHuman(applicationId, page, {
-            kind: 'UNKNOWN',
-            detail: `${detail} The browser is open on it - fix it there and continue, or cancel.`,
-            humanCanClear: true,
-          });
+        if (wall) {
+          const carryOn = await pauseForHuman(applicationId, page, wall);
           if (!carryOn) return;
-          stuckSignature = null;
           continue;
         }
 
-        // First failure: re-read the step. A rejected submit often reveals
-        // fields that were not rendered before, and filling those is exactly
-        // what the next iteration does.
-        stuckSignature = signature;
-        await bus.emitEvent(applicationId, 'WARNING', `${detail} Re-reading the step.`);
-        step--;
-        continue;
-      }
+        const prompt = handledPrompts.has(signature) ? null : await detectAutofillPrompt(page);
+        if (prompt) {
+          handledPrompts.add(signature);
+          const target = await chooseAutofill(applicationId, prompt, Boolean(resume));
+          if (target) {
+            await page.click(target).catch(() => {});
+            if (await waitForStepChange(page, signature, 20_000)) {
+              step--;
+              continue;
+            }
+            await bus.emitEvent(
+              applicationId,
+              'LOG',
+              'That choice did not change the page; carrying on with the form as it is.',
+            );
+          }
+        }
 
-      stuckSignature = null;
-      navigationRetries = 0;
+        const progress = await readStepProgress(page);
+        await setStatus(applicationId, 'FILLING', describeStep(step, progress), { progress });
+
+        const gate = await looksLikeAGate(page);
+        let fields: FormField[] = [];
+        if (!gate) {
+          fields = (await adapter.extractForm(page)).map((f) => ({ ...f, id: `s${step}:${f.id}` }));
+          allFields.push(...fields);
+          await bus.emitEvent(
+            applicationId,
+            'FORM_EXTRACTED',
+            `Step ${step}: ${fields.length} field(s), ${fields.filter((f) => f.required).length} required.`,
+            { step, fields },
+          );
+        }
+
+        if (gate && step === 1) {
+          throw new Error(
+            'No form fields found on the page. The posting may be closed, or the form behind a wall.',
+          );
+        }
+
+        const { resume: resumeInput, coverLetter: coverInput } = adapter.fileInputs(fields);
+
+        const wantsCoverLetter =
+          !!coverInput || fields.some((f) => /cover letter/i.test(f.label) && f.kind === 'TEXTAREA');
+        if (wantsCoverLetter && !coverLetter) {
+          coverLetter = await writeCoverLetter(applicationId, {
+            candidateContext,
+            companyName: meta.company,
+            jobTitle: meta.title,
+            jobDescription: meta.descriptionText,
+          });
+          ctx.coverLetter = coverLetter;
+        }
+
+        const fillable = fields.filter((f) => f.kind !== 'FILE');
+        const gaps: AnswerGap[] = [];
+        for (const field of fillable) {
+          const res = await resolveField(field, ctx);
+          if (res.kind === 'answer') {
+            answers.set(field.id, res.answer);
+            await bus.emitEvent(
+              applicationId,
+              'FIELD_RESOLVED',
+              `${field.label}: ${truncate(res.answer.displayValue)} [${res.answer.source}]`,
+              { fieldId: field.id, source: res.answer.source, confidence: res.answer.confidence },
+            );
+          } else {
+            gaps.push(res.gap);
+          }
+        }
+
+        if (gaps.length) {
+          const supplied = await askHuman(applicationId, fillable, gaps);
+          for (const [fieldId, answer] of supplied) {
+            answers.set(fieldId, answer);
+            sessionAnswers.set(fieldId, answer);
+          }
+          const stillMissing = fillable.filter((f) => f.required && !answers.has(f.id));
+          if (stillMissing.length) {
+            throw new Error(
+              `Required field(s) left unanswered: ${stillMissing.map((f) => f.label).join(', ')}`,
+            );
+          }
+        }
+
+        for (const field of fillable) {
+          const answer = answers.get(field.id);
+          if (!answer || answer.value === null || answer.displayValue === '') {
+            plan.push(entry(field, answer, false));
+            continue;
+          }
+          try {
+            await fillField(page, field, answer.value as string | string[]);
+            const check = await verifyFilled(page, field, answer.value as string | string[]);
+            plan.push({
+              ...entry(field, answer, true),
+              verified: check.actual,
+              error: check.ok ? undefined : 'value did not stick',
+            });
+            if (!check.ok) {
+              await bus.emitEvent(
+                applicationId,
+                'WARNING',
+                `"${field.label}" did not hold the value we set (page shows: ${truncate(check.actual)}).`,
+              );
+            }
+          } catch (err) {
+            const msg = err instanceof FillError ? err.message : (err as Error).message;
+            plan.push({ ...entry(field, answer, false), error: msg });
+            await bus.emitEvent(applicationId, 'WARNING', `Could not fill "${field.label}": ${msg}`);
+            if (field.required) {
+              throw new Error(`Required field "${field.label}" could not be filled: ${msg}`);
+            }
+          }
+        }
+
+        if (resumeInput && !resumeAttached) {
+          if (!resume) throw new Error('This form wants a resume and none is uploaded to your profile.');
+          await attachFile(page, resumeInput.selector, path.resolve(resume.path));
+          resumeAttached = true;
+          await bus.emitEvent(applicationId, 'FILE_ATTACHED', `Attached ${resume.filename}.`);
+          plan.push({
+            fieldId: resumeInput.id,
+            label: resumeInput.label,
+            kind: 'FILE',
+            required: resumeInput.required,
+            value: resume.filename,
+            source: 'PROFILE',
+            confidence: 1,
+            filled: true,
+          });
+        }
+        if (coverInput && coverLetter && !coverAttached) {
+          const file = await writeCoverLetterFile(applicationId, coverLetter);
+          await attachFile(page, coverInput.selector, file);
+          coverAttached = true;
+          await bus.emitEvent(applicationId, 'FILE_ATTACHED', 'Attached the generated cover letter.');
+        }
+
+        await prisma.application.update({
+          where: { id: applicationId },
+          data: { fieldPlan: plan as unknown as Prisma.InputJsonValue },
+        });
+
+        const advance = await findAdvanceControl(page);
+        if (!advance) {
+          await bus.emitEvent(
+            applicationId,
+            'LOG',
+            step === 1
+              ? 'Single-page form; handing over to the adapter to submit.'
+              : `No next or submit control on step ${step}; letting the adapter try to submit.`,
+          );
+          break;
+        }
+
+        if (advance.kind === 'SUBMIT') {
+          submitControl = advance;
+          await bus.emitEvent(
+            applicationId,
+            'LOG',
+            `Reached the end of the application ("${advance.label}") after ${step} step(s).`,
+          );
+          break;
+        }
+
+        await artifact(
+          applicationId,
+          'screenshot',
+          `step-${step}`,
+          await screenshot(page, applicationId, `step-${step}`),
+        ).catch(() => {});
+
+        await page.click(advance.selector).catch(async (err: unknown) => {
+          throw new Error(`Could not press "${advance.label}": ${(err as Error).message}`);
+        });
+
+        const moved = await waitForStepChange(page, signature, 20_000);
+        if (!moved) {
+          const errors = await readValidationErrors(page);
+          const detail = errors.length
+            ? `Step ${step} would not accept the form: ${errors.join(' · ')}`
+            : `Pressing "${advance.label}" on step ${step} did not move the application on, and the ` +
+              'page gave no reason.';
+
+          if (stuckSignature === signature) {
+            const carryOn = await pauseForHuman(applicationId, page, {
+              kind: 'UNKNOWN',
+              detail: `${detail} The browser is open on it - fix it there and continue, or cancel.`,
+              humanCanClear: true,
+            });
+            if (!carryOn) return;
+            stuckSignature = null;
+            continue;
+          }
+
+          stuckSignature = signature;
+          await bus.emitEvent(applicationId, 'WARNING', `${detail} Re-reading the step.`);
+          step--;
+          continue;
+        }
+
+        stuckSignature = null;
+        navigationRetries = 0;
       } catch (err) {
-        // The page moved while we were working on it. That is a wizard doing
-        // its job, not a failure - look at wherever it landed instead. Bounded,
-        // because a page that navigates on a timer would otherwise spin here
-        // forever without ever making progress.
         if (!isNavigationRace(err) || navigationRetries >= 4) throw err;
         navigationRetries++;
         step--;
@@ -445,48 +400,32 @@ export async function runApplication(applicationId: string): Promise<void> {
     await artifact(applicationId, 'screenshot', 'filled', await screenshot(page, applicationId, 'filled'));
     await artifact(applicationId, 'dom', 'filled-dom', await saveDom(page, applicationId, 'filled'));
 
-      const blockers = await detectBlockers(page);
-      const captcha = blockers.find((b) => b.kind === 'CAPTCHA');
+    const blockers = await detectBlockers(page);
+    const captcha = blockers.find((b) => b.kind === 'CAPTCHA');
 
-      const nextAction = await detectNextAction(page);
-      if (nextAction && nextAction.type === 'NEXT') {
-        await bus.emitEvent(applicationId, 'LOG', `Advancing from step to step via "${nextAction.label}".`);
-        await nextAction.locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
-        await nextAction.locator.click({ timeout: 15000 }).catch(() => {});
-        await page.waitForLoadState('domcontentloaded').catch(() => {});
-        await page.waitForTimeout(1200);
-        continue;
+    const mustReview =
+      app.requiresReview ||
+      config.requireReview ||
+      adapter.id === 'generic' ||
+      !!captcha ||
+      plan.some((p) => p.error) ||
+      plan.some((p) => p.confidence < 0.9 && p.filled);
+
+    if (mustReview) {
+      const reason = captcha
+        ? `${captcha.detail} The form is filled and waiting; solve the challenge in the browser, then approve here.`
+        : adapter.id === 'generic'
+          ? 'Unrecognised site, so this always goes through review.'
+          : 'Filled and ready. Check it over, then approve.';
+      const decisionPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
+      await setStatus(applicationId, 'REVIEW', reason, { blockers, plan });
+      const decision = await decisionPromise;
+      if (!decision.approved) {
+        await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
+        return;
       }
+    }
 
-      const mustReview =
-        app.requiresReview ||
-        config.requireReview ||
-        adapter.id === 'generic' ||
-        !!captcha ||
-        plan.some((p) => p.error) ||
-        plan.some((p) => p.confidence < 0.9 && p.filled);
-
-      if (mustReview) {
-        const reason = captcha
-          ? `${captcha.detail} The form is filled and waiting; solve the challenge in the browser, then approve here.`
-          : adapter.id === 'generic'
-            ? 'Unrecognised site, so this always goes through review.'
-            : 'Filled and ready. Check it over, then approve.';
-        const decisionPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
-        await setStatus(applicationId, 'REVIEW', reason, { blockers, plan });
-        const decision = await decisionPromise;
-        if (!decision.approved) {
-          await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
-          return;
-        }
-      }
-
-    // ---- Submit ---------------------------------------------------------------
-    //
-    // The walk usually ends holding the actual final button, which is more
-    // reliable than the adapter's generic selector - on a wizard, "the submit
-    // button" and "the button that ends the application" are only the same
-    // thing on the last screen.
     const pressSubmit = async () => {
       if (submitControl) {
         await page!.click(submitControl.selector);
@@ -506,15 +445,15 @@ export async function runApplication(applicationId: string): Promise<void> {
     const outcome = await detectSubmissionOutcome(page, urlBefore);
     await artifact(applicationId, 'screenshot', 'after-submit', await screenshot(page, applicationId, 'after-submit'));
 
-      if (outcome.outcome === 'SUBMITTED') {
-        await prisma.application.update({
-          where: { id: applicationId },
-          data: { status: 'SUBMITTED', submittedAt: new Date(), confirmation: outcome.detail, blockedReason: null },
-        });
-        await bus.emitEvent(applicationId, 'STATUS', 'Submitted.', { status: 'SUBMITTED' });
-        await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, ctx.companyKey);
-        return;
-      }
+    if (outcome.outcome === 'SUBMITTED') {
+      await prisma.application.update({
+        where: { id: applicationId },
+        data: { status: 'SUBMITTED', submittedAt: new Date(), confirmation: outcome.detail, blockedReason: null },
+      });
+      await bus.emitEvent(applicationId, 'STATUS', 'Submitted.', { status: 'SUBMITTED' });
+      await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, ctx.companyKey);
+      return;
+    }
 
     if (outcome.outcome === 'VALIDATION_ERROR') {
       const retryPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
@@ -528,7 +467,7 @@ export async function runApplication(applicationId: string): Promise<void> {
         await setStatus(applicationId, 'CANCELLED', retry.note ?? 'Cancelled after a validation error.');
         return;
       }
-      await adapter.submit(page);
+      await pressSubmit();
       const second = await detectSubmissionOutcome(page, urlBefore);
       await prisma.application.update({
         where: { id: applicationId },
@@ -544,20 +483,17 @@ export async function runApplication(applicationId: string): Promise<void> {
       return;
     }
 
-      await prisma.application.update({
-        where: { id: applicationId },
-        data: { status: 'NEEDS_HUMAN', blockedReason: outcome.detail },
-      });
-      await bus.emitEvent(
-        applicationId,
-        'STATUS',
-        'Submitted, but no confirmation was visible. Check the browser before assuming it went through.',
-        { status: 'NEEDS_HUMAN', detail: outcome.detail },
-      );
-      return;
-    }
-
-    throw new Error('The application did not converge on a final step within the step budget.');
+    await prisma.application.update({
+      where: { id: applicationId },
+      data: { status: 'NEEDS_HUMAN', blockedReason: outcome.detail },
+    });
+    await bus.emitEvent(
+      applicationId,
+      'STATUS',
+      'Submitted, but no confirmation was visible. Check the browser before assuming it went through.',
+      { status: 'NEEDS_HUMAN', detail: outcome.detail },
+    );
+    return;
   } catch (err) {
     const message = (err as Error).message;
     await prisma.application.update({
@@ -572,8 +508,6 @@ export async function runApplication(applicationId: string): Promise<void> {
     abandon(questionsKey(applicationId));
     abandon(reviewKey(applicationId));
     abandon(blockerKey(applicationId));
-    // The page is left open on purpose while a human may still be looking at
-    // it; closing here would destroy the evidence and any captcha token.
     if (page && !config.headless) {
       await bus.emitEvent(applicationId, 'LOG', 'Leaving the browser tab open for you.');
     } else {

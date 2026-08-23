@@ -82,10 +82,26 @@ export default function JobPage() {
   const params = useParams<{ id: string }>();
   const [d, setD] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rescoreBusy, setRescoreBusy] = useState(false);
 
   const load = useCallback(async () => {
     setD(await api<Detail>(`/api/jobs/${params.id}`));
   }, [params.id]);
+
+  const handleRescore = useCallback(async () => {
+    setRescoreBusy(true);
+    try {
+      await api('/api/discovery/rescore', {
+        method: 'POST',
+        body: JSON.stringify({ limit: 20 }),
+      });
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRescoreBusy(false);
+    }
+  }, [load]);
 
   useEffect(() => {
     load().catch((e) => setError((e as Error).message));
@@ -104,7 +120,7 @@ export default function JobPage() {
   return (
     <>
       <Header d={d} />
-      <MatchPanel d={d} />
+      <MatchPanel d={d} busy={rescoreBusy} onRescore={handleRescore} />
       <ApplicationPanel d={d} />
       <InterviewPanel d={d} />
       <OutcomePanel d={d} />
@@ -144,7 +160,7 @@ function Header({ d }: { d: Detail }) {
   );
 }
 
-function MatchPanel({ d }: { d: Detail }) {
+function MatchPanel({ d, busy, onRescore }: { d: Detail; busy: boolean; onRescore: () => void }) {
   if (!d.match) return null;
   const m = d.match;
   const tone = m.score >= 70 ? 'var(--good)' : m.score >= 45 ? 'var(--warn)' : 'var(--bad)';
@@ -172,10 +188,15 @@ function MatchPanel({ d }: { d: Detail }) {
 
       {!m.deepScored && (
         <p className="small muted" style={{ marginTop: '.6rem' }}>
-          Ranked on keywords alone — no model has read the description yet. Re-score it from the
-          Find work page for a real assessment.
+          Ranked on keywords alone — no model has read the description yet.
         </p>
       )}
+
+      <div style={{ marginTop: '.8rem' }}>
+        <button className="primary" disabled={busy} onClick={onRescore}>
+          {busy ? 'Rescoring…' : 'Rescore'}
+        </button>
+      </div>
 
       <div className="grid2" style={{ marginTop: '.8rem' }}>
         <Points title="Why it fits" items={m.forIt} marker="✓" colour="var(--good)" fallbackTerms={m.likedTerms} />

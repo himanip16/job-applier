@@ -31,14 +31,30 @@ interface Effect {
   judgement: string;
 }
 
+interface NamedKey {
+  id: string;
+  name: string;
+  value: string;
+}
+
+interface NamedKeySet {
+  activeId?: string;
+  keys: NamedKey[];
+}
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Setting[]>([]);
+  const [namedKeys, setNamedKeys] = useState<{ anthropic: NamedKeySet; gemini: NamedKeySet }>({
+    anthropic: { keys: [] },
+    gemini: { keys: [] },
+  });
   const [effect, setEffect] = useState<Effect | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const d = await api<{ settings: Setting[]; effect: Effect }>('/api/settings');
+    const d = await api<{ settings: Setting[]; namedKeys: { anthropic: NamedKeySet; gemini: NamedKeySet }; effect: Effect }>('/api/settings');
     setSettings(d.settings);
+    setNamedKeys(d.namedKeys);
     setEffect(d.effect);
   }, []);
 
@@ -61,8 +77,13 @@ export default function SettingsPage() {
 
       <div className="panel">
         {settings.map((s) => (
-          <SettingRow key={s.key} setting={s} onChange={load} />
+          <SettingRow key={s.key} setting={s} onChange={load} namedKeys={namedKeys} />
         ))}
+      </div>
+
+      <div className="panel">
+        <NamedKeyManager provider="anthropic" state={namedKeys.anthropic} onChange={load} />
+        <NamedKeyManager provider="gemini" state={namedKeys.gemini} onChange={load} />
       </div>
 
       <div className="panel">
@@ -110,7 +131,15 @@ function Live({ on, label, detail }: { on: boolean; label: string; detail: strin
   );
 }
 
-function SettingRow({ setting, onChange }: { setting: Setting; onChange: () => Promise<void> }) {
+function SettingRow({
+  setting,
+  onChange,
+  namedKeys,
+}: {
+  setting: Setting;
+  onChange: () => Promise<void>;
+  namedKeys: { anthropic: NamedKeySet; gemini: NamedKeySet };
+}) {
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; detail: string } | null>(null);
@@ -169,6 +198,20 @@ function SettingRow({ setting, onChange }: { setting: Setting; onChange: () => P
         <Status setting={setting} />
       </div>
 
+      {(['ANTHROPIC_API_KEY', 'GEMINI_API_KEY'] as const).includes(setting.key as never) && (
+        <div style={{ marginTop: '.75rem' }}>
+          <div className="muted small" style={{ marginBottom: '.35rem' }}>
+            Saved keys for {setting.key === 'ANTHROPIC_API_KEY' ? 'Anthropic' : 'Gemini'}
+          </div>
+          <div className="small muted">
+            Active:{' '}
+            {(namedKeys[setting.key === 'ANTHROPIC_API_KEY' ? 'anthropic' : 'gemini'].keys.find(
+              (k) => k.id === namedKeys[setting.key === 'ANTHROPIC_API_KEY' ? 'anthropic' : 'gemini'].activeId,
+            ) ?? namedKeys[setting.key === 'ANTHROPIC_API_KEY' ? 'anthropic' : 'gemini'].keys[0])?.name ?? 'none'}
+          </div>
+        </div>
+      )}
+
       <div className="row" style={{ marginTop: '.55rem', gap: '.5rem' }}>
         <input
           type={setting.secret ? 'password' : 'text'}
@@ -209,6 +252,120 @@ function SettingRow({ setting, onChange }: { setting: Setting; onChange: () => P
           {result.detail}
         </div>
       )}
+    </div>
+  );
+}
+
+function NamedKeyManager({
+  provider,
+  state,
+  onChange,
+}: {
+  provider: 'anthropic' | 'gemini';
+  state: NamedKeySet;
+  onChange: () => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function save() {
+    if (!name.trim() || !value.trim()) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await api(`/api/settings/keys/${provider}`, {
+        method: 'POST',
+        body: JSON.stringify({ name, value }),
+      });
+      setName('');
+      setValue('');
+      await onChange();
+    } catch (e) {
+      setMessage((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setActive(id: string) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await api(`/api/settings/keys/${provider}/active`, {
+        method: 'PUT',
+        body: JSON.stringify({ id }),
+      });
+      await onChange();
+    } catch (e) {
+      setMessage((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: string) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await api(`/api/settings/keys/${provider}/${id}`, { method: 'DELETE' });
+      await onChange();
+    } catch (e) {
+      setMessage((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: '.8rem', marginTop: '.8rem' }}>
+      <div className="spread" style={{ marginBottom: '.5rem' }}>
+        <strong>{provider === 'anthropic' ? 'Anthropic' : 'Gemini'} keys</strong>
+      </div>
+      <div className="row" style={{ gap: '.5rem', marginBottom: '.5rem' }}>
+        <input
+          type="text"
+          placeholder="Name this key"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          style={{ flex: 1, minWidth: '10rem' }}
+        />
+        <input
+          type="password"
+          placeholder="Paste the API key"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          style={{ flex: 2, minWidth: '16rem' }}
+        />
+        <button className="primary" disabled={busy || !name.trim() || !value.trim()} onClick={save}>
+          Save key
+        </button>
+      </div>
+      {state.keys.length > 0 && (
+        <div style={{ display: 'grid', gap: '.4rem' }}>
+          {state.keys.map((k) => (
+            <div key={k.id} className="row" style={{ gap: '.5rem', alignItems: 'center' }}>
+              <button
+                className={state.activeId === k.id ? 'primary' : ''}
+                onClick={() => setActive(k.id)}
+                style={{ minWidth: '9rem' }}
+                disabled={busy || state.activeId === k.id}
+              >
+                {state.activeId === k.id ? 'Active' : 'Use this key'}
+              </button>
+              <div style={{ flex: 1 }}>
+                <strong>{k.name}</strong>
+                <div className="muted small">{k.value.slice(0, 4)}••••{k.value.slice(-4)}</div>
+              </div>
+              <button onClick={() => remove(k.id)} disabled={busy}>
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {message && <div className="notice bad" style={{ marginTop: '.5rem' }}>{message}</div>}
     </div>
   );
 }

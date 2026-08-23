@@ -1,6 +1,9 @@
 import type { Locator, Page } from 'playwright';
 import { normalizeLabel, type FormField } from '@ja/shared';
 
+const FIELD_TIMEOUT_MS = 30_000;
+const OPTION_TIMEOUT_MS = 12_000;
+
 export class FillError extends Error {
   constructor(
     message: string,
@@ -45,7 +48,16 @@ export async function fillField(page: Page, field: FormField, value: string | st
 
 async function fillNative(page: Page, field: FormField, value: string | string[]): Promise<void> {
   const el = page.locator(field.selector).first();
-  await el.waitFor({ state: 'attached', timeout: 10_000 });
+  await el.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
+
+  const disabled = await el.isDisabled().catch(() => false);
+  if (disabled) return;
+
+  const wants = (Array.isArray(value) ? value : [value]).map(normalizeLabel).filter(Boolean);
+  if (wants.length) {
+    const current = normalizeLabel((await el.inputValue().catch(() => '')) ?? '');
+    if (current && wants.every((want) => current.includes(want))) return;
+  }
 
   switch (field.kind) {
     case 'SELECT': {
@@ -75,7 +87,7 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
     default: {
       const text = asOne(value, field);
       await el.scrollIntoViewIfNeeded().catch(() => {});
-      await el.click({ timeout: 5000 }).catch(() => {});
+      await el.click({ timeout: FIELD_TIMEOUT_MS }).catch(() => {});
       await el.fill('');
       // type() rather than fill() so React's onChange fires per keystroke;
       // some forms only validate on keyup and stay in an error state otherwise.
@@ -98,11 +110,11 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
 async function fillReactSelect(page: Page, field: FormField, value: string | string[]): Promise<void> {
   const wants = Array.isArray(value) ? value : [value];
   const input = page.locator(field.selector).first();
-  await input.waitFor({ state: 'attached', timeout: 10_000 });
+  await input.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
   await input.scrollIntoViewIfNeeded().catch(() => {});
 
   for (const want of wants) {
-    await input.click({ timeout: 8000 });
+    await input.click({ timeout: FIELD_TIMEOUT_MS });
     // Typing narrows a long list (country pickers run to 240 entries) and also
     // opens the menu when a bare click did not.
     await input.fill('').catch(() => {});
@@ -132,7 +144,7 @@ async function waitForOption(page: Page, field: FormField, want: string): Promis
     : page;
   const options = container.locator('[role="option"], .select__option');
   try {
-    await options.first().waitFor({ state: 'visible', timeout: 4000 });
+    await options.first().waitFor({ state: 'visible', timeout: OPTION_TIMEOUT_MS });
   } catch {
     return null;
   }
@@ -211,7 +223,7 @@ export async function attachFile(page: Page, selector: string, filePath: string)
   if (await chooseFileUpload(page, filePath)) return;
 
   const input = page.locator(selector).first();
-  await input.waitFor({ state: 'attached', timeout: 10_000 });
+  await input.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
   // setInputFiles works on inputs hidden behind a styled "Attach" button,
   // which is how every modern ATS renders file upload.
   await input.setInputFiles(filePath);
