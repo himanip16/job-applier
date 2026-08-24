@@ -83,7 +83,7 @@ export default function TrackerPage() {
             <button
               key={o}
               onClick={() => setFilter(o)}
-              style={filter === o ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined}
+              style={filter === o ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-border)', color: 'var(--accent)' } : undefined}
             >
               {o.replace('_', ' ').toLowerCase()} {o === 'ALL' ? `(${total})` : stats[o] ? `(${stats[o]})` : ''}
             </button>

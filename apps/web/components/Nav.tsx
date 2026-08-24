@@ -119,6 +119,11 @@ export function Nav() {
   const { data } = useOverview();
   const badges = { runs: data?.needsYou.total ?? 0, discover: data?.counts.leadsNew ?? 0 };
 
+  // Nothing here works signed out - every link bounces straight back to
+  // sign-in via AuthGate - so showing it there is just a wall of dead links
+  // above the form.
+  if (pathname?.startsWith('/signin')) return null;
+
   return (
     <nav>
       {ITEMS.map((item) => {
