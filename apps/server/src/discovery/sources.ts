@@ -84,7 +84,41 @@ const stripHtml = (html: string): string => {
     .trim();
 };
 
-const looksRemote = (s: string): boolean => /\bremote\b|\bwork from home\b|\bdistributed\b/i.test(s);
+/**
+ * Whether a posting reads as remote, from free text alone.
+ *
+ * A bare match on the word "remote" is wrong more often than it looks: "hybrid,
+ * remote work is not offered for this role" and "3 days/week in office, with
+ * remote flexibility for senior staff" both contain the word and describe jobs
+ * that are not remote. A live queue had exactly this - a posting tagged REMOTE
+ * whose own rationale, read by the model from the same text, correctly said
+ * "Hybrid - Bangalore, India".
+ *
+ * Hybrid/on-site language and any negated form of "remote" both win over a
+ * bare mention, and only a genuinely unqualified claim ("remote", "work from
+ * anywhere", "fully distributed") counts as yes. This is still a heuristic for
+ * the boards with no structured field to ask instead - see the callers that
+ * have one and use it as the authority.
+ */
+const looksRemote = (s: string): boolean => {
+  const text = s.toLowerCase();
+  if (/\b(hybrid|on-?site|in-?office|in the office)\b/.test(text)) return false;
+  if (/\b(not|no|isn'?t|is not|won'?t be|not currently|does not offer|doesn'?t offer)\b(?:\s+\w+){0,3}\s+remote\b/.test(text)) {
+    return false;
+  }
+  return /\bremote\b|\bwork from (home|anywhere)\b|\bfully distributed\b/.test(text);
+};
+
+/**
+ * A board's own structured field, when it bothered to send one, over the text
+ * guess. "Hybrid" or "on-site" from the source is a fact; a stray "remote" in
+ * three paragraphs of benefits copy is a guess, and the fact wins.
+ */
+function remoteFrom(structured: 'remote' | 'hybrid' | 'onsite' | 'unspecified', fallbackText: string): boolean {
+  if (structured === 'remote') return true;
+  if (structured === 'hybrid' || structured === 'onsite') return false;
+  return looksRemote(fallbackText);
+}
 
 // --------------------------------------------------------------- greenhouse ---
 
@@ -159,7 +193,16 @@ export const leverSource: Source = {
         title: p.text,
         companyName: handle,
         location: loc || undefined,
-        remote: p.workplaceType === 'remote' || looksRemote(`${loc} ${p.text}`),
+        remote: remoteFrom(
+          p.workplaceType === 'remote'
+            ? 'remote'
+            : p.workplaceType === 'hybrid'
+              ? 'hybrid'
+              : p.workplaceType === 'onsite'
+                ? 'onsite'
+                : 'unspecified',
+          `${loc} ${p.text}`,
+        ),
         descriptionText: [p.descriptionPlain ?? stripHtml(p.description ?? ''), extras]
           .filter(Boolean)
           .join('\n\n'),
@@ -198,7 +241,10 @@ export const ashbySource: Source = {
         title: j.title,
         companyName: handle,
         location: j.location,
-        remote: Boolean(j.isRemote) || looksRemote(j.location ?? ''),
+        remote: remoteFrom(
+          j.isRemote === true ? 'remote' : j.isRemote === false ? 'onsite' : 'unspecified',
+          j.location ?? '',
+        ),
         descriptionText: j.descriptionPlain ?? stripHtml(j.descriptionHtml ?? ''),
         postedAt: j.publishedAt ? new Date(j.publishedAt) : undefined,
       }));
@@ -239,7 +285,14 @@ export const workableSource: Source = {
         title: j.title,
         companyName: handle,
         location: loc || undefined,
-        remote: j.location?.workplace === 'remote' || looksRemote(loc),
+        remote: remoteFrom(
+          j.location?.workplace === 'remote'
+            ? 'remote'
+            : j.location?.workplace
+              ? 'onsite'
+              : 'unspecified',
+          loc,
+        ),
         descriptionText: stripHtml(j.description ?? ''),
         postedAt: j.published ? new Date(j.published) : undefined,
       };

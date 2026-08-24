@@ -55,12 +55,14 @@ export function NeedsYou() {
     <div
       role="status"
       style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 40,
+        // Deliberately not sticky. The header already is (top: 0, z-index:
+        // 30), and this sat right below it doing the same thing - on scroll,
+        // two independently-sticky bars both pinned to the viewport top
+        // fight for the same pixels and one has to render over the other.
+        // Scrolling this away under a pinned header reads as "one thing is
+        // in charge of the top of the screen", which is the point.
         background: 'var(--warn-soft)',
         borderBottom: '1px solid var(--warn-border)',
-        backdropFilter: 'blur(8px)',
       }}
     >
       <div

@@ -883,26 +883,36 @@ function LeadCard({
           {!lead.deepScored && <QuickScoreReasons reasons={r} />}
         </div>
 
+        {/*
+          Apply is the one action this card exists to offer; everything else
+          is here for the exceptions. Five identically-weighted buttons made
+          Apply just one option among equals, so the rest are ghost buttons -
+          still one click away, but visibly the supporting cast rather than
+          five things all shouting at once.
+        */}
         <div className="row" style={{ flexWrap: 'nowrap', flex: 'none' }}>
           <a href={`/jobs/${lead.id}`}>
-            <button title="Everything about this job on one page">View job</button>
+            <button className="ghost" title="Everything about this job on one page">
+              View job
+            </button>
           </a>
           {lead.status === 'NEW' ? (
             <>
               <button className="primary" disabled={busy} onClick={onApply}>
                 Apply
               </button>
-              <button disabled={busy} onClick={onShortlist}>
+              <button className="ghost" disabled={busy} onClick={onShortlist}>
                 Save
               </button>
               <button
+                className="ghost"
                 disabled={busy}
                 onClick={onApplied}
                 title="You applied to this one yourself — record it and take it out of the queue"
               >
                 Applied
               </button>
-              <button className="danger" disabled={busy} onClick={onReject}>
+              <button className="danger ghost" disabled={busy} onClick={onReject}>
                 Not for me
               </button>
             </>
@@ -1062,17 +1072,32 @@ function RejectDialog({
 function Tally({ counts, strong }: { counts: Record<string, number>; strong: number }) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   if (!total) return null;
-  const cells: [number, string, string | undefined][] = [
-    [counts.NEW ?? 0, 'new jobs found', undefined],
-    [strong, 'strong matches', strong > 0 ? 'var(--good)' : undefined],
-    [counts.SHORTLISTED ?? 0, 'worth applying', undefined],
-    [counts.APPLIED ?? 0, 'applied', undefined],
-    [counts.REJECTED ?? 0, 'rejected', undefined],
+  // Two different things get counted here and the old labels ran them
+  // together: "strong matches" is the score's opinion, computed the moment a
+  // lead is crawled; "saved" is yours, and starts at zero until you act on
+  // one. Seeing "8 strong matches" next to "0 worth applying" read as a
+  // contradiction - it is really "8 the ranking likes, 0 you have saved yet".
+  const cells: [number, string, string | undefined, string][] = [
+    [counts.NEW ?? 0, 'new jobs found', undefined, 'Postings discovered that you have not yet decided on.'],
+    [
+      strong,
+      'strong matches',
+      strong > 0 ? 'var(--good)' : undefined,
+      'Scored 70 or higher by the ranking - automatic, before you have looked at any of them.',
+    ],
+    [
+      counts.SHORTLISTED ?? 0,
+      'saved',
+      undefined,
+      'Leads you pressed "Save" on. Independent of score - nothing is saved until you save it.',
+    ],
+    [counts.APPLIED ?? 0, 'applied', undefined, 'Applications sent, by the automation or marked by hand.'],
+    [counts.REJECTED ?? 0, 'rejected', undefined, 'Leads you turned down.'],
   ];
   return (
     <div className="row" style={{ gap: '2rem', marginTop: '1rem', flexWrap: 'wrap' }}>
-      {cells.map(([value, label, tone]) => (
-        <div key={label}>
+      {cells.map(([value, label, tone, hint]) => (
+        <div key={label} title={hint}>
           <div
             style={{
               fontSize: '1.6rem',

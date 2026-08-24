@@ -22,12 +22,42 @@ export function AccountMenu() {
   if (!email) return null;
 
   return (
-    <div className="row" style={{ gap: '.5rem', flex: 'none' }}>
+    <div
+      className="row"
+      style={{
+        gap: '.6rem',
+        flex: 'none',
+        // A divider and its own padding, rather than sitting flush against
+        // the last nav item - the two are unrelated (one is "where", the
+        // other is "who"), and running them together read as cramped.
+        borderLeft: '1px solid var(--border)',
+        paddingLeft: '.85rem',
+        marginLeft: '.15rem',
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          flex: 'none',
+          width: '1.6rem',
+          height: '1.6rem',
+          borderRadius: '999px',
+          background: 'var(--accent-soft)',
+          color: 'var(--accent)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '.72rem',
+          fontWeight: 700,
+        }}
+      >
+        {email[0]?.toUpperCase()}
+      </span>
       <span
         className="small muted"
         title={email}
         style={{
-          maxWidth: '11rem',
+          maxWidth: '13rem',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
