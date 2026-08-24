@@ -122,10 +122,17 @@ function WhatWorks({ effect }: { effect: Effect }) {
 function Live({ on, label, detail }: { on: boolean; label: string; detail: string }) {
   return (
     <div>
-      <div style={{ color: on ? 'var(--good)' : 'var(--muted)', fontWeight: 600 }}>
+      <span
+        className="pill"
+        style={
+          on
+            ? { color: 'var(--good)', background: 'var(--good-soft)', borderColor: 'var(--good-border)' }
+            : undefined
+        }
+      >
         {on ? '● live' : '○ off'}
-      </div>
-      <div className="small">{label}</div>
+      </span>
+      <div className="small" style={{ marginTop: '.35rem' }}>{label}</div>
       <div className="muted small">{detail}</div>
     </div>
   );

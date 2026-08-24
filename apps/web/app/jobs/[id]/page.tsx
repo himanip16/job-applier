@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { api } from '../../../lib/api';
 import Header from '../components/Header';
+import { Loading } from '../../../components/Loading';
 import type { Detail } from '../components/types';
 
 /**
@@ -53,7 +54,7 @@ export default function JobPage() {
       </div>
     );
   }
-  if (!d) return <div className="panel muted">Loading…</div>;
+  if (!d) return <Loading />;
 
   return (
     <>

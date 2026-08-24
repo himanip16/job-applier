@@ -374,7 +374,7 @@ function Big({
 function SetupPanel({ setup }: { setup: SetupStep[] }) {
   const remaining = setup.filter((s) => !s.done).length;
   return (
-    <div className="panel" style={{ borderColor: 'var(--accent)' }}>
+    <div className="panel" style={{ borderColor: 'var(--accent-border)', background: 'var(--accent-soft)' }}>
       <h2>Finish setting up</h2>
       <p className="sub">
         {remaining} step{remaining === 1 ? '' : 's'} left. Each one removes work later.

@@ -94,7 +94,7 @@ export default function TrackerPage() {
 
       {rows.length === 0 ? (
         <div className="panel">
-          <p className="muted small">Nothing tracked yet.</p>
+          <div className="empty-state">Nothing tracked yet. Applications appear here once you apply.</div>
         </div>
       ) : (
         rows.map((row) => (

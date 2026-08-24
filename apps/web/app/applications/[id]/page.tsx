@@ -2,6 +2,7 @@
 
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { API, api } from '../../../lib/api';
+import { Loading } from '../../../components/Loading';
 
 interface PendingQuestion {
   id: string;
@@ -77,7 +78,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   }, [events]);
 
   if (error) return <div className="panel"><div className="notice bad">{error}</div></div>;
-  if (!detail) return <p className="muted">Loading…</p>;
+  if (!detail) return <Loading />;
 
   const open = detail.pending.filter((q) => !q.answeredAt);
   const shots = detail.artifacts.filter((a) => a.kind === 'screenshot');
@@ -340,7 +341,10 @@ function WallPanel({
   }
 
   return (
-    <div className="panel" style={{ borderColor: 'var(--warn)' }}>
+    <div
+      className="panel"
+      style={{ borderColor: 'var(--warn-border)', background: 'var(--warn-soft)' }}
+    >
       <h2>Waiting for you in the browser</h2>
       <p className="sub" style={{ maxWidth: '44rem' }}>
         {detail.blockedReason ?? 'Something on the page needs a person.'}
@@ -392,7 +396,10 @@ function ReviewPanel({
   }
 
   return (
-    <div className="panel" style={{ borderColor: 'var(--warn)' }}>
+    <div
+      className="panel"
+      style={{ borderColor: 'var(--warn-border)', background: 'var(--warn-soft)' }}
+    >
       <h2>Ready to submit</h2>
       <p className="sub">
         The form is filled and open in the browser. Check the values, deal with any captcha there,
