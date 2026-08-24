@@ -16,8 +16,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         <header className="top">
           <div className="inner">
-            <a href="/" style={{ color: 'inherit', textDecoration: 'none' }}>
-              <strong>Job Applier</strong>
+            <a href="/" className="brand">
+              <span className="brand-mark" aria-hidden="true">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M13 3 5 13.5h6L11 21l8-10.5h-6z" />
+                </svg>
+              </span>
+              Job Applier
             </a>
             <Nav />
             <AccountMenu />

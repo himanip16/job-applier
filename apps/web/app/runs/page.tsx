@@ -106,7 +106,7 @@ export default function RunsPage() {
       <div className="panel">
         <h2>Applications</h2>
         {rows.length === 0 ? (
-          <p className="muted small">Nothing yet.</p>
+          <div className="empty-state">Nothing yet. Paste a job URL above to start one.</div>
         ) : (
           <table>
             <thead>
@@ -132,11 +132,15 @@ export default function RunsPage() {
                   <td className="small muted">{r.job.ats}</td>
                   <td><span className={`pill ${r.status}`}>{r.status.replace('_', ' ')}</span></td>
                   <td className="small">
-                    {r._count.pending > 0
-                      ? `${r._count.pending} question${r._count.pending === 1 ? '' : 's'}`
-                      : r.status === 'REVIEW'
-                        ? 'approval'
-                        : '—'}
+                    {r._count.pending > 0 ? (
+                      <span style={{ color: 'var(--warn)', fontWeight: 600 }}>
+                        {r._count.pending} question{r._count.pending === 1 ? '' : 's'}
+                      </span>
+                    ) : r.status === 'REVIEW' ? (
+                      <span style={{ color: 'var(--warn)', fontWeight: 600 }}>approval</span>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
                   </td>
                 </tr>
               ))}

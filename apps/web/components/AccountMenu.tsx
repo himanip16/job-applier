@@ -22,9 +22,21 @@ export function AccountMenu() {
   if (!email) return null;
 
   return (
-    <div className="row small muted" style={{ marginLeft: 'auto', gap: '.6rem' }}>
-      <span title="Signed in as">{email}</span>
+    <div className="row" style={{ gap: '.5rem', flex: 'none' }}>
+      <span
+        className="small muted"
+        title={email}
+        style={{
+          maxWidth: '11rem',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {email}
+      </span>
       <button
+        className="ghost small"
         onClick={async () => {
           await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
           window.location.href = '/signin';

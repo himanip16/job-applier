@@ -161,18 +161,6 @@ export default function Home() {
 
 
 /**
- * The first screen.
- *
- * This used to open with "Four parts. They work independently" - an accurate
- * description of the architecture and the wrong thing to lead with. What
- * someone opening this at 9am wants is the state of their job hunt in one
- * glance: how many jobs are waiting, how many are worth their time, and what
- * needs them right now. The architecture is still on the page, one click down,
- * for the moment it becomes interesting.
- *
- * Every number is a link, because a number you cannot act on is decoration.
- */
-/**
  * The one list worth putting first.
  *
  * The front page used to open on five counters and a "how it works"
@@ -207,16 +195,37 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
           const score = Math.round(m.score);
           const tone = score >= 70 ? 'var(--good)' : score >= 45 ? 'var(--warn)' : 'var(--bad)';
           return (
-            <div
+            <a
               key={m.id}
+              href={`/jobs/${m.id}`}
               className="spread"
-              style={{ borderTop: '1px solid var(--border)', padding: '.55rem 0' }}
+              style={{
+                borderTop: '1px solid var(--border)',
+                padding: '.6rem .3rem',
+                borderRadius: 'var(--radius-sm)',
+                textDecoration: 'none',
+                color: 'inherit',
+              }}
             >
-              <div className="row" style={{ gap: '.5rem', minWidth: 0 }}>
-                <strong style={{ color: tone, fontVariantNumeric: 'tabular-nums' }}>{score}</strong>
-                <a href={`/jobs/${m.id}`}>
-                  <strong>{m.title}</strong>
-                </a>
+              <div className="row" style={{ gap: '.55rem', minWidth: 0 }}>
+                <span
+                  style={{
+                    flex: 'none',
+                    minWidth: '2.1rem',
+                    textAlign: 'center',
+                    fontWeight: 700,
+                    fontVariantNumeric: 'tabular-nums',
+                    color: tone,
+                    background:
+                      score >= 70 ? 'var(--good-soft)' : score >= 45 ? 'var(--warn-soft)' : 'var(--bad-soft)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '.15rem .3rem',
+                    fontSize: '.85rem',
+                  }}
+                >
+                  {score}
+                </span>
+                <strong style={{ color: 'var(--text)' }}>{m.title}</strong>
                 <span className="muted small">· {m.companyName}</span>
                 {m.remote && <span className="src">remote</span>}
                 {m.location && <span className="muted small">{m.location}</span>}
@@ -227,10 +236,8 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
                   </span>
                 )}
               </div>
-              <a href={`/jobs/${m.id}`} style={{ flex: 'none' }}>
-                <button>Open</button>
-              </a>
-            </div>
+              <button style={{ flex: 'none' }}>Open</button>
+            </a>
           );
         })}
       </div>
@@ -242,7 +249,8 @@ function Hero({ ov }: { ov: Overview | null }) {
   const c = ov?.counts;
   const y = ov?.needsYou;
   const outstanding = y?.total ?? 0;
-  const nothingYet = (c?.leadsTotal ?? 0) === 0 && (c?.submitted ?? 0) === 0;
+  const loading = !ov;
+  const nothingYet = !loading && (c?.leadsTotal ?? 0) === 0 && (c?.submitted ?? 0) === 0;
 
   return (
     <div className="panel">
@@ -254,7 +262,20 @@ function Hero({ ov }: { ov: Overview | null }) {
         applications, and stops to ask you only when it genuinely cannot answer honestly.
       </p>
 
-      {nothingYet ? (
+      {loading ? (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(9rem, 1fr))',
+            gap: '.75rem',
+            marginTop: '1.1rem',
+          }}
+        >
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="skel" style={{ height: '4.5rem' }} />
+          ))}
+        </div>
+      ) : nothingYet ? (
         <div className="row" style={{ gap: '.6rem', marginTop: '1rem' }}>
           <a href="/discover">
             <button className="primary">Find jobs for me</button>
@@ -341,28 +362,11 @@ function Big({
   tone?: string;
 }) {
   return (
-    <a
-      href={href}
-      style={{
-        textDecoration: 'none',
-        border: '1px solid var(--border)',
-        borderRadius: '.5rem',
-        padding: '.7rem .8rem',
-        display: 'block',
-      }}
-    >
-      <div
-        style={{
-          fontSize: '2rem',
-          fontWeight: 650,
-          lineHeight: 1.05,
-          fontVariantNumeric: 'tabular-nums',
-          color: tone ?? 'inherit',
-        }}
-      >
+    <a href={href} className="stat">
+      <div className="stat-value" style={{ color: tone ?? 'inherit' }}>
         {value}
       </div>
-      <div className="muted small">{label}</div>
+      <div className="stat-label">{label}</div>
     </a>
   );
 }
@@ -370,7 +374,7 @@ function Big({
 function SetupPanel({ setup }: { setup: SetupStep[] }) {
   const remaining = setup.filter((s) => !s.done).length;
   return (
-    <div className="panel" style={{ borderColor: 'var(--accent)' }}>
+    <div className="panel" style={{ borderColor: 'var(--accent-border)', background: 'var(--accent-soft)' }}>
       <h2>Finish setting up</h2>
       <p className="sub">
         {remaining} step{remaining === 1 ? '' : 's'} left. Each one removes work later.

@@ -58,28 +58,62 @@ export function NeedsYou() {
         position: 'sticky',
         top: 0,
         zIndex: 40,
-        background: 'var(--warn)',
-        color: '#111',
-        padding: '.5rem .9rem',
+        background: 'var(--warn-soft)',
+        borderBottom: '1px solid var(--warn-border)',
+        backdropFilter: 'blur(8px)',
       }}
     >
       <div
-        className="inner spread"
-        style={{ maxWidth: '64rem', margin: '0 auto', gap: '.8rem', alignItems: 'center' }}
+        className="spread"
+        style={{
+          maxWidth: '1080px',
+          margin: '0 auto',
+          gap: '.8rem',
+          alignItems: 'center',
+          padding: '.55rem 1.25rem',
+        }}
       >
-        <div style={{ minWidth: 0 }}>
-          <strong>{describe(first.status)}</strong>{' '}
-          <span style={{ opacity: 0.85 }}>
-            {first.title} — {first.company}
-            {total > 1 && ` · and ${total - 1} more`}
+        <div className="row" style={{ minWidth: 0, gap: '.55rem', flexWrap: 'nowrap' }}>
+          <span
+            aria-hidden="true"
+            style={{
+              flex: 'none',
+              width: '1.6rem',
+              height: '1.6rem',
+              borderRadius: '999px',
+              background: 'var(--warn)',
+              color: 'var(--warn-contrast)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 9v4M12 17h.01" />
+              <path d="M10.3 3.6 1.8 18a1.8 1.8 0 0 0 1.6 2.7h17.2a1.8 1.8 0 0 0 1.6-2.7L13.7 3.6a1.8 1.8 0 0 0-3.4 0Z" />
+            </svg>
           </span>
+          <div style={{ minWidth: 0, overflow: 'hidden' }}>
+            <strong style={{ color: 'var(--text)' }}>{describe(first.status)}</strong>{' '}
+            <span
+              className="muted"
+              style={{
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {first.title} — {first.company}
+              {total > 1 && ` · and ${total - 1} more`}
+            </span>
+          </div>
         </div>
         <div className="row" style={{ gap: '.4rem', flex: 'none' }}>
           <NotifyOptIn />
           <a href={`/applications/${first.id}`}>
             <button className="primary">Take the action</button>
           </a>
-          <button onClick={() => setDismissed(first.id)} title="Hide until the next one">
+          <button className="ghost" onClick={() => setDismissed(first.id)} title="Hide until the next one">
             Later
           </button>
         </div>

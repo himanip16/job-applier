@@ -433,9 +433,12 @@ export default function DiscoverPage() {
             {['NEW', 'SHORTLISTED', 'APPLIED', 'REJECTED', 'ALL'].map((s) => (
               <button
                 key={s}
+                className={view.status === s ? undefined : 'ghost'}
                 onClick={() => change({ status: s })}
                 style={
-                  view.status === s ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined
+                  view.status === s
+                    ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-border)', color: 'var(--accent)' }
+                    : undefined
                 }
               >
                 {s.toLowerCase()} {counts[s] !== undefined ? `(${counts[s]})` : ''}
@@ -562,7 +565,18 @@ function Controls({
     view.q !== '' || view.minScore !== '' || view.remote !== 'any' || view.depth !== 'any';
 
   return (
-    <div className="row" style={{ marginTop: '.7rem', gap: '.5rem', alignItems: 'center' }}>
+    <div
+      className="row"
+      style={{
+        marginTop: '.8rem',
+        gap: '.6rem',
+        alignItems: 'center',
+        background: 'var(--panel-2)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
+        padding: '.6rem .7rem',
+      }}
+    >
       <input
         type="search"
         value={typed}
@@ -795,17 +809,22 @@ function LeadCard({
   const r = lead.scoreReasons ?? {};
   const score = Math.round(lead.score);
   const tone = score >= 70 ? 'var(--good)' : score >= 45 ? 'var(--warn)' : 'var(--bad)';
+  const toneSoft = score >= 70 ? 'var(--good-soft)' : score >= 45 ? 'var(--warn-soft)' : 'var(--bad-soft)';
 
   return (
     <div
       style={{
         borderTop: '1px solid var(--border)',
-        padding: '.9rem 0',
+        padding: '.9rem .6rem',
+        margin: '0 -.6rem',
+        borderRadius: 'var(--radius-sm)',
+        transition: 'background var(--fast) var(--ease)',
       }}
+      className="lead-row"
     >
       <div className="spread">
         <div style={{ minWidth: 0 }}>
-          <div className="row" style={{ gap: '.5rem' }}>
+          <div className="row" style={{ gap: '.55rem' }}>
             <input
               type="checkbox"
               checked={picked}
@@ -813,7 +832,21 @@ function LeadCard({
               title="Pick this one to be read in full"
               aria-label={`Select ${lead.title} at ${lead.companyName}`}
             />
-            <strong style={{ color: tone, fontVariantNumeric: 'tabular-nums' }}>{score}</strong>
+            <span
+              style={{
+                color: tone,
+                background: toneSoft,
+                fontVariantNumeric: 'tabular-nums',
+                fontWeight: 700,
+                fontSize: '.85rem',
+                borderRadius: 'var(--radius-sm)',
+                padding: '.15rem .35rem',
+                minWidth: '2.1rem',
+                textAlign: 'center',
+              }}
+            >
+              {score}
+            </span>
             <a href={`/jobs/${lead.id}`}>
               <strong>{lead.title}</strong>
             </a>
@@ -991,7 +1024,7 @@ function RejectDialog({
             <button
               key={c}
               onClick={() => setCategory(category === c ? null : c)}
-              style={category === c ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined}
+              style={category === c ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-border)', color: 'var(--accent)' } : undefined}
             >
               {c}
             </button>

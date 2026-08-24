@@ -59,9 +59,9 @@ export default function AnswersPage() {
       </p>
       {error && <div className="notice bad">{error}</div>}
       {answers.length === 0 ? (
-        <p className="muted small">
+        <div className="empty-state">
           Empty. It fills itself in as you answer questions during applications.
-        </p>
+        </div>
       ) : (
         <table>
           <thead>
