@@ -211,10 +211,28 @@ export async function walkApplication(args: {
 
     const { resume: resumeInput, coverLetter: coverInput } = adapter.fileInputs(fields);
 
-    // ---- A cover letter, the first time a step asks for one ----------------
-    const wantsCoverLetter =
-      !!coverInput || fields.some((f) => /cover letter/i.test(f.label) && f.kind === 'TEXTAREA');
+    // ---- A cover letter, if this application asked for one -----------------
+    //
+    // Off unless the application says otherwise. Writing one for every job
+    // spends a model call and half a minute on something most employers never
+    // read, and the person applying is the one who knows which postings are
+    // worth it.
+    //
+    // A required field is the exception: the form cannot be submitted without
+    // it, and stopping to ask would be a worse answer than writing one and
+    // saying so.
+    const coverField = fields.find((f) => /cover letter/i.test(f.label) && f.kind === 'TEXTAREA');
+    const demanded = coverField?.required === true || coverInput?.required === true;
+    const wantsCoverLetter = (app.writeCoverLetter || demanded) && (!!coverInput || !!coverField);
     if (wantsCoverLetter && !coverLetter) {
+      if (demanded && !app.writeCoverLetter) {
+        await bus.emitEvent(
+          applicationId,
+          'LOG',
+          'This form requires a cover letter, so one is being written even though the ' +
+            'application was set not to.',
+        );
+      }
       coverLetter = await writeCoverLetter(applicationId, {
         candidateContext,
         companyName: meta.company,

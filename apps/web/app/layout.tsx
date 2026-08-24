@@ -2,6 +2,8 @@ import './globals.css';
 import type { ReactNode } from 'react';
 import { Nav } from '../components/Nav';
 import { NeedsYou } from '../components/NeedsYou';
+import { AuthGate } from '../components/AuthGate';
+import { AccountMenu } from '../components/AccountMenu';
 
 export const metadata = {
   title: 'Job Applier',
@@ -18,10 +20,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <strong>Job Applier</strong>
             </a>
             <Nav />
+            <AccountMenu />
           </div>
         </header>
-        <NeedsYou />
-        <div className="wrap">{children}</div>
+        <AuthGate>
+          <NeedsYou />
+          <div className="wrap">{children}</div>
+        </AuthGate>
       </body>
     </html>
   );

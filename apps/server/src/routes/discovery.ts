@@ -7,6 +7,7 @@ import { findJobs } from '../discovery/findJobs.js';
 import { isFirecrawlConfigured } from '../discovery/firecrawl.js';
 import { learnFromDecision, loadSignals } from '../discovery/scoring.js';
 import { rescoreByIds, rescoreLexically } from '../discovery/rescoreLeads.js';
+import { NOT_YOURS, ownedLead, ownedSignal } from '../auth/ownership.js';
 import { adapterFor } from '../ats/registry.js';
 import { enqueue } from '../engine/queue.js';
 
@@ -78,7 +79,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   // ----------------------------------------------------------------- crawl ---
 
   app.post('/api/discovery/crawl', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const { deepScoreTop, companyId } = z
       .object({ deepScoreTop: z.number().min(0).max(60).default(15), companyId: z.string().optional() })
@@ -95,7 +96,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
    * resume.
    */
   app.post('/api/discovery/find', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
 
     const body = z
@@ -136,7 +137,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
    * this one" button.
    */
   app.post<{ Params: { id: string } }>('/api/leads/:id/rescore', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
 
     const [outcome] = await rescoreByIds(profile.id, [req.params.id]);
@@ -147,7 +148,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       return reply.code(code).send({ error: outcome.error });
     }
 
-    const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
+    const lead = await ownedLead(profile.id, req.params.id);
     return { lead: lead && { ...lead, descriptionText: undefined } };
   });
 
@@ -160,7 +161,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
    * button spends four calls, not sixty.
    */
   app.post('/api/leads/rescore', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const { ids } = z
       .object({ ids: z.array(z.string().min(1)).min(1).max(MAX_RESCORE_BATCH) })
@@ -171,7 +172,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   });
 
   app.post('/api/discovery/rescore', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const { limit } = z.object({ limit: z.number().min(1).max(60).default(20) }).parse(req.body ?? {});
     return { rescored: await rescore(profile.id, limit) };
@@ -194,7 +195,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   });
 
   app.get('/api/leads', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const query = LeadQuery.parse(req.query ?? {});
 
@@ -260,8 +261,10 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   });
 
   app.get<{ Params: { id: string } }>('/api/leads/:id', async (req, reply) => {
-    const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
-    if (!lead) return reply.code(404).send({ error: 'Not found' });
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    const lead = await ownedLead(profile.id, req.params.id);
+    if (!lead) return reply.code(404).send(NOT_YOURS);
     return { lead };
   });
 
@@ -271,13 +274,13 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
    * because the learner treats it as signal.
    */
   app.post<{ Params: { id: string } }>('/api/leads/:id/reject', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const { reason, category } = z
       .object({ reason: z.string().optional(), category: z.string().optional() })
       .parse(req.body ?? {});
 
-    const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
+    const lead = await ownedLead(profile.id, req.params.id);
     if (!lead) return reply.code(404).send({ error: 'Not found' });
     // Learn from the candidate's decision, then permanently remove the
     // lead from the queue. This keeps the triage queue focused and avoids
@@ -300,9 +303,9 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   });
 
   app.post<{ Params: { id: string } }>('/api/leads/:id/shortlist', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
-    const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
+    const lead = await ownedLead(profile.id, req.params.id);
     if (!lead) return reply.code(404).send({ error: 'Not found' });
 
     await prisma.jobLead.update({
@@ -322,15 +325,88 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     return { ok: true, reranked };
   });
 
+  /**
+   * "I applied to this one myself."
+   *
+   * Distinct from Apply, which drives the browser. Plenty of postings are
+   * quicker to fill in by hand - a two-field form, a company that wants an
+   * email - and before this the only way to record one was to let the
+   * automation try and fail, or to lose the fact entirely. Losing it is the
+   * worst option: the job comes back in the next crawl looking untouched.
+   *
+   * It creates the Application the tracker needs, marked SUBMITTED because it
+   * was, so rounds and outcomes hang off it like any other.
+   */
+  app.post<{ Params: { id: string } }>('/api/leads/:id/applied', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    const { note } = z.object({ note: z.string().max(2000).optional() }).parse(req.body ?? {});
+
+    const lead = await ownedLead(profile.id, req.params.id);
+    if (!lead) return reply.code(404).send(NOT_YOURS);
+
+    const adapter = adapterFor(lead.url);
+    const job = await prisma.job.upsert({
+      where: { url: lead.url },
+      create: {
+        url: lead.url,
+        ats: adapter.id,
+        company: lead.companyName,
+        title: lead.title,
+        location: lead.location,
+        descriptionText: lead.descriptionText,
+      },
+      update: {},
+    });
+
+    const application = await prisma.application.upsert({
+      where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
+      create: {
+        profileId: profile.id,
+        jobId: job.id,
+        status: 'SUBMITTED',
+        outcome: 'IN_PROGRESS',
+        submittedAt: new Date(),
+        requiresReview: false,
+        notes: note ?? 'Applied by hand, outside the automation.',
+      },
+      // Never downgrade a real run. If the automation already submitted this,
+      // the run's own record of what it sent is worth more than this flag.
+      update: {},
+    });
+
+    await prisma.jobLead.update({
+      where: { id: lead.id },
+      data: { status: 'APPLIED', applicationId: application.id, decidedAt: new Date() },
+    });
+    // Applying is the strongest "yes" there is, so it teaches like one.
+    await learnFromDecision({
+      profileId: profile.id,
+      job: {
+        title: lead.title,
+        descriptionText: lead.descriptionText ?? '',
+        location: lead.location ?? undefined,
+      },
+      accepted: true,
+    });
+    await rescoreLexically(profile.id);
+
+    return { applicationId: application.id };
+  });
+
   /** Shortlist and immediately start an application run. */
   app.post<{ Params: { id: string } }>('/api/leads/:id/apply', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
-    const { requiresReview } = z
-      .object({ requiresReview: z.boolean().default(true) })
+    const { requiresReview, writeCoverLetter } = z
+      .object({
+        requiresReview: z.boolean().default(true),
+        // Off unless asked for. Most applications do not need one.
+        writeCoverLetter: z.boolean().default(false),
+      })
       .parse(req.body ?? {});
 
-    const lead = await prisma.jobLead.findUnique({ where: { id: req.params.id } });
+    const lead = await ownedLead(profile.id, req.params.id);
     if (!lead) return reply.code(404).send({ error: 'Not found' });
 
     const adapter = adapterFor(lead.url);
@@ -349,8 +425,8 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
     const application = await prisma.application.upsert({
       where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
-      create: { profileId: profile.id, jobId: job.id, requiresReview },
-      update: { status: 'QUEUED', blockedReason: null, requiresReview },
+      create: { profileId: profile.id, jobId: job.id, requiresReview, writeCoverLetter },
+      update: { status: 'QUEUED', blockedReason: null, requiresReview, writeCoverLetter },
     });
 
     await prisma.jobLead.update({
@@ -374,8 +450,8 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
   // ----------------------------------------------- what it has learned so far ---
 
-  app.get('/api/preferences', async (_req, reply) => {
-    const profile = await requireProfile(reply);
+  app.get('/api/preferences', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const signals = await prisma.preferenceSignal.findMany({
       where: { profileId: profile.id },
@@ -388,14 +464,18 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     };
   });
 
-  app.delete<{ Params: { id: string } }>('/api/preferences/:id', async (req) => {
-    await prisma.preferenceSignal.delete({ where: { id: req.params.id } });
+  app.delete<{ Params: { id: string } }>('/api/preferences/:id', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    const signal = await ownedSignal(profile.id, req.params.id);
+    if (!signal) return reply.code(404).send(NOT_YOURS);
+    await prisma.preferenceSignal.delete({ where: { id: signal.id } });
     return { ok: true };
   });
 
   /** Manually tell it something, instead of waiting for it to infer. */
   app.post('/api/preferences', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const { term, weight } = z
       .object({ term: z.string().min(1), weight: z.number().min(-4).max(4) })
@@ -409,6 +489,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   });
 }
 
-export type RequireProfile = (reply: {
-  code: (n: number) => { send: (b: unknown) => unknown };
-}) => Promise<{ id: string } | null>;
+export type RequireProfile = (
+  req: { headers: { cookie?: string } },
+  reply: { code: (n: number) => { send: (b: unknown) => unknown } },
+) => Promise<{ id: string } | null>;

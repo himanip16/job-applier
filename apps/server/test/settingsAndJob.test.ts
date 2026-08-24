@@ -129,7 +129,7 @@ describe('one job, everything about it', () => {
     profileId = p.id;
 
     app = Fastify();
-    registerJobDetailRoutes(app);
+    registerJobDetailRoutes(app, async () => ({ id: profileId }));
     await app.ready();
   });
 

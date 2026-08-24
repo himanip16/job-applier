@@ -59,7 +59,10 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
     refresh();
     // The run publishes to this stream as it works; history is replayed on
     // connect so a refresh mid-run does not lose the story.
-    const es = new EventSource(`${API}/api/applications/${id}/stream`);
+    // withCredentials, or the session cookie is not sent and the stream is
+    // refused - EventSource omits cookies cross-origin by default, and the API
+    // is on another origin in both development and production.
+    const es = new EventSource(`${API}/api/applications/${id}/stream`, { withCredentials: true });
     es.onmessage = (m) => {
       const evt = JSON.parse(m.data) as Evt;
       setEvents((prev) => [...prev, evt]);

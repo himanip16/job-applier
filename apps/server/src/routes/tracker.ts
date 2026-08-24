@@ -4,6 +4,13 @@ import { prisma, type Prisma } from '../lib/db.js';
 import { rememberAnswer } from '../engine/answerBank.js';
 import { normalizeLabel } from '@ja/shared';
 import type { RequireProfile } from './discovery.js';
+import {
+  NOT_YOURS,
+  ownedApplication,
+  ownedLesson,
+  ownedQuestion,
+  ownedRound,
+} from '../auth/ownership.js';
 
 /**
  * The tracker.
@@ -15,7 +22,7 @@ import type { RequireProfile } from './discovery.js';
  */
 export function registerTrackerRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   app.get<{ Querystring: { outcome?: string } }>('/api/tracker', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
 
     const applications = await prisma.application.findMany({
@@ -70,7 +77,10 @@ export function registerTrackerRoutes(app: FastifyInstance, requireProfile: Requ
     };
   });
 
-  app.patch<{ Params: { id: string } }>('/api/tracker/:id', async (req) => {
+  app.patch<{ Params: { id: string } }>('/api/tracker/:id', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
     const body = z
       .object({
         outcome: z
@@ -93,7 +103,10 @@ export function registerTrackerRoutes(app: FastifyInstance, requireProfile: Requ
 
   // ---------------------------------------------------------------- rounds ---
 
-  app.post<{ Params: { id: string } }>('/api/tracker/:id/rounds', async (req) => {
+  app.post<{ Params: { id: string } }>('/api/tracker/:id/rounds', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
     const body = z
       .object({
         name: z.string().min(1),
@@ -124,7 +137,10 @@ export function registerTrackerRoutes(app: FastifyInstance, requireProfile: Requ
     return { round };
   });
 
-  app.patch<{ Params: { id: string } }>('/api/rounds/:id', async (req) => {
+  app.patch<{ Params: { id: string } }>('/api/rounds/:id', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    if (!(await ownedRound(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
     const body = z
       .object({
         name: z.string().optional(),
@@ -148,7 +164,10 @@ export function registerTrackerRoutes(app: FastifyInstance, requireProfile: Requ
     return { round };
   });
 
-  app.delete<{ Params: { id: string } }>('/api/rounds/:id', async (req) => {
+  app.delete<{ Params: { id: string } }>('/api/rounds/:id', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    if (!(await ownedRound(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
     await prisma.interviewRound.delete({ where: { id: req.params.id } });
     return { ok: true };
   });
@@ -165,7 +184,7 @@ export function registerTrackerRoutes(app: FastifyInstance, requireProfile: Requ
    * as interview material.
    */
   app.post<{ Params: { id: string } }>('/api/rounds/:id/questions', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const body = z
       .object({
@@ -176,6 +195,7 @@ export function registerTrackerRoutes(app: FastifyInstance, requireProfile: Requ
         reuseAnswer: z.boolean().default(false),
       })
       .parse(req.body);
+    if (!(await ownedRound(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
 
     const question = await prisma.interviewQuestion.create({
       data: {
@@ -202,7 +222,10 @@ export function registerTrackerRoutes(app: FastifyInstance, requireProfile: Requ
     return { question };
   });
 
-  app.patch<{ Params: { id: string } }>('/api/questions/:id', async (req) => {
+  app.patch<{ Params: { id: string } }>('/api/questions/:id', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    if (!(await ownedQuestion(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
     const body = z
       .object({
         question: z.string().optional(),
@@ -214,14 +237,20 @@ export function registerTrackerRoutes(app: FastifyInstance, requireProfile: Requ
     return { question: await prisma.interviewQuestion.update({ where: { id: req.params.id }, data: body }) };
   });
 
-  app.delete<{ Params: { id: string } }>('/api/questions/:id', async (req) => {
+  app.delete<{ Params: { id: string } }>('/api/questions/:id', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    if (!(await ownedQuestion(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
     await prisma.interviewQuestion.delete({ where: { id: req.params.id } });
     return { ok: true };
   });
 
   // --------------------------------------------------------------- lessons ---
 
-  app.post<{ Params: { id: string } }>('/api/tracker/:id/lessons', async (req) => {
+  app.post<{ Params: { id: string } }>('/api/tracker/:id/lessons', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
     const body = z
       .object({
         text: z.string().min(1),
@@ -240,7 +269,10 @@ export function registerTrackerRoutes(app: FastifyInstance, requireProfile: Requ
     return { lesson };
   });
 
-  app.delete<{ Params: { id: string } }>('/api/lessons/:id', async (req) => {
+  app.delete<{ Params: { id: string } }>('/api/lessons/:id', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    if (!(await ownedLesson(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
     await prisma.lesson.delete({ where: { id: req.params.id } });
     return { ok: true };
   });
@@ -250,8 +282,8 @@ export function registerTrackerRoutes(app: FastifyInstance, requireProfile: Requ
    * the questions you were asked alongside it. This is the view that is worth
    * the whole tracker after a couple of months of searching.
    */
-  app.get('/api/retrospective', async (_req, reply) => {
-    const profile = await requireProfile(reply);
+  app.get('/api/retrospective', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
 
     const [lessons, questions, outcomes] = await Promise.all([
