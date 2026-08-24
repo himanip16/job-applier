@@ -446,7 +446,13 @@ export async function buildRejectionHistory(profileId: string, limit = 25): Prom
   return `${header}\n${lines.join('\n')}`;
 }
 
-/** The candidate's own words about what they want, from their profile facts. */
+/**
+ * What the candidate has said they want, in their own words.
+ *
+ * Facts, not inference: only the keys where they stated a preference, a
+ * constraint or a number. This goes verbatim into the fit prompt, because a
+ * stated preference outranks anything a resume implies.
+ */
 export async function buildPreferences(profileId: string): Promise<string> {
   const facts = await prisma.profileFact.findMany({
     where: {
@@ -461,73 +467,6 @@ export async function buildPreferences(profileId: string): Promise<string> {
     },
   });
   return facts.map((f) => `- ${f.label}: ${f.value}`).join('\n');
-}
-
-export function scoreExperienceFit(
-  candidateContext: string,
-  jobText: string,
-): { scoreDelta: number; reason: string } | null {
-  const candidateText = normalizeLabel(candidateContext);
-  const job = normalizeLabel(jobText);
-
-  const readYears = (text: string): number | null => {
-    const patterns = [
-      /(\d{1,2})(?:\.\d+)?\+?\s*years?\s*(?:of)?\s*(?:professional|relevant|total)?\s*experience\b/i,
-      /(?:experience|years?\s*(?:of)?\s*(?:professional|relevant|total)?\s*experience)[^0-9]{0,80}(\d{1,2})(?:\.\d+)?\+?\b/i,
-      /(\d{1,2})(?:\.\d+)?\+?\s*years?\b/i,
-    ];
-
-    for (const pattern of patterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const n = Number(match[1]);
-        if (Number.isFinite(n)) return n;
-      }
-    }
-    return null;
-  };
-
-  const requirementYears = (() => {
-    const patterns = [
-      /(?:minimum|required|at least|needs?|seeking)[^0-9]{0,60}(\d{1,2})(?:\.\d+)?\+?\s*years?/i,
-      /(\d{1,2})(?:\.\d+)?\+?\s*years?\s*(?:minimum|required|at least)?/i,
-      /\b(\d{1,2})(?:\.\d+)?\+?\s*years?\b/i,
-    ];
-    for (const pattern of patterns) {
-      const match = job.match(pattern);
-      if (match) {
-        const n = Number(match[1]);
-        if (Number.isFinite(n) && n > 0) return n;
-      }
-    }
-    return null;
-  })();
-
-  const candidateYears = readYears(candidateText);
-  if (candidateYears === null || requirementYears === null) return null;
-
-  // Years of experience mismatches are a major red flag: 4 vs 8+ differs by
-  // more than seniority tier and should not be shrugged off as a minor gap.
-  const gap = candidateYears - requirementYears;
-  if (gap >= 0) {
-    if (gap <= 1) {
-      return {
-        scoreDelta: 4,
-        reason: `Experience is close to the posting requirement (${candidateYears} years vs ${requirementYears} years).`,
-      };
-    }
-    return {
-      scoreDelta: 8,
-      reason: `Experience exceeds the requirement (${candidateYears} years vs ${requirementYears} years).`,
-    };
-  }
-
-  const shortfall = requirementYears - candidateYears;
-  const scoreDelta = -(42 + Math.max(0, shortfall - 1) * 10);
-  return {
-    scoreDelta,
-    reason: `Years of experience are a mismatch: candidate has ${candidateYears} years, but the posting asks for ${requirementYears}+ years.`,
-  };
 }
 
 export function serialiseReasons(

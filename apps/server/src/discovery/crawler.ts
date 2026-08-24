@@ -17,6 +17,7 @@ import {
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
+import { applyHardRules, candidateConstraints } from './hardRules.js';
 import { rescoreLeads, rescoreLexically } from './rescoreLeads.js';
 
 export interface CrawlReport {
@@ -143,19 +144,21 @@ export async function crawlAll(
     });
     if (profile) {
       const candidateContext = renderCandidateContext(profile, profile.resumeText);
+      const constraints = candidateConstraints(profile);
       const preferences = await buildPreferences(profileId);
       const rejectionHistory = await buildRejectionHistory(profileId);
 
       const shortlist = fresh.sort((a, b) => b.lexScore - a.lexScore).slice(0, deepScoreTop);
       for (const entry of shortlist) {
         try {
-          const fit = await assessFit({
+          const raw = await assessFit({
             candidateContext,
             preferences,
             rejectionHistory,
             job: entry.job,
           });
-          if (!fit) continue;
+          if (!raw) continue;
+          const fit = applyHardRules(raw, { ...constraints, job: entry.job });
           const lex = scoreLexically(entry.job, scoring);
           // Blend, weighted toward the model - it read the description, the
           // lexical prior only saw word counts. A hard blocker overrides both.
