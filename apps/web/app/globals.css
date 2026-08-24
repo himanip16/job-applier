@@ -280,6 +280,9 @@ button.ghost {
   background: transparent; border-color: transparent;
 }
 button.ghost:hover:not(:disabled) { background: var(--panel-2); border-color: var(--border); }
+/* Reasserted after .ghost, which would otherwise win the shared hover rule
+   and turn a "reject" button's hover state plain gray instead of red. */
+button.danger.ghost:hover:not(:disabled) { background: var(--bad-soft); border-color: var(--bad-border); }
 
 button.small, .btn-small {
   padding: 0.3rem 0.6rem; font-size: 0.78rem; border-radius: var(--radius-sm);

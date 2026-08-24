@@ -310,6 +310,7 @@ function Hero({ ov }: { ov: Overview | null }) {
             value={c?.strongMatches ?? 0}
             label="strong matches"
             tone={(c?.strongMatches ?? 0) > 0 ? 'var(--good)' : undefined}
+            hint="Scored 70 or higher by the ranking, automatically - not the same as saved or applied to."
           />
           <Big href="/runs" value={y?.inReview ?? 0} label="applications ready" />
           <Big
@@ -355,14 +356,16 @@ function Big({
   value,
   label,
   tone,
+  hint,
 }: {
   href: string;
   value: number;
   label: string;
   tone?: string;
+  hint?: string;
 }) {
   return (
-    <a href={href} className="stat">
+    <a href={href} className="stat" title={hint}>
       <div className="stat-value" style={{ color: tone ?? 'inherit' }}>
         {value}
       </div>

@@ -100,6 +100,80 @@ describe('board API parsers', () => {
   });
 });
 
+describe('remote detection', () => {
+  /**
+   * The bug reported live: "Software Engineer 2" at a real company was
+   * badged REMOTE while its own rationale - read by the model from the same
+   * text - correctly said "Hybrid - Bangalore, India". The badge came from a
+   * bare regex match on the word "remote" inside a sentence explaining that
+   * the role is hybrid, not remote.
+   */
+  it('does not call a hybrid role remote because the word appears in the description', async () => {
+    mockJson({
+      jobs: [
+        {
+          id: 1,
+          title: 'Software Engineer 2',
+          absolute_url: 'https://job-boards.greenhouse.io/abnormalsecurity/jobs/1',
+          location: { name: 'Bangalore, India' },
+          content:
+            '<p>This is a hybrid role based in our Bangalore office, three days a week. ' +
+            'Remote work is not offered for this position.</p>',
+        },
+      ],
+    });
+    const [job] = await greenhouseSource.fetchJobs('abnormalsecurity');
+    expect(job!.remote).toBe(false);
+  });
+
+  it('still recognises a genuinely unqualified remote role', async () => {
+    mockJson({
+      jobs: [
+        {
+          id: 2,
+          title: 'Backend Engineer',
+          absolute_url: 'https://job-boards.greenhouse.io/acme/jobs/2',
+          location: { name: 'Remote' },
+          content: '<p>Fully remote team, work from anywhere in the US.</p>',
+        },
+      ],
+    });
+    const [job] = await greenhouseSource.fetchJobs('acme');
+    expect(job!.remote).toBe(true);
+  });
+
+  it('trusts a board’s own hybrid/on-site field over a stray word in free text', async () => {
+    mockJson([
+      {
+        id: 'x',
+        text: 'Senior Engineer',
+        hostedUrl: 'https://jobs.lever.co/acme/x',
+        categories: { location: 'Austin, TX' },
+        workplaceType: 'hybrid',
+        descriptionPlain: 'Some remote flexibility may be available for senior staff.',
+      },
+    ]);
+    const [job] = await leverSource.fetchJobs('acme');
+    expect(job!.remote).toBe(false);
+  });
+
+  it('trusts an explicit false from a board even if the location text says otherwise', async () => {
+    mockJson({
+      jobs: [
+        {
+          title: 'Support Engineer',
+          location: 'Remote-friendly office in Denver',
+          isRemote: false,
+          jobUrl: 'https://jobs.ashbyhq.com/acme/y',
+          descriptionPlain: 'Based in our Denver office.',
+        },
+      ],
+    });
+    const [job] = await ashbySource.fetchJobs('acme');
+    expect(job!.remote).toBe(false);
+  });
+});
+
 describe('term extraction', () => {
   it('weights the title over the body and drops filler', () => {
     const terms = jobTerms({
