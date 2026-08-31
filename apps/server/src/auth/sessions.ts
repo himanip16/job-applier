@@ -77,17 +77,27 @@ export function clearSessionCookie(reply: FastifyReply): void {
  * accepts that with Secure, which in turn means https. Over plain http (local
  * development) both are dropped, since a Secure cookie would simply never be
  * stored and sign-in would appear to succeed and then not work.
+ *
+ * For local development with different ports, we use SameSite=None without Secure
+ * to allow cross-site cookies on http (browsers allow this for localhost).
  */
 function serialiseCookie(value: string, expiresAt: Date): string {
-  const crossSite = process.env.COOKIE_CROSS_SITE !== 'false' && isHttps();
+  const isLocalhost = process.env.PUBLIC_API_URL?.includes('localhost') || 
+                      process.env.RENDER_EXTERNAL_URL?.includes('localhost') ||
+                      !process.env.PUBLIC_API_URL && !process.env.RENDER_EXTERNAL_URL;
+  const crossSite = process.env.COOKIE_CROSS_SITE !== 'false' && (isHttps() || isLocalhost);
   const bits = [
     `${SESSION_COOKIE}=${value}`,
     'Path=/',
     'HttpOnly',
     `Expires=${expiresAt.toUTCString()}`,
   ];
-  if (crossSite) bits.push('SameSite=None', 'Secure');
-  else bits.push('SameSite=Lax');
+  if (crossSite) {
+    bits.push('SameSite=None');
+    if (isHttps()) bits.push('Secure');
+  } else {
+    bits.push('SameSite=Lax');
+  }
   return bits.join('; ');
 }
 

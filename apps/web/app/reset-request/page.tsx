@@ -99,7 +99,7 @@ export default function ResetRequestPage() {
             </div>
             <h2>Check your email</h2>
             <p className="sub">
-              If an account exists for {email}, you'll receive a password reset link shortly.
+              If an account exists for {email}, a password reset link will be sent.
             </p>
             <p className="muted small" style={{ marginTop: '0.5rem' }}>
               The link will expire in 1 hour.

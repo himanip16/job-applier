@@ -1,8 +1,6 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import rateLimit from '@fastify/rate-limit';
 import { prisma } from '../lib/db.js';
 import { hashPassword, verifyPassword, passwordProblem } from '../auth/passwords.js';
 import { createSession, destroySession, currentUser, setSessionCookie, clearSessionCookie, readCookie, SESSION_COOKIE } from '../auth/sessions.js';
@@ -12,7 +10,9 @@ import {
   completePasswordReset,
 } from '../auth/password-reset.js';
 import { sendPasswordResetEmail } from '../lib/email.js';
-import { sendPasswordResetEmail } from '../lib/email.js';
+
+/** Precomputed valid scrypt hash for timing-safe login checks when user doesn't exist. */
+const DUMMY_HASH = 'scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
 /**
  * Signing in.
@@ -32,15 +32,6 @@ const Credentials = z.object({
 const BAD_CREDENTIALS = 'That email and password do not match an account.';
 
 export function registerAuthRoutes(app: FastifyInstance) {
-  // Register rate limiting plugin
-  app.register(rateLimit, {
-    max: 10, // 10 requests
-    timeWindow: '1 minute', // per minute
-    errorResponseBuilder: (req, context) => ({
-      error: 'Too many requests. Please try again later.',
-    }),
-  });
-
   // Register rate limiting plugin
   app.register(rateLimit, {
     max: 10, // 10 requests
@@ -82,15 +73,30 @@ export function registerAuthRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: 'There is already an account with that email. Sign in instead.' });
     }
 
-    const user = await prisma.user.create({
-      data: { email, passwordHash: await hashPassword(parsed.data.password) },
-    });
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: { email, passwordHash: await hashPassword(parsed.data.password) },
+      });
+    } catch (err) {
+      // Handle race condition: another request may have created the user first
+      if ((err as { code?: string }).code === 'P2002') {
+        return reply.code(409).send({ error: 'There is already an account with that email. Sign in instead.' });
+      }
+      throw err;
+    }
 
-    // Adopt the pre-sign-in profile rather than stranding it. A single-user
-    // install that has been running for weeks has all its history on a profile
-    // with no owner, and the person creating the first account is that owner.
-    const orphan = await prisma.profile.findFirst({ where: { userId: null } });
-    if (orphan) await prisma.profile.update({ where: { id: orphan.id }, data: { userId: user.id } });
+    // Adopt the pre-sign-in profile rather than stranding it. This is for single-user
+    // migrations where a profile existed before sign-in was implemented. We adopt
+    // the first orphan profile found - if multiple orphans exist, this is non-deterministic,
+    // but that should not happen in normal operation.
+    const orphan = await prisma.profile.findFirst({ 
+      where: { userId: null },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (orphan) {
+      await prisma.profile.update({ where: { id: orphan.id }, data: { userId: user.id } });
+    }
 
     await startSession(reply, req, user.id);
     return { user: { id: user.id, email: user.email }, adoptedExistingProfile: Boolean(orphan) };
@@ -103,10 +109,10 @@ export function registerAuthRoutes(app: FastifyInstance) {
 
     const user = await prisma.user.findUnique({ where: { email } });
     // Hash anyway when there is no such user, so the response time does not
-    // say whether the address is registered.
+    // say whether the address is registered. Use a valid precomputed hash.
     const ok = user
       ? await verifyPassword(parsed.data.password, user.passwordHash)
-      : await verifyPassword(parsed.data.password, 'scrypt$16384$8$1$AAAA$AAAA');
+      : await verifyPassword(parsed.data.password, DUMMY_HASH);
     if (!user || !ok) return reply.code(401).send({ error: BAD_CREDENTIALS, code: 'BAD_CREDENTIALS' });
 
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });

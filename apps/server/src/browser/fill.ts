@@ -1,8 +1,8 @@
 import type { Locator, Page } from 'playwright';
 import { normalizeLabel, type FormField } from '@ja/shared';
 
-const FIELD_TIMEOUT_MS = 30_000;
-const OPTION_TIMEOUT_MS = 12_000;
+const FIELD_TIMEOUT_MS = 10_000;
+const OPTION_TIMEOUT_MS = 5_000;
 
 export class FillError extends Error {
   constructor(
@@ -26,6 +26,23 @@ export class FillError extends Error {
  * silently-ignored fill is caught here rather than discovered after submit.
  */
 export async function fillField(page: Page, field: FormField, value: string | string[]): Promise<void> {
+  // Check field state before attempting to fill
+  const state = await inspectControl(page, field);
+  
+  // If field is locked and already holds the right value, skip filling
+  if (state.locked && state.exists) {
+    const wanted = Array.isArray(value) ? value.join(', ') : value;
+    if (alreadyHolds(state.current, wanted)) {
+      return; // Field is already correctly filled and locked
+    }
+    // Field is locked but has wrong value - this will be caught by verification
+  }
+  
+  // If field doesn't exist in DOM, we can't fill it
+  if (!state.exists) {
+    throw new FillError(`Field "${field.label}" not found in DOM`, field, true);
+  }
+
   switch (field.widget) {
     case 'react-select':
       await fillReactSelect(page, field, value);
@@ -145,7 +162,13 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
     }
     case 'MULTISELECT': {
       const wants = Array.isArray(value) ? value : [value];
-      await el.selectOption(wants.map((label) => ({ label })));
+      const valuesToSelect: string[] = [];
+      for (const want of wants) {
+        const option = bestOption(field.options, want);
+        if (!option) throw new FillError(`No option "${want}" on ${field.label}`, field);
+        valuesToSelect.push(option.value);
+      }
+      await el.selectOption(valuesToSelect);
       break;
     }
     case 'CHECKBOX': {
@@ -156,16 +179,12 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
     default: {
       const text = asOne(value, field);
       await el.scrollIntoViewIfNeeded().catch(() => {});
-      await el.click({ timeout: FIELD_TIMEOUT_MS }).catch(() => {});
       await el.fill('');
       // type() rather than fill() so React's onChange fires per keystroke;
       // some forms only validate on keyup and stay in an error state otherwise.
       await el.type(text, { delay: 12 });
-      await el.evaluate((node) => {
-        node.dispatchEvent(new Event('input', { bubbles: true }));
-        node.dispatchEvent(new Event('change', { bubbles: true }));
-        node.dispatchEvent(new Event('blur', { bubbles: true }));
-      });
+      // Press Tab to trigger proper blur behavior instead of synthetic events
+      await el.press('Tab').catch(() => {});
     }
   }
 }
@@ -308,16 +327,28 @@ async function waitForOption(page: Page, field: FormField, want: string): Promis
   } catch {
     return null;
   }
-  const target = normalizeLabel(want);
+
   const count = await options.count();
-  let fallback: Locator | null = null;
+  const optionData: { label: string; locator: Locator }[] = [];
+  
   for (let i = 0; i < count; i++) {
     const opt = options.nth(i);
     const text = normalizeLabel((await opt.innerText().catch(() => '')) ?? '');
-    if (text === target) return opt;
-    if (!fallback && text.includes(target)) fallback = opt;
+    if (text) {
+      optionData.push({ label: text, locator: opt });
+    }
   }
-  return fallback;
+
+  // Use the same sophisticated matching logic as bestOption()
+  const matched = bestOption(optionData.map(o => ({ label: o.label })), want);
+  if (!matched) return null;
+
+  // Find the locator corresponding to the matched option
+  const matchedLocator = optionData.find(o => 
+    normalizeLabel(o.label) === normalizeLabel(matched.label)
+  )?.locator;
+  
+  return matchedLocator || null;
 }
 
 async function fillRadioGroup(page: Page, field: FormField, want: string): Promise<void> {
@@ -340,18 +371,24 @@ async function fillCheckboxGroup(page: Page, field: FormField, wants: string[]):
   const boxes = scope.locator('input[type="checkbox"]');
   const count = await boxes.count();
   const targets = new Set(wants.map(normalizeLabel));
-  let hit = 0;
+  const foundLabels = new Set<string>();
+  
   for (let i = 0; i < count; i++) {
     const box = boxes.nth(i);
     const label = normalizeLabel(await labelTextFor(page, box));
     if (targets.has(label)) {
       await box.check({ force: true });
-      hit++;
+      foundLabels.add(label);
+    } else {
+      // Uncheck boxes that aren't in the requested set to ensure exact state
+      await box.uncheck({ force: true }).catch(() => {});
     }
   }
-  if (hit !== targets.size) {
+  
+  if (foundLabels.size !== targets.size) {
+    const missing = [...targets].filter(t => !foundLabels.has(t));
     throw new FillError(
-      `Checked ${hit} of ${targets.size} options for ${field.label}`,
+      `Missing options for ${field.label}: ${missing.join(', ')}`,
       field,
     );
   }
