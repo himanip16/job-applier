@@ -33,28 +33,23 @@ export default function ResetRequestPage() {
     setBusy(true);
     setError(null);
     setDevToken(null);
-    
-    // Basic client-side validation
-    if (!email || !email.includes('@') || email.length < 3) {
-      setError('Please enter a valid email address.');
-      setBusy(false);
-      return;
-    }
-    
+
+    const normalizedEmail = email.trim().toLowerCase();
+
     try {
-      const response = await api<{ ok: boolean; token?: string; message?: string }>('/api/auth/reset-request', {
+      const response = await api<{ token?: string }>('/api/auth/reset-request', {
         method: 'POST',
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email: normalizedEmail }),
       });
       setSuccess(true);
       setResendCooldown(60); // Set cooldown after successful initial request
-      // In development mode, the token is returned for testing
-      if (response.token) {
+      // Only expose token in development mode for testing
+      if (process.env.NODE_ENV === 'development' && response.token) {
         setDevToken(response.token);
       }
-      setBusy(false);
     } catch (err) {
       setError((err as Error).message);
+    } finally {
       setBusy(false);
     }
   }
@@ -62,12 +57,13 @@ export default function ResetRequestPage() {
   async function resendEmail() {
     setResending(true);
     setError(null);
+    const normalizedEmail = email.trim().toLowerCase();
     try {
-      const response = await api<{ ok: boolean; token?: string; message?: string }>('/api/auth/reset-request', {
+      const response = await api<{ token?: string }>('/api/auth/reset-request', {
         method: 'POST',
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email: normalizedEmail }),
       });
-      if (response.token) {
+      if (process.env.NODE_ENV === 'development' && response.token) {
         setDevToken(response.token);
       }
       setResendCooldown(60); // 60 second cooldown
@@ -109,7 +105,7 @@ export default function ResetRequestPage() {
               The link will expire in 1 hour.
             </p>
 
-            {devToken && (
+            {process.env.NODE_ENV === 'development' && devToken && (
               <div className="notice" style={{ marginTop: '1rem', textAlign: 'left' }}>
                 <strong>Development mode:</strong>
                 <p style={{ margin: '.5rem 0', wordBreak: 'break-all' }}>
@@ -126,21 +122,21 @@ export default function ResetRequestPage() {
             )}
 
             <button
-              className="primary"
-              onClick={() => router.push('/signin')}
+              className="ghost"
+              onClick={resendEmail}
+              disabled={resending || resendCooldown > 0}
               style={{ marginTop: '1.5rem', width: '100%' }}
             >
-              Back to sign in
+              {resending && <span className="spinner" style={{ marginRight: '.5rem' }} />}
+              {resending ? 'Sending…' : resendCooldown > 0 ? `Resend email (${resendCooldown}s)` : 'Resend email'}
             </button>
 
             <button
               className="ghost"
-              onClick={resendEmail}
-              disabled={resending || resendCooldown > 0}
+              onClick={() => router.push('/signin')}
               style={{ marginTop: '.5rem', width: '100%' }}
             >
-              {resending && <span className="spinner" style={{ marginRight: '.5rem' }} />}
-              {resending ? 'Sending…' : resendCooldown > 0 ? `Resend email (${resendCooldown}s)` : 'Resend email'}
+              Back to sign in
             </button>
           </div>
         </div>

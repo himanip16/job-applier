@@ -154,12 +154,12 @@ function SignInForm() {
             <label className="field">
               <span>Password</span>
               <div style={{ position: 'relative' }}>
-                <input
+              <input
                   type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  required
-                  autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-                  onChange={(e) => setPassword(e.target.value)}
+                value={password}
+                required
+                autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                onChange={(e) => setPassword(e.target.value)}
                   style={{ paddingRight: '2.5rem' }}
                 />
                 <button
@@ -206,41 +206,10 @@ function SignInForm() {
                 </button>
               </p>
             )}
-            {mode === 'register' && password.length > 0 && (
-              <div className="muted small" style={{ margin: '-.4rem 0 .9rem' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '.25rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                    <span style={{ color: passwordRequirements.length ? 'var(--success)' : 'var(--muted)' }}>
-                      {passwordRequirements.length ? '✓' : '○'}
-                    </span>
-                    <span>At least 10 characters</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                    <span style={{ color: passwordRequirements.uppercase ? 'var(--success)' : 'var(--muted)' }}>
-                      {passwordRequirements.uppercase ? '✓' : '○'}
-                    </span>
-                    <span>Contains uppercase letter</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                    <span style={{ color: passwordRequirements.lowercase ? 'var(--success)' : 'var(--muted)' }}>
-                      {passwordRequirements.lowercase ? '✓' : '○'}
-                    </span>
-                    <span>Contains lowercase letter</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                    <span style={{ color: passwordRequirements.number ? 'var(--success)' : 'var(--muted)' }}>
-                      {passwordRequirements.number ? '✓' : '○'}
-                    </span>
-                    <span>Contains a number</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                    <span style={{ color: passwordRequirements.special ? 'var(--success)' : 'var(--muted)' }}>
-                      {passwordRequirements.special ? '✓' : '○'}
-                    </span>
-                    <span>Contains a special character</span>
-                  </div>
-                </div>
-              </div>
+            {mode === 'register' && (
+              <p className="muted small" style={{ margin: '-.4rem 0 .9rem' }}>
+                At least 10 characters with uppercase, lowercase, number, and special character.
+              </p>
             )}
 
             {error && <div className="notice bad" style={{ marginBottom: '.9rem' }}>{error}</div>}

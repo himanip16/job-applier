@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import rateLimit from '@fastify/rate-limit';
 import { prisma } from '../lib/db.js';
 import { hashPassword, verifyPassword, passwordProblem } from '../auth/passwords.js';
 import { createSession, destroySession, currentUser, setSessionCookie, clearSessionCookie, readCookie, SESSION_COOKIE } from '../auth/sessions.js';
@@ -9,6 +11,7 @@ import {
   createPasswordResetToken,
   completePasswordReset,
 } from '../auth/password-reset.js';
+import { sendPasswordResetEmail } from '../lib/email.js';
 import { sendPasswordResetEmail } from '../lib/email.js';
 
 /**
@@ -29,6 +32,15 @@ const Credentials = z.object({
 const BAD_CREDENTIALS = 'That email and password do not match an account.';
 
 export function registerAuthRoutes(app: FastifyInstance) {
+  // Register rate limiting plugin
+  app.register(rateLimit, {
+    max: 10, // 10 requests
+    timeWindow: '1 minute', // per minute
+    errorResponseBuilder: (req, context) => ({
+      error: 'Too many requests. Please try again later.',
+    }),
+  });
+
   // Register rate limiting plugin
   app.register(rateLimit, {
     max: 10, // 10 requests
@@ -129,7 +141,7 @@ export function registerAuthRoutes(app: FastifyInstance) {
         // Verify current password within transaction
         const row = await tx.user.findUniqueOrThrow({ where: { id: user.id } });
         if (!(await verifyPassword(body.data.current, row.passwordHash))) {
-          throw new Error('INVALID_CURRENT_PASSWORD');
+          throw new Error('That is not your current password.');
         }
 
         // Update password
@@ -148,8 +160,8 @@ export function registerAuthRoutes(app: FastifyInstance) {
       return { ok: true };
     } catch (error) {
       const message = (error as Error).message;
-      if (message === 'INVALID_CURRENT_PASSWORD') {
-        return reply.code(401).send({ error: 'That is not your current password.', code: 'INVALID_CURRENT_PASSWORD' });
+      if (message === 'That is not your current password.') {
+        return reply.code(401).send({ error: message });
       }
       throw error;
     }

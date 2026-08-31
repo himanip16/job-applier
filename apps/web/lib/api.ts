@@ -54,6 +54,9 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     } else if (isResetPage) {
       // For reset pages, redirect to signin without next parameter
       window.location.href = '/signin';
+    } else if (isResetPage) {
+      // For reset pages, redirect to signin without next parameter
+      window.location.href = '/signin';
     }
   }
 
