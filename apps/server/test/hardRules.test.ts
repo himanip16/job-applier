@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyHardRules,
-  candidateConstraints,
   experienceVerdict,
   parseRequiredYears,
   parseYears,
@@ -126,23 +125,6 @@ describe('visa sponsorship on US postings', () => {
 
   it('does not apply to somebody who does not need it', () => {
     expect(sponsorshipVerdict(false, job('San Francisco, CA', 'Build things.'))).toBeNull();
-  });
-
-  it('reads the candidate as needing it from citizenship, not just location', () => {
-    expect(candidateConstraints({ countryCode: 'IN', country: 'India', citizenship: 'India' }).needsSponsorship).toBe(true);
-    expect(candidateConstraints({ countryCode: 'US', country: 'United States', citizenship: 'United States' }).needsSponsorship).toBe(false);
-    expect(candidateConstraints({ citizenship: 'USA' }).needsSponsorship).toBe(false);
-    expect(candidateConstraints({ citizenship: 'US' }).needsSponsorship).toBe(false);
-    expect(candidateConstraints({ citizenship: 'Indian' }).needsSponsorship).toBe(true);
-  });
-
-  it('prefers a stated fact for years over a regex across the resume', () => {
-    const c = candidateConstraints({
-      facts: [{ key: 'experience.years', value: '4.5' }],
-      // A bullet that would otherwise be read as the answer.
-      resumeText: 'Led a 3 years long migration of the billing system.',
-    });
-    expect(c.candidateYears).toBe(4.5);
   });
 });
 

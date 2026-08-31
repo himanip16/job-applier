@@ -81,7 +81,6 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   if (!detail) return <Loading />;
 
   const open = detail.pending.filter((q) => !q.answeredAt);
-  const shots = detail.artifacts.filter((a) => a.kind === 'screenshot');
 
   return (
     <>
@@ -169,19 +168,6 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
           {events.length === 0 && <span className="muted">waiting…</span>}
         </div>
       </div>
-
-      {shots.length > 0 && (
-        <div className="panel">
-          <h2>What the browser saw</h2>
-          <p className="sub">Screenshots captured at each step — your record of what was submitted.</p>
-          {shots.slice(-3).reverse().map((a) => (
-            <figure key={a.id} style={{ margin: '0 0 1rem' }}>
-              <img className="shot" src={`${API}/artifacts/${a.path}`} alt={a.label} />
-              <figcaption className="muted small">{a.label}</figcaption>
-            </figure>
-          ))}
-        </div>
-      )}
     </>
   );
 }

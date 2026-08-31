@@ -17,7 +17,7 @@ import {
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
-import { applyHardRules, candidateConstraints } from './hardRules.js';
+import { applyHardRules, extractCandidateConstraints } from './hardRules.js';
 import { rescoreLeads, rescoreLexically } from './rescoreLeads.js';
 
 export interface CrawlReport {
@@ -172,7 +172,7 @@ export async function crawlAll(
     });
     if (profile) {
       const candidateContext = renderCandidateContext(profile, profile.resumeText);
-      const constraints = candidateConstraints(profile);
+      const constraints = extractCandidateConstraints(profile);
       const preferences = await buildPreferences(profileId);
       const rejectionHistory = await buildRejectionHistory(profileId);
 

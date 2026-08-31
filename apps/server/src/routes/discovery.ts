@@ -6,7 +6,7 @@ import { crawlAll, rescore } from '../discovery/crawler.js';
 import { findJobs } from '../discovery/findJobs.js';
 import { isFirecrawlConfigured } from '../discovery/firecrawl.js';
 import { learnFromDecision, loadSignals } from '../discovery/scoring.js';
-import { rescoreByIds, rescoreLexically } from '../discovery/rescoreLeads.js';
+import { rescoreByIds, rescoreLexically, rescoreLeadsBatch } from '../discovery/rescoreLeads.js';
 import { NOT_YOURS, ownedLead, ownedSignal } from '../auth/ownership.js';
 import { adapterFor } from '../ats/registry.js';
 import { enqueue } from '../engine/queue.js';
@@ -177,6 +177,46 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
     const results = await rescoreByIds(profile.id, ids);
     return { results, rescored: results.filter((r) => r.ok).length };
+  });
+
+  /**
+   * Rescore all jobs using batch LLM calls for efficiency.
+   * This processes jobs in batches to reduce the number of LLM API calls.
+   */
+  app.post('/api/leads/rescore-all', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    
+    const { status, limit } = z
+      .object({ 
+        status: z.enum(['NEW', 'ALL']).default('NEW'),
+        limit: z.number().min(1).max(200).default(50)
+      })
+      .parse(req.body ?? {});
+
+    const where: Prisma.JobLeadWhereInput = { profileId: profile.id };
+    if (status !== 'ALL') where.status = status as Prisma.JobLeadWhereInput['status'];
+
+    const leads = await prisma.jobLead.findMany({
+      where,
+      orderBy: [{ score: 'desc' }, { discoveredAt: 'desc' }],
+      take: limit,
+    });
+
+    if (!leads.length) {
+      return { results: [], rescored: 0, message: 'No jobs to rescore.' };
+    }
+
+    const results = await rescoreLeadsBatch(profile.id, leads);
+    const rescored = results.filter((r) => r.ok).length;
+    const failed = results.filter((r) => !r.ok);
+
+    return { 
+      results, 
+      rescored, 
+      failed: failed.length,
+      message: `Rescored ${rescored} job${rescored === 1 ? '' : 's'} using batch processing.${failed.length ? ` ${failed.length} failed.` : ''}`
+    };
   });
 
   app.post('/api/discovery/rescore', async (req, reply) => {

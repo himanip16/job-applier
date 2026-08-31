@@ -34,29 +34,23 @@ export interface HardRuleVerdict {
  */
 export function parseSalary(text: string): number | null {
   const patterns = [
-    // $100,000 - $150,000 per year
-    /\$\s*([0-9,]+(?:\.[0-9]+)?)\s*[-–]\s*\$?\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:per\s+year|annual|annually|year|yr)/i,
-    // $100k - $150k
-    /\$\s*([0-9,]+(?:\.[0-9]+)?)\s*[-–]\s*\$?\s*([0-9,]+(?:\.[0-9]+)?)\s*k\b/i,
-    // $100,000 per year
-    /\$\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:per\s+year|annual|annually|year|yr)/i,
-    // 100k - 150k
-    /([0-9,]+(?:\.[0-9]+)?)\s*[-–]\s*([0-9,]+(?:\.[0-9]+)?)\s*k\b/i,
+    // Range: $100k - $150k or $100,000 - $150,000
+    /\$\s*([0-9,]+)\s*k?\s*[-–]\s*\$?\s*([0-9,]+)\s*k?/i,
+    // Single: $150,000 or $150k
+    /\$\s*([0-9,]+)\s*(?:k\b|per\s+year|annual|yr)?/i,
+    // Single: 150k
+    /\b([0-9]+)\s*k\b/i,
   ];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match) {
-      // For ranges, use the upper bound as the potential salary
-      const value = match[2] ? match[2] : match[1];
-      if (!value) continue;
-      // Remove commas and handle 'k' suffix
-      let numStr = value.replace(/,/g, '').toLowerCase();
-      if (numStr.endsWith('k')) {
-        numStr = numStr.slice(0, -1);
-        return Number(numStr) * 1000;
-      }
-      return Number(numStr);
+      const rawVal = match[2] ?? match[1];
+      if (!rawVal) continue;
+      let val = rawVal.replace(/,/g, '').toLowerCase();
+      let num = Number(val);
+      if (val.endsWith('k') || num < 1000) num *= 1000; // Handle k suffix or values like 150
+      if (num >= 20000 && num <= 1000000) return num; // Reasonable annual salary range
     }
   }
   return null;
@@ -302,47 +296,104 @@ export function applyHardRules(
  * Years come from a stated fact when there is one, because a resume regex
  * reads the first "3 years" it finds in a bullet about a project.
  */
-export function candidateConstraints(profile: {
-  country?: string | null;
-  countryCode?: string | null;
-  citizenship?: string | null;
-  expectedCTC?: string | null;
-  summary?: string | null;
-  resumeText?: string | null;
-  facts?: { key: string; value: string }[];
-}): { candidateYears: number | null; needsSponsorship: boolean; salaryExpectations: { min: number | null; max: number | null } } {
-  const stated = profile.facts?.find((f) => /experience.*years|years.*experience|yoe/i.test(f.key));
-  // A stated fact is usually just the number - "4.5", not "4.5 years" - so it
-  // is read as one before falling back to the prose patterns.
-  const statedYears = stated ? (bareNumber(stated.value) ?? parseYears(stated.value)) : null;
-  const candidateYears =
-    statedYears ??
-    parseYears(normalizeLabel(profile.summary ?? '')) ??
-    parseYears(normalizeLabel((profile.resumeText ?? '').slice(0, 1500)));
+export interface CandidateConstraints {
+  candidateYears: number | null;
+  needsSponsorship: boolean;
+  salaryExpectations: { min: number | null; max: number | null };
+}
 
-  // Anyone not a US citizen needs sponsoring for a US role. Citizenship is the
-  // primary factor - location matters less. Stated as "not US citizen" rather
-  // than "is India" so it stays true if they move.
-  const citizenship = normalizeLabel(profile.citizenship ?? '');
-  const countryCode = (profile.countryCode ?? '').toUpperCase();
-  const country = normalizeLabel(profile.country ?? '');
-  
-  // Check if citizenship is US
-  const isUSCitizen = /^(united states|usa|us|american)$/i.test(citizenship) || 
-                      citizenship.toUpperCase() === 'US' ||
-                      citizenship === 'United States';
-  
-  // If citizenship is not set, fall back to location check
-  const inUS = countryCode === 'US' || /^(united states|usa|us)$/.test(country);
-  
+/** Extract candidate constraints once per profile batch. */
+export function extractCandidateConstraints(profile: {
+  candidateYears?: number | null;
+  needsSponsorship?: boolean;
+  expectedCTC?: string | null;
+  facts?: { key: string; value: string }[];
+}): CandidateConstraints {
+  const yearsFact = profile.facts?.find((f) => /years.*experience|total.*experience/i.test(f.key));
+  const candidateYears = profile.candidateYears ?? (yearsFact ? parseYears(yearsFact.value) : null);
+  const needsSponsorship = profile.needsSponsorship ?? false;
   const salaryExpectations = parseSalaryExpectation(profile);
+
+  return { candidateYears, needsSponsorship, salaryExpectations };
+}
+
+/**
+ * Extract country code from a location string.
+ * Simple heuristic to detect country names or codes.
+ */
+function extractCountry(location: string): string | null {
+  const loc = location.toLowerCase();
   
-  return { candidateYears, needsSponsorship: !isUSCitizen, salaryExpectations };
+  // Common country names
+  const countries: Record<string, string> = {
+    'united states': 'US',
+    'usa': 'US',
+    'us': 'US',
+    'united kingdom': 'GB',
+    'uk': 'GB',
+    'canada': 'CA',
+    'germany': 'DE',
+    'france': 'FR',
+    'india': 'IN',
+    'australia': 'AU',
+    'netherlands': 'NL',
+    'singapore': 'SG',
+    'japan': 'JP',
+    'switzerland': 'CH',
+    'ireland': 'IE',
+    'spain': 'ES',
+    'italy': 'IT',
+    'sweden': 'SE',
+    'denmark': 'DK',
+    'norway': 'NO',
+    'finland': 'FI',
+    'belgium': 'BE',
+    'austria': 'AT',
+    'poland': 'PL',
+    'czech': 'CZ',
+    'brazil': 'BR',
+    'mexico': 'MX',
+    'argentina': 'AR',
+    'colombia': 'CO',
+    'chile': 'CL',
+    'peru': 'PE',
+    'south africa': 'ZA',
+    'new zealand': 'NZ',
+    'israel': 'IL',
+    'uae': 'AE',
+    'saudi arabia': 'SA',
+    'turkey': 'TR',
+    'russia': 'RU',
+    'china': 'CN',
+    'south korea': 'KR',
+    'taiwan': 'TW',
+    'hong kong': 'HK',
+    'thailand': 'TH',
+    'vietnam': 'VN',
+    'indonesia': 'ID',
+    'malaysia': 'MY',
+    'philippines': 'PH',
+    'pakistan': 'PK',
+    'bangladesh': 'BD',
+    'nigeria': 'NG',
+    'egypt': 'EG',
+    'kenya': 'KE',
+    'morocco': 'MA',
+  };
+  
+  for (const [name, code] of Object.entries(countries)) {
+    if (loc.includes(name)) {
+      return code;
+    }
+  }
+  
+  // Check for 2-letter country codes at end of string
+  const codeMatch = loc.match(/\b([A-Z]{2})\b$/i);
+  if (codeMatch && codeMatch[1]) {
+    return codeMatch[1].toUpperCase();
+  }
+  
+  return null;
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
-
-function bareNumber(value: string): number | null {
-  const n = Number(value.trim());
-  return Number.isFinite(n) && n > 0 && n < 60 ? n : null;
-}

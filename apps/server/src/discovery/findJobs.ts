@@ -12,7 +12,7 @@ import {
 import { firecrawlSearch, isFirecrawlConfigured, type SearchHit } from './firecrawl.js';
 import { buildSearchPlan, titleMatchesPlan, type SearchPlan } from './searchQueries.js';
 import { rescoreLexically } from './rescoreLeads.js';
-import { applyHardRules, candidateConstraints } from './hardRules.js';
+import { applyHardRules, extractCandidateConstraints } from './hardRules.js';
 import {
   assessFit,
   blendScores,
@@ -367,7 +367,7 @@ async function deepScore(
   if (!profile) return 0;
 
   const candidateContext = renderCandidateContext(profile, profile.resumeText);
-  const constraints = candidateConstraints(profile);
+  const constraints = extractCandidateConstraints(profile);
   const preferences = await buildPreferences(profileId);
   const rejectionHistory = await buildRejectionHistory(profileId);
 

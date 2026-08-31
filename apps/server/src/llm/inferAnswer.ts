@@ -37,6 +37,20 @@ const InferenceSchema = z.object({
     .describe('When answerable is false: precisely what the candidate needs to tell you. Otherwise empty.'),
 });
 
+const BatchInferenceSchema = z.object({
+  answers: z.record(
+    z.string(),
+    z.object({
+      answerable: z.boolean(),
+      value: z.string(),
+      values: z.array(z.string()),
+      confidence: z.number(),
+      evidence: z.string(),
+      missingInformation: z.string(),
+    })
+  ).describe('Map of field ID to inference result'),
+});
+
 export type Inference = z.infer<typeof InferenceSchema>;
 
 const SYSTEM = `You fill in job application forms on behalf of a candidate. The application is submitted under the candidate's own name and they are legally accountable for every answer.
@@ -56,6 +70,13 @@ Specific rules:
 export interface InferAnswerInput {
   candidateContext: string;
   field: FormField;
+  jobTitle: string;
+  companyName: string;
+}
+
+export interface InferBatchAnswersInput {
+  candidateContext: string;
+  fields: FormField[];
   jobTitle: string;
   companyName: string;
 }
@@ -105,6 +126,100 @@ Answer the question above using only the candidate context.`;
     return parsed;
   } catch (err) {
     return blank(describeLlmError(err));
+  }
+}
+
+/**
+ * Batch inference: resolve multiple fields in a single LLM call.
+ * Returns a map of field ID to inference result.
+ */
+export async function inferBatchAnswers(input: InferBatchAnswersInput): Promise<Map<string, Inference>> {
+  const { fields } = input;
+  const results = new Map<string, Inference>();
+
+  if (fields.length === 0) {
+    return results;
+  }
+
+  // Build the batch prompt with all fields
+  const questionsBlock = fields
+    .map((field) => {
+      const optionBlock = field.options?.length
+        ? `\n<options>\n${field.options.map((o) => `- ${o.label}`).join('\n')}\n</options>`
+        : '';
+      return `<question id="${field.id}">
+label: ${field.label}
+${field.helpText ? `help_text: ${field.helpText}\n` : ''}input_type: ${field.kind}
+required: ${field.required}${optionBlock}
+</question>`;
+    })
+    .join('\n');
+
+  const userContent = `${input.candidateContext}
+
+<application>
+company: ${input.companyName}
+role: ${input.jobTitle}
+</application>
+
+<questions>
+${questionsBlock}
+</questions>
+
+Answer ALL questions above using only the candidate context. Return a JSON object where each key is the question ID and each value contains the answer for that question.`;
+
+  try {
+    const parsed = await generate({
+      task: 'answerInference',
+      system: SYSTEM,
+      prompt: userContent,
+      schema: BatchInferenceSchema,
+      maxTokens: 8000, // Higher token limit for batch
+    });
+
+    if (!parsed) {
+      // If batch fails, fall back to individual calls
+      for (const field of fields) {
+        results.set(field.id, blank('The model returned no parseable answer in batch mode.'));
+      }
+      return results;
+    }
+
+    // Validate each answer against its field's options
+    for (const [fieldId, inference] of Object.entries(parsed.answers)) {
+      const field = fields.find((f) => f.id === fieldId);
+      if (!field) {
+        results.set(fieldId, blank('Field not found in batch request.'));
+        continue;
+      }
+
+      // Belt and braces: even if the model claims an option, verify it exists.
+      if (inference.answerable && field.options?.length) {
+        const valid = new Set(field.options.map((o) => o.label.trim().toLowerCase()));
+        const claimed = inference.values.length ? inference.values : [inference.value];
+        const bad = claimed.filter((v: string) => v && !valid.has(v.trim().toLowerCase()));
+        if (bad.length) {
+          results.set(fieldId, blank(`Model proposed option(s) that are not on the form: ${bad.join(', ')}`));
+          continue;
+        }
+      }
+      results.set(fieldId, inference);
+    }
+
+    // Ensure all fields have results (even if the model missed some)
+    for (const field of fields) {
+      if (!results.has(field.id)) {
+        results.set(field.id, blank('Model did not provide an answer for this field.'));
+      }
+    }
+
+    return results;
+  } catch (err) {
+    // If batch fails completely, fall back to individual calls
+    for (const field of fields) {
+      results.set(field.id, blank(describeLlmError(err)));
+    }
+    return results;
   }
 }
 

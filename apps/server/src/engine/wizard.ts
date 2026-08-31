@@ -29,7 +29,7 @@ import {
 import type { AtsAdapter, JobMeta } from '../ats/types.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
 import { generateCoverLetter } from '../llm/coverLetter.js';
-import { resolveField, type ResolveContext, isEssayField } from './resolver.js';
+import { resolveField, resolveFieldFast, resolveFieldsBatch, type ResolveContext, isEssayField } from './resolver.js';
 import { askHuman, pauseForHuman } from './humanGate.js';
 import { artifact, setStatus, truncate, writeCoverLetterFile } from './runLog.js';
 import { entry, type FieldPlanEntry } from './fieldPlan.js';
@@ -252,16 +252,25 @@ export async function walkApplication(args: {
       ctx.coverLetter = coverLetter;
     }
 
-    // ---- Resolve, ask, fill -------------------------------------------------
+    // ---- Hybrid Direct Fill: Fast Pass + Batch Resolution + Final Fill ----
     const fillable = fields.filter((f) => f.kind !== 'FILE');
-    const gaps: AnswerGap[] = [];
+    
+    // STEP 1: FAST DIRECT PASS - Fill fields with profile/answer bank answers immediately
+    const unmappedFields: FormField[] = [];
+    const unmappedGaps: AnswerGap[] = [];
+    
     for (const field of fillable) {
-      const res = await resolveField(field, ctx);
+      // Check session cache first (intra-run)
+      const fromSession = ctx.sessionAnswers.get(field.id);
+      if (fromSession) {
+        answers.set(field.id, fromSession);
+        continue;
+      }
+
+      // Try fast resolution (profile, answer bank, no LLM calls)
+      const res = await resolveFieldFast(field, ctx);
       if (res.kind === 'answer') {
         answers.set(field.id, res.answer);
-        
-        // 1. INTRA-RUN CACHE: Save to sessionAnswers so step retries/re-renders 
-        // never recompute this field during the current run
         sessionAnswers.set(field.id, res.answer);
 
         await bus.emitEvent(
@@ -271,21 +280,68 @@ export async function walkApplication(args: {
           { fieldId: field.id, source: res.answer.source, confidence: res.answer.confidence },
         );
       } else {
-        gaps.push(res.gap);
+        // Unknown field - collect for batch resolution
+        unmappedFields.push(field);
+        unmappedGaps.push(res.gap);
       }
     }
 
-    if (gaps.length) {
-      const supplied = await askHuman(applicationId, fillable, gaps);
-      for (const [fieldId, answer] of supplied) {
-        answers.set(fieldId, answer);
-        sessionAnswers.set(fieldId, answer);
+    // STEP 2: SINGLE BATCH RESOLUTION - Resolve all unknown fields in one batch
+    if (unmappedFields.length > 0) {
+      await bus.emitEvent(
+        applicationId,
+        'LOG',
+        `Resolving ${unmappedFields.length} unknown field(s) in batch...`,
+      );
+
+      // TRUE BATCH RESOLUTION: Single LLM call for all unknown fields (not sequential calls)
+      const batchResults = await resolveFieldsBatch(unmappedFields, ctx);
+      const llmGaps: AnswerGap[] = [];
+
+      for (const field of unmappedFields) {
+        const res = batchResults.get(field.id);
+        if (!res) {
+          // This shouldn't happen, but handle it gracefully
+          llmGaps.push({
+            fieldId: field.id,
+            reason: 'NO_MATCH',
+            suggestion: null,
+            suggestionRationale: 'Field was not returned in batch resolution.',
+          });
+          continue;
+        }
+
+        if (res.kind === 'answer') {
+          answers.set(field.id, res.answer);
+          sessionAnswers.set(field.id, res.answer);
+
+          await bus.emitEvent(
+            applicationId,
+            'FIELD_RESOLVED',
+            `${field.label}: ${truncate(res.answer.displayValue)} [${res.answer.source}]`,
+            { fieldId: field.id, source: res.answer.source, confidence: res.answer.confidence },
+          );
+        } else {
+          llmGaps.push(res.gap);
+        }
       }
-      const stillMissing = fillable.filter((f) => f.required && !answers.has(f.id));
-      if (stillMissing.length) {
-        throw new Error(
-          `Required field(s) left unanswered: ${stillMissing.map((f) => f.label).join(', ')}`,
-        );
+
+      // Ask human for any remaining gaps (single interruption)
+      if (llmGaps.length > 0) {
+        // Map the gaps back to their corresponding fields for proper field-answer mapping
+        const gapFields = llmGaps.map(gap => unmappedFields.find(f => f.id === gap.fieldId)!).filter(Boolean);
+        const supplied = await askHuman(applicationId, gapFields, llmGaps);
+        for (const [fieldId, answer] of Array.from(supplied.entries())) {
+          answers.set(fieldId, answer);
+          sessionAnswers.set(fieldId, answer);
+        }
+
+        const stillMissing = unmappedFields.filter((f) => f.required && !answers.has(f.id));
+        if (stillMissing.length) {
+          throw new Error(
+            `Required field(s) left unanswered: ${stillMissing.map((f) => f.label).join(', ')}`,
+          );
+        }
       }
     }
 

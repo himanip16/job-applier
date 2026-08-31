@@ -2,6 +2,7 @@ import { prisma, type Prisma } from '../lib/db.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
 import {
   assessFit,
+  assessFitBatch,
   blendScores,
   buildPreferences,
   buildRejectionHistory,
@@ -9,7 +10,7 @@ import {
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
-import { applyHardRules, candidateConstraints } from './hardRules.js';
+import { applyHardRules, extractCandidateConstraints } from './hardRules.js';
 
 
 /**
@@ -80,7 +81,7 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
     loadScoringContext(profileId),
   ]);
   const candidateContext = renderCandidateContext(profile, profile.resumeText);
-  const constraints = candidateConstraints(profile);
+  const constraints = extractCandidateConstraints(profile);
 
   const outcomes: RescoreOutcome[] = [];
   for (const lead of leads) {
@@ -132,6 +133,136 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
       outcomes.push({ id: lead.id, ok: false, reason: 'failed', error: (err as Error).message });
     }
   }
+  return outcomes;
+}
+
+/**
+ * Score leads using batch LLM calls to reduce the number of API calls.
+ * This is more efficient when rescoring many jobs at once.
+ */
+export async function rescoreLeadsBatch(profileId: string, leads: Lead[]): Promise<RescoreOutcome[]> {
+  if (!leads.length) return [];
+
+  const profile = await prisma.profile.findUnique({
+    where: { id: profileId },
+    include: { facts: true },
+  });
+  if (!profile) throw new Error('No profile to score against.');
+
+  const [preferences, rejectionHistory, scoring] = await Promise.all([
+    buildPreferences(profileId),
+    buildRejectionHistory(profileId),
+    loadScoringContext(profileId),
+  ]);
+  const candidateContext = renderCandidateContext(profile, profile.resumeText);
+  const constraints = extractCandidateConstraints(profile);
+
+  // Filter out leads without descriptions
+  const validLeads = leads.filter(l => l.descriptionText);
+  const withoutDesc = leads.filter(l => !l.descriptionText);
+  
+  const outcomes: RescoreOutcome[] = withoutDesc.map(lead => ({
+    id: lead.id,
+    ok: false,
+    reason: 'no-description' as const,
+    error: NO_DESCRIPTION_MESSAGE,
+  }));
+
+  if (!validLeads.length) return outcomes;
+
+  // Process in batches of 5 to balance between single-call efficiency and token limits
+  const BATCH_SIZE = 5;
+  for (let i = 0; i < validLeads.length; i += BATCH_SIZE) {
+    const batch = validLeads.slice(i, i + BATCH_SIZE);
+    const jobs = batch.map(lead => ({
+      title: lead.title,
+      companyName: lead.companyName,
+      location: lead.location ?? undefined,
+      descriptionText: lead.descriptionText,
+      remote: lead.remote,
+    }));
+
+    try {
+      const assessments = await assessFitBatch({ 
+        candidateContext, 
+        preferences, 
+        rejectionHistory, 
+        jobs 
+      });
+
+      for (let j = 0; j < batch.length; j++) {
+        const lead = batch[j];
+        const raw = assessments[j];
+        
+        if (!raw) {
+          outcomes.push({ id: lead.id, ok: false, reason: 'declined', error: DECLINED_MESSAGE });
+          continue;
+        }
+
+        const job = jobs[j];
+        const fit = applyHardRules(raw, { 
+          candidateYears: constraints.candidateYears, 
+          needsSponsorship: constraints.needsSponsorship,
+          salaryExpectations: constraints.salaryExpectations,
+          job 
+        });
+        const lex = scoreLexically(job, scoring);
+        const blended = blendScores(fit, lex);
+        
+        await prisma.jobLead.update({
+          where: { id: lead.id },
+          data: {
+            score: blended,
+            scoreReasons: serialiseReasons(lex, fit) as Prisma.InputJsonValue,
+            deepScored: true,
+            scoredAt: new Date(),
+          },
+        });
+        outcomes.push({ id: lead.id, ok: true, score: blended });
+      }
+    } catch (err) {
+      // If batch fails, fall back to individual scoring for this batch
+      console.error('Batch scoring failed for batch, falling back to individual:', err);
+      for (const lead of batch) {
+        const job = {
+          title: lead.title,
+          companyName: lead.companyName,
+          location: lead.location ?? undefined,
+          descriptionText: lead.descriptionText,
+          remote: lead.remote,
+        };
+
+        try {
+          const raw = await assessFit({ candidateContext, preferences, rejectionHistory, job });
+          if (!raw) {
+            outcomes.push({ id: lead.id, ok: false, reason: 'declined', error: DECLINED_MESSAGE });
+            continue;
+          }
+          const fit = applyHardRules(raw, { 
+            candidateYears: constraints.candidateYears, 
+            needsSponsorship: constraints.needsSponsorship,
+            salaryExpectations: constraints.salaryExpectations,
+            job 
+          });
+          const lex = scoreLexically(job, scoring);
+          const blended = blendScores(fit, lex);
+          await prisma.jobLead.update({
+            where: { id: lead.id },
+            data: {
+              score: blended,
+              scoreReasons: serialiseReasons(lex, fit) as Prisma.InputJsonValue,
+              deepScored: true,
+              scoredAt: new Date(),
+            },
+          });
+          outcomes.push({ id: lead.id, ok: true, score: blended });
+        } catch (innerErr) {
+          outcomes.push({ id: lead.id, ok: false, reason: 'failed', error: (innerErr as Error).message });
+        }
+      }
+    }
+  }
+
   return outcomes;
 }
 
