@@ -8,7 +8,7 @@ import { config, artifactsDir, resumesDir } from './lib/config.js';
 import { prisma } from './lib/db.js';
 import { recoverInterruptedRuns, activeRuns } from './engine/queue.js';
 import { estimateActivityCosts, activeModels } from './llm/models.js';
-import { isConfigured } from './llm/client.js';
+import { isConfigured, LlmUnavailableError } from './llm/client.js';
 import { schemaProblem, cachedSchemaProblem } from './lib/schemaCheck.js';
 import { currentUser } from './auth/sessions.js';
 import { loadSettings } from './lib/secrets.js';
@@ -59,7 +59,8 @@ await app.register(multipart, { limits: { fileSize: 15 * 1024 * 1024 } });
 const PROTECTED_STATIC = ['/artifacts/', '/files/resumes/'];
 app.addHook('onRequest', async (req, reply) => {
   const path = req.url.split('?')[0] ?? '';
-  if (PROTECTED_STATIC.some(prefix => path.startsWith(prefix))) {
+  const protectedArray = Array.isArray(PROTECTED_STATIC) ? PROTECTED_STATIC : [];
+  if (protectedArray.some(prefix => path.startsWith(prefix))) {
     if (await currentUser(req)) return;
     return reply.code(401).send({ error: 'Sign in to use this.' });
   }
@@ -114,6 +115,29 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body,
   } catch (err) {
     done(err as Error, undefined);
   }
+});
+
+// --------------------------------------------------------------- error handling ---
+
+/**
+ * Global error handler for LLM and other known error types.
+ *
+ * This ensures that rate limit errors return 429 instead of 500, and other
+ * LLM errors return appropriate status codes with user-friendly messages.
+ */
+app.setErrorHandler((err, req, reply) => {
+  if (err instanceof LlmUnavailableError) {
+    // Rate limit errors should return 429
+    if (err.retryable && /rate limit|quota exhausted|429/i.test(err.message)) {
+      return reply.code(429).send({ error: err.message });
+    }
+    // Other LLM unavailability errors (bad key, no key, etc.) return 400
+    return reply.code(400).send({ error: err.message });
+  }
+
+  // Log unexpected errors and return 500
+  req.log.error(err);
+  return reply.code(500).send({ error: 'Internal server error' });
 });
 
 // --------------------------------------------------------------- routes ---

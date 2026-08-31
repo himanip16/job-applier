@@ -1,4 +1,13 @@
-export const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8787';
+// Use relative URLs in development for Next.js rewrites (same-origin cookies)
+// Use absolute URL in production for cross-origin deployment
+export const API = process.env.NEXT_PUBLIC_API_URL ?? '';
+
+// Rate limit modal trigger - will be set by the ErrorProvider
+let showRateLimitModal: ((provider: 'anthropic' | 'gemini' | null, message: string) => void) | null = null;
+
+export function setRateLimitModalHandler(handler: (provider: 'anthropic' | 'gemini' | null, message: string) => void) {
+  showRateLimitModal = handler;
+}
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   /**
@@ -23,12 +32,13 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   /**
    * Always send the session cookie.
    *
-   * The API is on a different origin to the web app - Render and Vercel in
-   * production, two ports in development - and a cross-origin fetch omits
-   * cookies unless it is told not to. Without this every request arrives
-   * signed out, which looks exactly like a broken login.
+   * In production, the API is on a different origin (Render and Vercel),
+   * so cross-origin fetch requires credentials to include cookies.
+   * In development, Next.js rewrites proxy requests through the same origin,
+   * making cookies work naturally with SameSite=Lax.
    */
-  const res = await fetch(`${API}${path}`, { ...init, headers, credentials: 'include' });
+  const url = API ? `${API}${path}` : path;
+  const res = await fetch(url, { ...init, headers, credentials: 'include' });
   
   const raw = await res.json().catch(() => null);
 
@@ -54,13 +64,25 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     } else if (isResetPage) {
       // For reset pages, redirect to signin without next parameter
       window.location.href = '/signin';
-    } else if (isResetPage) {
-      // For reset pages, redirect to signin without next parameter
-      window.location.href = '/signin';
     }
   }
 
   if (!res.ok) {
+    // Check for rate limit errors (429) and trigger modal
+    if (res.status === 429 && showRateLimitModal) {
+      // Determine which provider based on error message
+      let provider: 'anthropic' | 'gemini' | null = null;
+      const errorMessage = body.error ?? body.message ?? '';
+
+      if (errorMessage.toLowerCase().includes('anthropic')) {
+        provider = 'anthropic';
+      } else if (errorMessage.toLowerCase().includes('gemini')) {
+        provider = 'gemini';
+      }
+
+      showRateLimitModal(provider, errorMessage);
+    }
+
     // `error` is ours; `message` is what the framework produces for things
     // like a malformed body. Falling back to the status alone loses the only
     // sentence that says what went wrong.

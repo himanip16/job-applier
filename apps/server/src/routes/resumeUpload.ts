@@ -15,9 +15,14 @@ const ALLOWED_EXTENSIONS = new Set(['.pdf', '.doc', '.docx']);
 const MAX_LABEL_LENGTH = 100;
 
 export function registerResumeUploadRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
-  app.post('/api/resume', async (req, reply) => {
-    const profile = await requireProfile(req, reply);
-    if (!profile) return;
+  app.post('/api/resume', {
+    preHandler: async (req, reply) => {
+      const profile = await requireProfile(req, reply);
+      if (!profile) return reply.code(401).send({ error: 'Sign in to use this.' });
+      (req as any).profile = profile;
+    }
+  }, async (req, reply) => {
+    const profile = (req as any).profile;
 
     const file = await req.file();
     if (!file) return reply.code(400).send({ error: 'No file uploaded.' });
@@ -48,9 +53,14 @@ export function registerResumeUploadRoutes(app: FastifyInstance, requireProfile:
     }
   });
 
-  app.post<{ Params: { id: string } }>('/api/resume/:id/default', async (req, reply) => {
-    const profile = await requireProfile(req, reply);
-    if (!profile) return;
+  app.post<{ Params: { id: string } }>('/api/resume/:id/default', {
+    preHandler: async (req, reply) => {
+      const profile = await requireProfile(req, reply);
+      if (!profile) return reply.code(401).send({ error: 'Sign in to use this.' });
+      (req as any).profile = profile;
+    }
+  }, async (req, reply) => {
+    const profile = (req as any).profile;
     if (!(await ownedResumeFile(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
     await setDefaultResume(profile.id, req.params.id);
     return { ok: true };

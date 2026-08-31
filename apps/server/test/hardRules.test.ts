@@ -7,6 +7,9 @@ import {
   parseRequiredYears,
   parseYears,
   sponsorshipVerdict,
+  parseSalary,
+  parseSalaryExpectation,
+  salaryVerdict,
 } from '../src/discovery/hardRules.js';
 import { blendScores, type FitAssessment, type LexicalScore } from '../src/discovery/scoring.js';
 
@@ -19,7 +22,7 @@ import { blendScores, type FitAssessment, type LexicalScore } from '../src/disco
  * door. Both are rules, not judgement calls.
  */
 
-const ME = { candidateYears: 4.5, needsSponsorship: true };
+const ME = { candidateYears: 4.5, needsSponsorship: true, salaryExpectations: { min: null, max: null } };
 
 describe('reading years out of prose', () => {
   it('keeps the decimal', () => {
@@ -125,10 +128,12 @@ describe('visa sponsorship on US postings', () => {
     expect(sponsorshipVerdict(false, job('San Francisco, CA', 'Build things.'))).toBeNull();
   });
 
-  it('reads the candidate as needing it from where they are', () => {
-    expect(candidateConstraints({ countryCode: 'IN', country: 'India' }).needsSponsorship).toBe(true);
-    expect(candidateConstraints({ countryCode: 'US', country: 'United States' }).needsSponsorship).toBe(false);
-    expect(candidateConstraints({ country: 'USA' }).needsSponsorship).toBe(false);
+  it('reads the candidate as needing it from citizenship, not just location', () => {
+    expect(candidateConstraints({ countryCode: 'IN', country: 'India', citizenship: 'India' }).needsSponsorship).toBe(true);
+    expect(candidateConstraints({ countryCode: 'US', country: 'United States', citizenship: 'United States' }).needsSponsorship).toBe(false);
+    expect(candidateConstraints({ citizenship: 'USA' }).needsSponsorship).toBe(false);
+    expect(candidateConstraints({ citizenship: 'US' }).needsSponsorship).toBe(false);
+    expect(candidateConstraints({ citizenship: 'Indian' }).needsSponsorship).toBe(true);
   });
 
   it('prefers a stated fact for years over a regex across the resume', () => {
@@ -195,5 +200,79 @@ describe('what the rules do to a score', () => {
     const withBlocker: FitAssessment = { ...fit(70), dealbreaker: 'Requires US security clearance.' };
     const job = { title: 'Engineer', location: 'Bengaluru, India', descriptionText: '9+ years.' };
     expect(applyHardRules(withBlocker, { ...ME, job }).dealbreaker).toBe('Requires US security clearance.');
+  });
+});
+
+describe('salary parsing and matching', () => {
+  it('parses salary from various formats', () => {
+    expect(parseSalary('$100,000 - $150,000 per year')).toBe(150000);
+    expect(parseSalary('$120k - $180k')).toBe(180000);
+    expect(parseSalary('$140,000 per year')).toBe(140000);
+    expect(parseSalary('130k - 170k')).toBe(170000);
+    expect(parseSalary('No salary mentioned')).toBeNull();
+  });
+
+  it('parses salary expectations from profile', () => {
+    const profile = {
+      expectedCTC: '$150,000',
+      facts: [
+        { key: 'compensation.expectation_min', value: '$120,000' },
+        { key: 'compensation.expectation_max', value: '$200,000' },
+      ],
+    };
+    const expectations = parseSalaryExpectation(profile);
+    expect(expectations.min).toBe(120000);
+    expect(expectations.max).toBe(200000);
+  });
+
+  it('falls back to general expectation when min/max not set', () => {
+    const profile = {
+      expectedCTC: '$150,000',
+      facts: [],
+    };
+    const expectations = parseSalaryExpectation(profile);
+    expect(expectations.min).toBe(150000);
+    expect(expectations.max).toBe(150000);
+  });
+
+  it('blocks jobs below minimum salary expectation', () => {
+    const job = {
+      title: 'Senior Engineer',
+      location: 'Remote',
+      descriptionText: '$100,000 - $120,000 per year',
+    };
+    const v = salaryVerdict({ min: 150000, max: null }, job);
+    expect(v?.dealbreaker).toMatch(/below your minimum/);
+  });
+
+  it('allows jobs within salary range', () => {
+    const job = {
+      title: 'Senior Engineer',
+      location: 'Remote',
+      descriptionText: '$160,000 - $180,000 per year',
+    };
+    const v = salaryVerdict({ min: 150000, max: 200000 }, job);
+    expect(v?.dealbreaker).toBeUndefined();
+    expect(v?.for).toMatch(/matches your expectations/);
+  });
+
+  it('notes jobs above maximum salary expectation', () => {
+    const job = {
+      title: 'Senior Engineer',
+      location: 'Remote',
+      descriptionText: '$250,000 - $300,000 per year',
+    };
+    const v = salaryVerdict({ min: null, max: 200000 }, job);
+    expect(v?.dealbreaker).toBeUndefined();
+    expect(v?.against).toMatch(/above your maximum/);
+  });
+
+  it('does nothing when salary expectations are not set', () => {
+    const job = {
+      title: 'Senior Engineer',
+      location: 'Remote',
+      descriptionText: '$150,000 per year',
+    };
+    expect(salaryVerdict({ min: null, max: null }, job)).toBeNull();
   });
 });

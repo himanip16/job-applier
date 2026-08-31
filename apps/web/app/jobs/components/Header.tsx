@@ -3,7 +3,7 @@
 import React from 'react';
 import { Detail } from './types';
 
-export function Header({ d }: { d: Detail }) {
+export function Header({ d, onReject }: { d: Detail; onReject?: () => void }) {
   return (
     <div className="panel">
       <div className="spread">
@@ -18,9 +18,17 @@ export function Header({ d }: { d: Detail }) {
         </div>
         <div className="row" style={{ flex: 'none', gap: '.5rem' }}>
           {d.job.url && (
-            <a href={d.job.url} target="_blank" rel="noreferrer">
-              <button>Open posting</button>
-            </a>
+            <>
+              <a href={d.job.url} target="_blank" rel="noreferrer">
+                <button className="primary">Apply</button>
+              </a>
+              <a href={d.job.url} target="_blank" rel="noreferrer">
+                <button>Open posting</button>
+              </a>
+            </>
+          )}
+          {d.lead && d.lead.status !== 'REJECTED' && onReject && (
+            <button onClick={onReject}>Reject</button>
           )}
           {d.nextAction && (
             <a href={d.nextAction.href}>

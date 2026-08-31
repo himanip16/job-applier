@@ -158,7 +158,12 @@ export async function crawlAll(
             job: entry.job,
           });
           if (!raw) continue;
-          const fit = applyHardRules(raw, { ...constraints, job: entry.job });
+          const fit = applyHardRules(raw, { 
+            candidateYears: constraints.candidateYears, 
+            needsSponsorship: constraints.needsSponsorship,
+            salaryExpectations: constraints.salaryExpectations,
+            job: entry.job 
+          });
           const lex = scoreLexically(entry.job, scoring);
           // Blend, weighted toward the model - it read the description, the
           // lexical prior only saw word counts. A hard blocker overrides both.

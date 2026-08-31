@@ -10,6 +10,9 @@ import { rescoreByIds, rescoreLexically } from '../discovery/rescoreLeads.js';
 import { NOT_YOURS, ownedLead, ownedSignal } from '../auth/ownership.js';
 import { adapterFor } from '../ats/registry.js';
 import { enqueue } from '../engine/queue.js';
+import { tailorResume } from '../resume/tailor.js';
+import { renderCandidateContext } from '../llm/candidateContext.js';
+import { renderResume } from '../resume/render.js';
 
 /**
  * Coarse buckets for a rejection.
@@ -114,8 +117,8 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     if (!body.dryRun && !isFirecrawlConfigured()) {
       return reply.code(400).send({
         error:
-          'Job search needs a Firecrawl key. Get one free at firecrawl.dev, put ' +
-          'FIRECRAWL_API_KEY in .env, and restart the server. Everything else works without it.',
+          'Job search needs a Firecrawl key. Get one free at firecrawl.dev and add it on the ' +
+          'Settings page. Everything else works without it.',
       });
     }
 
@@ -398,11 +401,13 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   app.post<{ Params: { id: string } }>('/api/leads/:id/apply', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
-    const { requiresReview, writeCoverLetter } = z
+    const { requiresReview, writeCoverLetter, autoTailorResume } = z
       .object({
         requiresReview: z.boolean().default(true),
         // Off unless asked for. Most applications do not need one.
         writeCoverLetter: z.boolean().default(false),
+        // Automatically tailor resume for this job
+        autoTailorResume: z.boolean().default(true),
       })
       .parse(req.body ?? {});
 
@@ -444,8 +449,67 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     });
 
     await rescoreLexically(profile.id);
+
+    // Auto-tailor resume if requested
+    let tailoredResumeId: string | null = null;
+    if (autoTailorResume && lead.descriptionText && lead.descriptionText.length >= 200) {
+      try {
+        const full = await prisma.profile.findUniqueOrThrow({
+          where: { id: profile.id },
+          include: { facts: true, resumes: true },
+        });
+
+        const base =
+          full.resumes.find((r) => r.isDefault) ??
+          full.resumes[0];
+        const resumeText = base?.text ?? full.resumeText;
+
+        if (resumeText && resumeText.trim().length >= 100) {
+          const result = await tailorResume({
+            candidateContext: renderCandidateContext(full, resumeText),
+            resumeText,
+            jobTitle: lead.title,
+            companyName: lead.companyName,
+            jobDescription: lead.descriptionText,
+          });
+
+          const rendered = await renderResume(result.text, {
+            profileName: full.fullName,
+            slug: `${lead.companyName}-${lead.title}`,
+          });
+
+          const tailored = await prisma.tailoredResume.create({
+            data: {
+              profileId: full.id,
+              jobId: job.id,
+              baseResumeId: base?.id ?? 'inline',
+              label: `${lead.title} at ${lead.companyName}`,
+              text: result.text,
+              txtPath: rendered.txtPath,
+              docxPath: rendered.docxPath,
+              insertions: result.insertions as unknown as Prisma.InputJsonValue,
+              unsupported: result.unsupported as unknown as Prisma.InputJsonValue,
+              covered: result.covered as unknown as Prisma.InputJsonValue,
+              coverage: result.coverage,
+            },
+          });
+
+          // Attach the tailored resume to the application
+          await prisma.application.update({
+            where: { id: application.id },
+            data: { tailoredResumeId: tailored.id },
+          });
+
+          tailoredResumeId = tailored.id;
+        }
+      } catch (err) {
+        // Don't fail the application if tailoring fails, just log it
+        console.error('Auto-tailor resume failed:', err);
+      }
+    }
+
     enqueue(application.id);
-    return { applicationId: application.id };
+    return { applicationId: application.id, tailoredResumeId };
   });
 
   // ----------------------------------------------- what it has learned so far ---

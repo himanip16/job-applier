@@ -96,6 +96,8 @@ model Profile {
   region      String?
   country     String?
   countryCode String? // ISO-2, for phone/country comboboxes
+  citizenship String? // Citizenship country for visa sponsorship determination
+  expectedCTC String? // Expected salary/CTC
   linkedin    String?
   github      String?
   website     String?

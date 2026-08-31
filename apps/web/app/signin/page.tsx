@@ -179,6 +179,7 @@ function SignInForm() {
                     alignItems: 'center',
                   }}
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  title={showPassword ? 'Hide password' : 'Show password'}
                 >
                   {showPassword ? (
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -201,6 +202,7 @@ function SignInForm() {
                   type="button"
                   onClick={() => router.push('/reset-request')}
                   style={{ padding: '.1rem .4rem', fontSize: '.85rem', color: 'var(--accent)' }}
+                  title="Send a password reset link to your email"
                 >
                   Forgot password?
                 </button>
@@ -214,10 +216,11 @@ function SignInForm() {
 
             {error && <div className="notice bad" style={{ marginBottom: '.9rem' }}>{error}</div>}
 
-            <button 
-              className="primary" 
-              disabled={busy || (mode === 'register' && password.length > 0 && !isPasswordValid)} 
+            <button
+              className="primary"
+              disabled={busy || (mode === 'register' && password.length > 0 && !isPasswordValid)}
               style={{ width: '100%' }}
+              title={mode === 'register' ? 'Create a new account with your email and password' : 'Sign in to your existing account'}
             >
               {busy && <span className="spinner" style={{ marginRight: '.5rem' }} />}
               {busy ? 'Working…' : mode === 'register' ? 'Create account' : 'Sign in'}
@@ -234,6 +237,7 @@ function SignInForm() {
               setMode(mode === 'register' ? 'signin' : 'register');
               setError(null);
             }}
+            title={mode === 'register' ? 'Switch to sign in with existing account' : 'Switch to create a new account'}
           >
             {mode === 'register' ? 'Sign in' : 'Create one'}
           </button>

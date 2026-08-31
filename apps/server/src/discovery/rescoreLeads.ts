@@ -108,7 +108,12 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
         outcomes.push({ id: lead.id, ok: false, reason: 'declined', error: DECLINED_MESSAGE });
         continue;
       }
-      const fit = applyHardRules(raw, { ...constraints, job });
+      const fit = applyHardRules(raw, { 
+        candidateYears: constraints.candidateYears, 
+        needsSponsorship: constraints.needsSponsorship,
+        salaryExpectations: constraints.salaryExpectations,
+        job 
+      });
       const lex = scoreLexically(job, scoring);
       const blended = blendScores(fit, lex);
       await prisma.jobLead.update({

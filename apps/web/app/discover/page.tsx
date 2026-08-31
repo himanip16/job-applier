@@ -262,9 +262,9 @@ export default function DiscoverPage() {
       if (action === 'apply') {
         const rRaw = await api(`/api/leads/${lead.id}/apply`, {
           method: 'POST',
-          body: JSON.stringify({ writeCoverLetter }),
+          body: JSON.stringify({ writeCoverLetter, autoTailorResume: true }),
         });
-        const r = rRaw as { applicationId: string };
+        const r = rRaw as { applicationId: string; tailoredResumeId?: string };
         window.location.href = `/applications/${r.applicationId}`;
         return;
       }
@@ -398,8 +398,11 @@ export default function DiscoverPage() {
 
         {!searchConfigured && (
           <div className="notice" style={{ marginTop: '.9rem' }}>
-            Searching needs a free Firecrawl key. Put <code>FIRECRAWL_API_KEY</code> in{' '}
-            <code>.env</code> and restart the server — get one at{' '}
+            Searching needs a free Firecrawl key. Add it on the{' '}
+            <a href="/settings" className="link">
+              Settings page
+            </a>{' '}
+            — get one at{' '}
             <a href="https://firecrawl.dev" target="_blank" rel="noreferrer">
               firecrawl.dev
             </a>

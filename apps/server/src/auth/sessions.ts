@@ -74,30 +74,31 @@ export function clearSessionCookie(reply: FastifyReply): void {
  *
  * The web app is meant to sit on Vercel and the API on Render, which are
  * different sites, so the cookie has to be SameSite=None - and a browser only
- * accepts that with Secure, which in turn means https. Over plain http (local
- * development) both are dropped, since a Secure cookie would simply never be
- * stored and sign-in would appear to succeed and then not work.
+ * accepts that with Secure, which in turn means https.
  *
- * For local development with different ports, we use SameSite=None without Secure
- * to allow cross-site cookies on http (browsers allow this for localhost).
+ * For local development, Next.js proxies API requests through rewrites, making
+ * them same-origin. This allows using SameSite=Lax without cross-origin issues.
  */
 function serialiseCookie(value: string, expiresAt: Date): string {
-  const isLocalhost = process.env.PUBLIC_API_URL?.includes('localhost') || 
-                      process.env.RENDER_EXTERNAL_URL?.includes('localhost') ||
-                      !process.env.PUBLIC_API_URL && !process.env.RENDER_EXTERNAL_URL;
-  const crossSite = process.env.COOKIE_CROSS_SITE !== 'false' && (isHttps() || isLocalhost);
+  const isProduction = process.env.NODE_ENV === 'production';
+  const https = isHttps();
+
   const bits = [
-    `${SESSION_COOKIE}=${value}`,
+    `${SESSION_COOKIE}=${encodeURIComponent(value)}`,
     'Path=/',
     'HttpOnly',
     `Expires=${expiresAt.toUTCString()}`,
   ];
-  if (crossSite) {
+
+  if (isProduction || https) {
+    // Production or HTTPS: require SameSite=None with Secure for cross-origin
     bits.push('SameSite=None');
-    if (isHttps()) bits.push('Secure');
+    bits.push('Secure');
   } else {
+    // Local development: use SameSite=Lax (requests are proxied through Next.js)
     bits.push('SameSite=Lax');
   }
+
   return bits.join('; ');
 }
 

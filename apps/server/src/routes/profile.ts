@@ -14,6 +14,8 @@ const ProfileInput = z.object({
   region: z.string().trim().min(1).optional(),
   country: z.string().trim().min(1).optional(),
   countryCode: z.string().trim().min(1).optional(),
+  citizenship: z.string().trim().min(1).optional(),
+  expectedCTC: z.string().trim().min(1).optional(),
   linkedin: z.string().url().optional(),
   github: z.string().url().optional(),
   website: z.string().url().optional(),

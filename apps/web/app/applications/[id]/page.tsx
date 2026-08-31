@@ -93,7 +93,25 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
               {detail.job.company} · <a href={detail.job.url} target="_blank" rel="noreferrer">{detail.job.ats}</a>
             </p>
           </div>
-          <span className={`pill ${detail.status}`}>{detail.status.replace('_', ' ')}</span>
+          <div className="row" style={{ gap: '.5rem', alignItems: 'center' }}>
+            <span className={`pill ${detail.status}`}>{detail.status.replace('_', ' ')}</span>
+            {(detail.status === 'FAILED' || detail.status === 'BLOCKED') && (
+              <button
+                className="primary"
+                onClick={async () => {
+                  try {
+                    await api(`/api/applications/${id}/start`, { method: 'POST' });
+                    refresh();
+                  } catch (e) {
+                    setError((e as Error).message);
+                  }
+                }}
+                style={{ fontSize: '.85rem', padding: '.3rem .6rem' }}
+              >
+                Resume
+              </button>
+            )}
+          </div>
         </div>
         {detail.blockedReason && (
           <div
@@ -238,6 +256,14 @@ function QuestionModal({
         {err && <div className="notice bad" style={{ margin: '.8rem 0' }}>{err}</div>}
         <div className="row" style={{ marginTop: '1rem' }}>
           <button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Continue'}</button>
+          <button 
+            className="ghost" 
+            disabled={busy}
+            onClick={() => onDone()}
+            style={{ marginLeft: '.5rem' }}
+          >
+            Close
+          </button>
         </div>
       </form>
     </div>
