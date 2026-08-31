@@ -100,7 +100,7 @@ export async function resolveField(field: FormField, ctx: ResolveContext): Promi
         kind: 'answer',
         answer: {
           fieldId: field.id,
-          value: decline.value ?? decline.label,
+          value: decline.label ?? decline.value,
           displayValue: decline.label,
           source: 'SKIPPED',
           confidence: 1,
@@ -205,7 +205,7 @@ export async function resolveField(field: FormField, ctx: ResolveContext): Promi
           source: 'GENERATED',
           confidence: 0.8,
           rationale: 'Written for this specific job from your resume and the job description.',
-          remember: false,
+          remember: true, // Store so re-runs for the SAME company reuse this generated essay
           canonicalKey: key,
         },
       };
@@ -273,9 +273,7 @@ export async function resolveField(field: FormField, ctx: ResolveContext): Promi
           source: 'INFERRED',
           confidence: inference.confidence,
           rationale: inference.evidence || 'Derived from your resume.',
-          // Worth keeping: next time this is a free memory hit rather than a
-          // paid inference. Only for recognised, reusable questions.
-          remember: Boolean(key) && !canonical?.perCompany,
+          remember: true, // ALWAYS remember inferred answers for future job applications
           canonicalKey: key,
         },
       };
@@ -305,7 +303,7 @@ export async function resolveField(field: FormField, ctx: ResolveContext): Promi
   };
 }
 
-function isEssayField(field: FormField): boolean {
+export function isEssayField(field: FormField): boolean {
   return (
     field.kind === 'TEXTAREA' &&
     /\bwhy\b|motivat|interest|excite|tell us|describe|what (makes|draws)/i.test(field.label)

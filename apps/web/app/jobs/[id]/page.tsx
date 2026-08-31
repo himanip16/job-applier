@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { api } from '../../../lib/api';
 import Header from '../components/Header';
 import { Loading } from '../../../components/Loading';
+import { RejectDialog } from '../../../components/RejectDialog';
 import type { Detail } from '../components/types';
 
 /**
@@ -46,14 +47,17 @@ export default function JobPage() {
 
   const handleReject = useCallback(async (category?: string, reason?: string) => {
     try {
-      await api(`/api/leads/${params.id}/reject`, {
+      const rRaw = await api(`/api/leads/${params.id}/reject`, {
         method: 'POST',
         body: JSON.stringify({ category, reason }),
       });
+      const r = rRaw as { message: string };
       await load();
       setRejecting(false);
+      return r.message;
     } catch (e) {
       setError((e as Error).message);
+      throw e;
     }
   }, [params.id, load]);
 
@@ -79,17 +83,22 @@ export default function JobPage() {
 
   return (
     <>
-      <Header d={d} onReject={() => setRejecting(true)} />
+      <Header d={d} onReject={() => setRejecting(true)} onApply={load} />
       <MatchPanel d={d} busy={rescoreBusy} onRescore={handleRescore} rescoreError={rescoreError} />
       <ApplicationPanel d={d} />
       <InterviewPanel d={d} />
       <OutcomePanel d={d} />
       {rejecting && d.lead && (
         <RejectDialog
-          lead={d.lead}
+          lead={{ id: d.lead.id, title: d.job.title, companyName: d.job.company }}
           categories={categories}
           onClose={() => setRejecting(false)}
-          onDone={handleReject}
+          onDone={async (msg) => {
+            // The dialog handles the API call internally and returns a message
+            // We just need to reload after it's done
+            await load();
+            setRejecting(false);
+          }}
         />
       )}
     </>

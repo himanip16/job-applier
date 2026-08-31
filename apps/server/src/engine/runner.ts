@@ -47,7 +47,13 @@ export async function runApplication(applicationId: string): Promise<void> {
     page = await newPage();
 
     // ---- 1. Reach the form --------------------------------------------------
-    if (!(await openForm(applicationId, page, adapter, app.job.url))) return;
+    if (!(await openForm(applicationId, page, adapter, app.job.url))) {
+      await prisma.application.update({
+        where: { id: applicationId },
+        data: { status: 'CANCELLED', blockedReason: 'Could not reach application form.' },
+      });
+      return;
+    }
     await artifact(applicationId, 'screenshot', 'form-opened', await screenshot(page, applicationId, 'form-opened'));
 
     // ---- 2. Read the posting ------------------------------------------------
@@ -66,7 +72,13 @@ export async function runApplication(applicationId: string): Promise<void> {
 
     // ---- 3. Walk it ---------------------------------------------------------
     const walk = await walkApplication({ applicationId, page, adapter, app, meta });
-    if (walk.kind === 'ABANDONED') return;
+    if (walk.kind === 'ABANDONED') {
+      await prisma.application.update({
+        where: { id: applicationId },
+        data: { status: 'CANCELLED', blockedReason: 'Cancelled by user during human gate.' },
+      });
+      return;
+    }
 
     // ---- 4. Review, then submit ---------------------------------------------
     await finishApplication({

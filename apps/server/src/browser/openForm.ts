@@ -221,14 +221,19 @@ export async function openApplicationForm(
   // 3. Otherwise click through. Two attempts: the first click sometimes lands
   //    before hydration finishes and does nothing at all.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const clicked = await clickApply(page, patterns);
-    if (!clicked && attempt === 0) {
+    const result = await clickApply(page, patterns);
+    if (!result.clicked && attempt === 0) {
       // No control found yet - it may still be rendering.
       await page.waitForTimeout(1500);
       continue;
     }
 
-    if (clicked) {
+    if (result.clicked) {
+      // If a popup opened, use the new page for subsequent operations
+      if (result.newPage) {
+        Object.assign(page, result.newPage);
+      }
+      
       await page.waitForLoadState('domcontentloaded').catch(() => {});
       // An Apply link can navigate to a fresh page with its own challenge.
       await clearInterstitial(page).catch((err: unknown) => {
@@ -288,12 +293,11 @@ async function formReady(
 /**
  * Find and click whatever opens the application.
  *
- * Returns whether a click actually landed. The old code swallowed click
- * failures with `.catch(() => {})` and then waited on a form that could never
- * appear, which is exactly how you get a twenty-second timeout with no clue
- * why.
+ * Returns whether a click actually landed and optionally the new page if a popup opened.
+ * The old code swallowed click failures with `.catch(() => {})` and then waited on a form 
+ * that could never appear, which is exactly how you get a twenty-second timeout with no clue why.
  */
-async function clickApply(page: Page, patterns: RegExp[]): Promise<boolean> {
+async function clickApply(page: Page, patterns: RegExp[]): Promise<{ clicked: boolean; newPage?: Page }> {
   for (const pattern of patterns) {
     for (const role of ['button', 'link'] as const) {
       const control = page.getByRole(role, { name: pattern });
@@ -303,9 +307,22 @@ async function clickApply(page: Page, patterns: RegExp[]): Promise<boolean> {
         if (!(await nth.isVisible().catch(() => false))) continue;
         try {
           await nth.scrollIntoViewIfNeeded({ timeout: 3000 });
-          await nth.click({ timeout: 8000 });
+          
+          // Listen for popup (target="_blank" links)
+          const [newPage] = await Promise.all([
+            page.context().waitForEvent('page', { timeout: 5000 }).catch(() => null),
+            nth.click({ timeout: 8000 }),
+          ]);
+          
+          if (newPage) {
+            // Close the original page and use the new one
+            await page.close().catch(() => {});
+            await newPage.bringToFront();
+            return { clicked: true, newPage };
+          }
+          
           await page.waitForTimeout(900);
-          return true;
+          return { clicked: true };
         } catch {
           // Overlays and cookie banners intercept the first click; try the
           // next candidate rather than giving up on the whole page.
@@ -313,7 +330,7 @@ async function clickApply(page: Page, patterns: RegExp[]): Promise<boolean> {
       }
     }
   }
-  return false;
+  return { clicked: false };
 }
 
 /** Everything worth knowing about why there was no form. */

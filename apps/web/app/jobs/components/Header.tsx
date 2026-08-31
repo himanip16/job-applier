@@ -2,8 +2,33 @@
 
 import React from 'react';
 import { Detail } from './types';
+import { api } from '../../../lib/api';
 
-export function Header({ d, onReject }: { d: Detail; onReject?: () => void }) {
+export function Header({ d, onReject, onApply }: { d: Detail; onReject?: () => void; onApply?: () => void }) {
+  const [applying, setApplying] = React.useState(false);
+  const [applyError, setApplyError] = React.useState<string | null>(null);
+
+  const handleApply = async () => {
+    if (!d.lead) {
+      setApplyError('No lead found for this job');
+      return;
+    }
+
+    setApplying(true);
+    setApplyError(null);
+    try {
+      await api(`/api/leads/${d.lead.id}/apply`, {
+        method: 'POST',
+        body: JSON.stringify({ requiresReview: true, writeCoverLetter: false, autoTailorResume: true }),
+      });
+      onApply?.();
+    } catch (e) {
+      setApplyError((e as Error).message);
+    } finally {
+      setApplying(false);
+    }
+  };
+
   return (
     <div className="panel">
       <div className="spread">
@@ -19,9 +44,9 @@ export function Header({ d, onReject }: { d: Detail; onReject?: () => void }) {
         <div className="row" style={{ flex: 'none', gap: '.5rem' }}>
           {d.job.url && (
             <>
-              <a href={d.job.url} target="_blank" rel="noreferrer">
-                <button className="primary">Apply</button>
-              </a>
+              <button className="primary" onClick={handleApply} disabled={applying || !d.lead}>
+                {applying ? 'Applying…' : 'Apply'}
+              </button>
               <a href={d.job.url} target="_blank" rel="noreferrer">
                 <button>Open posting</button>
               </a>
@@ -37,6 +62,11 @@ export function Header({ d, onReject }: { d: Detail; onReject?: () => void }) {
           )}
         </div>
       </div>
+      {applyError && (
+        <div className="notice bad" style={{ marginTop: '.6rem' }}>
+          {applyError}
+        </div>
+      )}
     </div>
   );
 }

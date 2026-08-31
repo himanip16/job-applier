@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/api';
+import { RejectDialog } from '../../components/RejectDialog';
 
-interface Lead {
+interface JobLead {
   id: string;
   url: string;
   ats: string;
@@ -30,7 +31,7 @@ interface Lead {
 }
 
 interface LeadPage {
-  leads: Lead[];
+  leads: JobLead[];
   counts: Record<string, number>;
   total: number;
   page: number;
@@ -111,7 +112,7 @@ interface Company {
 }
 
 export default function DiscoverPage() {
-  const [leads, setLeads] = useState<Lead[]>([]);
+  const [leads, setLeads] = useState<JobLead[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [companies, setCompanies] = useState<Company[]>([]);
   const [sources, setSources] = useState<{ id: string; handleHint: string }[]>([]);
@@ -121,7 +122,7 @@ export default function DiscoverPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [rejecting, setRejecting] = useState<Lead | null>(null);
+  const [rejecting, setRejecting] = useState<JobLead | null>(null);
   // Keyed by lead. An error from a card has to appear on that card: the shared
   // banner at the top of the page is often a screen away from the button that
   // was pressed, which makes a failed click look like a dead button.
@@ -251,7 +252,7 @@ export default function DiscoverPage() {
     }
   }
 
-  async function decide(lead: Lead, action: 'apply' | 'shortlist' | 'applied') {
+  async function decide(lead: JobLead, action: 'apply' | 'shortlist' | 'applied') {
     setBusy(lead.id);
     setLeadErrors((prev) => {
       const next = { ...prev };
@@ -340,7 +341,7 @@ export default function DiscoverPage() {
   const pageIds = leads.map((l) => l.id);
   const allPicked = pageIds.length > 0 && pageIds.every((id) => picked.includes(id));
 
-  const cardProps = (lead: Lead) => ({
+  const cardProps = (lead: JobLead) => ({
     lead,
     busy: busy === lead.id || busy === 'rescore',
     error: leadErrors[lead.id],
@@ -798,7 +799,7 @@ function LeadCard({
   onApplied,
   onReject,
 }: {
-  lead: Lead;
+  lead: JobLead;
   busy: boolean;
   error?: string;
   picked: boolean;
@@ -983,84 +984,6 @@ function QuickScoreReasons({
       {shared.length > 0 && missing.length > 0 && ' · '}
       {missing.length > 0 && <>not in it: {missing.slice(0, 5).join(', ')}</>}
       {learned.length > 0 && ` · from your past picks: ${learned.slice(0, 4).join(', ')}`}
-    </div>
-  );
-}
-
-/**
- * The reject dialog.
- *
- * The reason is optional and says so. Forcing one gets you "n/a", and "n/a"
- * actively poisons the learner — worse than no answer at all. The category
- * chips exist because one tap is cheap and still carries real signal.
- */
-function RejectDialog({
-  lead,
-  categories,
-  onClose,
-  onDone,
-}: {
-  lead: Lead;
-  categories: string[];
-  onClose: () => void;
-  onDone: (message: string) => void;
-}) {
-  const [category, setCategory] = useState<string | null>(null);
-  const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  async function submit() {
-    setBusy(true);
-    try {
-      const rRaw = await api(`/api/leads/${lead.id}/reject`, {
-        method: 'POST',
-        body: JSON.stringify({ category: category ?? undefined, reason: reason.trim() || undefined }),
-      });
-      const r = rRaw as { message: string };
-      onDone(r.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 style={{ margin: '0 0 .2rem' }}>Not for you</h2>
-        <p className="sub">
-          {lead.title} at {lead.companyName}. Telling us why is optional, but it is what teaches the
-          ranking — a reason moves it far more than a bare rejection does.
-        </p>
-
-        <div className="row" style={{ marginBottom: '.8rem' }}>
-          {categories.map((c) => (
-            <button
-              key={c}
-              onClick={() => setCategory(category === c ? null : c)}
-              style={category === c ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-border)', color: 'var(--accent)' } : undefined}
-            >
-              {c}
-            </button>
-          ))}
-        </div>
-
-        <label className="field">
-          <span>Anything else? (optional)</span>
-          <textarea
-            value={reason}
-            placeholder="e.g. the commute is impossible, or I have moved away from PHP"
-            onChange={(e) => setReason(e.target.value)}
-          />
-        </label>
-
-        <div className="row">
-          <button className="primary" disabled={busy} onClick={submit}>
-            {busy ? 'Saving…' : 'Reject'}
-          </button>
-          <button onClick={onClose}>Cancel</button>
-          <span className="muted small">Skipping the reason is fine.</span>
-        </div>
-      </div>
     </div>
   );
 }

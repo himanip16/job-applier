@@ -29,10 +29,11 @@ import {
 import type { AtsAdapter, JobMeta } from '../ats/types.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
 import { generateCoverLetter } from '../llm/coverLetter.js';
-import { resolveField, type ResolveContext } from './resolver.js';
+import { resolveField, type ResolveContext, isEssayField } from './resolver.js';
 import { askHuman, pauseForHuman } from './humanGate.js';
 import { artifact, setStatus, truncate, writeCoverLetterFile } from './runLog.js';
 import { entry, type FieldPlanEntry } from './fieldPlan.js';
+import { rememberAnswer } from './answerBank.js';
 
 /**
  * Walking an application from its first screen to its last.
@@ -101,8 +102,8 @@ export async function walkApplication(args: {
     sessionAnswers,
   };
 
-  const plan: FieldPlanEntry[] = [];
-  const allFields: FormField[] = [];
+  let plan: FieldPlanEntry[] = [];
+  let allFields: FormField[] = [];
   const answers = new Map<string, ResolvedAnswer>();
   let coverLetter = app.coverLetter ?? undefined;
   let resumeAttached = false;
@@ -190,6 +191,15 @@ export async function walkApplication(args: {
     const gate = await looksLikeAGate(page);
     let fields: FormField[] = [];
     if (!gate) {
+      // Remove prior entries for this step if re-trying (step was decremented)
+      const stepPrefix = `s${step}:`;
+      const planBefore = plan.length;
+      plan = plan.filter((p) => !p.fieldId.startsWith(stepPrefix));
+      allFields = allFields.filter((f) => !f.id.startsWith(stepPrefix));
+      if (plan.length !== planBefore) {
+        await bus.emitEvent(applicationId, 'LOG', `Retrying step ${step}: cleared ${planBefore - plan.length} stale field entries.`);
+      }
+
       // Handles restart at f0 on every extraction, so they are namespaced by
       // step before anything stores them - otherwise step 2's "f0" would
       // overwrite step 1's answer and its pending question.
@@ -249,6 +259,11 @@ export async function walkApplication(args: {
       const res = await resolveField(field, ctx);
       if (res.kind === 'answer') {
         answers.set(field.id, res.answer);
+        
+        // 1. INTRA-RUN CACHE: Save to sessionAnswers so step retries/re-renders 
+        // never recompute this field during the current run
+        sessionAnswers.set(field.id, res.answer);
+
         await bus.emitEvent(
           applicationId,
           'FIELD_RESOLVED',
@@ -352,6 +367,28 @@ export async function walkApplication(args: {
           verified: check.actual,
           error: check.ok ? undefined : 'value did not stick',
         });
+        
+        // 2. CROSS-RUN PERSISTENCE: Save to Answer Bank database table
+        // Stores all non-profile resolved answers so future job apps reuse them automatically
+        if (check.ok && answer.remember && answer.source !== 'PROFILE' && answer.source !== 'SKIPPED') {
+          await rememberAnswer({
+            profileId: app.profileId,
+            canonicalKey: answer.canonicalKey,
+            rawLabel: field.label,
+            value: answer.value,
+            displayValue: answer.displayValue,
+            fieldKind: field.kind,
+            options: field.options,
+            source: 'INFERRED', // Both INFERRED and GENERATED map to INFERRED in the database
+            confidence: answer.confidence,
+            scope: isEssayField(field) ? 'PER_COMPANY' : 'GLOBAL',
+            companyKey: isEssayField(field) ? ctx.companyKey : undefined,
+          }).catch((err) => {
+            // Log warning but don't block the run
+            console.warn(`Failed to save answer for ${field.label}:`, err);
+          });
+        }
+        
         if (!check.ok) {
           await bus.emitEvent(
             applicationId,
