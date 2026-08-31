@@ -330,6 +330,25 @@ export default function DiscoverPage() {
     }
   }
 
+  async function rescoreAll() {
+    setBusy('rescore-all');
+    setError(null);
+    setFlash(null);
+    setLeadErrors({});
+    try {
+      const r = await api<{ results: RescoreResult[]; rescored: number; failed: number; message: string }>('/api/leads/rescore-all', {
+        method: 'POST',
+        body: JSON.stringify({ status: view.status, limit: 50 }),
+      });
+      setFlash(r.message);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   // The split that makes the page useful: the jobs worth opening, then the
   // rest. 70 is the same threshold the score turns green at, so the section
   // heading and the number beside each job never disagree.
@@ -396,6 +415,13 @@ export default function DiscoverPage() {
               title="Re-read the boards already on the list, without searching"
             >
               {busy === 'crawl' ? 'Re-checking…' : 'Re-check known boards'}
+            </button>
+            <button
+              disabled={busy !== null}
+              onClick={rescoreAll}
+              title="Rescore all jobs using batch processing (fewer LLM calls)"
+            >
+              {busy === 'rescore-all' ? 'Rescoring…' : 'Rescore all jobs'}
             </button>
           </div>
         </div>
@@ -497,6 +523,8 @@ export default function DiscoverPage() {
           }
           onClear={() => setPicked([])}
           onRescore={rescorePicked}
+          onRescoreAll={rescoreAll}
+          rescoreAllBusy={busy === 'rescore-all'}
         />
 
         {rest.length === 0 ? (
@@ -710,6 +738,8 @@ function SelectionBar({
   onToggleAll,
   onClear,
   onRescore,
+  onRescoreAll,
+  rescoreAllBusy,
 }: {
   picked: string[];
   max: number;
@@ -719,6 +749,8 @@ function SelectionBar({
   onToggleAll: () => void;
   onClear: () => void;
   onRescore: () => void;
+  onRescoreAll: () => void;
+  rescoreAllBusy: boolean;
 }) {
   const over = picked.length > max;
   return (
@@ -753,8 +785,16 @@ function SelectionBar({
           : `Rescore selected${picked.length ? ` (${Math.min(picked.length, max)})` : ''}`}
       </button>
 
+      <button
+        disabled={rescoreAllBusy}
+        onClick={onRescoreAll}
+        title="Rescore all jobs using batch processing (fewer LLM calls)"
+      >
+        {rescoreAllBusy ? 'Rescoring…' : 'Rescore all jobs'}
+      </button>
+
       {picked.length > 0 && (
-        <button onClick={onClear} disabled={busy}>
+        <button onClick={onClear} disabled={busy || rescoreAllBusy}>
           clear selection
         </button>
       )}

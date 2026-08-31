@@ -34,11 +34,22 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
     const existing = await prisma.application.findUnique({
       where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
     });
+
+    // Already submitted - cannot re-apply
     if (existing && existing.status === 'SUBMITTED') {
       return reply.code(409).send({
         error: 'You already applied to this job.',
         applicationId: existing.id,
         submittedAt: existing.submittedAt,
+      });
+    }
+
+    // Currently being processed - prevent dual-worker collision
+    if (existing && ['FILLING', 'PREPARING', 'SUBMITTING', 'QUEUED'].includes(existing.status)) {
+      return reply.code(409).send({
+        error: 'This application is currently being processed. Please wait for it to complete.',
+        applicationId: existing.id,
+        status: existing.status,
       });
     }
 
@@ -48,6 +59,7 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
         data: { profileId: profile.id, jobId: job.id, requiresReview, writeCoverLetter },
       }));
 
+    // Re-queue if application exists in a terminal/blocked state
     if (existing) {
       await prisma.application.update({
         where: { id: existing.id },
@@ -60,8 +72,12 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
     return { applicationId: application.id, ats: adapter.id, notes: adapter.notes };
   });
 
-  app.get('/api/applications', async () => {
+  app.get('/api/applications', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+
     const applications = await prisma.application.findMany({
+      where: { profileId: profile.id },
       include: { job: true, _count: { select: { pending: { where: { answeredAt: null } } } } },
       orderBy: { updatedAt: 'desc' },
       take: 100,
@@ -109,7 +125,7 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
         status: 'QUEUED',
         blockedReason: null,
         attempts: 0,
-        fieldPlan: null,
+        fieldPlan: undefined,
         coverLetter: null,
         confirmation: null,
       },
@@ -127,6 +143,7 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
   app.post<{ Params: { id: string } }>('/api/applications/:id/answers', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
+    if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
 
     const { answers } = z
       .object({

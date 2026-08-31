@@ -1,15 +1,15 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { LlmUnavailableError } from '../src/llm/client.js';
 
 describe('global error handler', () => {
-  let app: Fastify.FastifyInstance;
+  let app: FastifyInstance;
 
   beforeAll(async () => {
     app = Fastify({ logger: false });
 
     // Set up the same error handler as the main app
-    app.setErrorHandler((err, req, reply) => {
+    app.setErrorHandler((err: Error, req: any, reply: any) => {
       if (err instanceof LlmUnavailableError) {
         // Rate limit errors should return 429
         if (err.retryable && /rate limit|quota exhausted|429/i.test(err.message)) {

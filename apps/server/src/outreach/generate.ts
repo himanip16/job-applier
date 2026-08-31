@@ -16,10 +16,10 @@ export async function generateColdOutreach(input: {
   charLimit: number;
   overLimit: boolean;
 }> {
-  // Load contact and profile
+  // Load contact and profile - ensure contact belongs to the profile
   const [contact, profile] = await Promise.all([
     prisma.contact.findUniqueOrThrow({
-      where: { id: input.contactId },
+      where: { id: input.contactId, profileId: input.profileId },
     }),
     prisma.profile.findUniqueOrThrow({
       where: { id: input.profileId },
@@ -50,15 +50,27 @@ export async function generateColdOutreach(input: {
     }
   }
 
+  // Validate company name - avoid empty strings in AI drafts
+  if (!companyName || companyName.trim() === '') {
+    throw new Error('Company name is required for outreach generation');
+  }
+
   // Build candidate context
   const candidateContext = buildCandidateContext(profile);
 
   // Determine channel based on connection degree
-  const channel: OutreachChannel = contact.degree === '1st' ? 'DIRECT_MESSAGE' : 'CONNECTION_NOTE';
+  // Since findColdOutreachTargets only returns isConnection=true (1st-degree),
+  // we default to DIRECT_MESSAGE. If contact is not a connection, use CONNECTION_NOTE.
+  const channel: OutreachChannel = contact.isConnection ? 'DIRECT_MESSAGE' : 'CONNECTION_NOTE';
   const charLimit = CHAR_LIMITS[channel];
 
+  // Validate contact role - only TALENT and ENGINEERING are supported for cold outreach
+  if (contact.role === 'OTHER') {
+    throw new Error('Cold outreach is only supported for TALENT and ENGINEERING roles');
+  }
+
   // Generate message draft
-  const contactRole = contact.role as Exclude<ContactRole, 'OTHER'>;
+  const contactRole: Exclude<ContactRole, 'OTHER'> = contact.role;
   const draft = await draftOutreach({
     candidateContext,
     contactFirstName: firstNameOf(contact.fullName),
@@ -85,7 +97,6 @@ export async function generateColdOutreach(input: {
       draftBody: draft.body,
       charLimit,
       status: 'DRAFT',
-      overLimit: draft.overLimit,
     },
   });
 
@@ -93,7 +104,7 @@ export async function generateColdOutreach(input: {
     id: item.id,
     draftBody: draft.body,
     charLimit,
-    overLimit: draft.overLimit,
+    overLimit: draft.body.length > charLimit,
   };
 }
 

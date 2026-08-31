@@ -16,6 +16,8 @@ export interface CanonicalQuestion {
   kind: 'TEXT' | 'BOOLEAN' | 'NUMBER' | 'ENUM' | 'DATE' | 'LIST';
   /** Patterns that identify this question in the wild. */
   patterns: RegExp[];
+  /** Negative patterns that disqualify a match even if positive patterns match. */
+  negativePatterns?: RegExp[];
   /** Demographic/EEO — always optional, never inferred, never remembered
    *  without an explicit opt-in. */
   sensitive?: boolean;
@@ -95,12 +97,30 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
       /where are you (currently )?(located|based)/i,
       /city\s*(of residence)?$/i,
     ],
+    negativePatterns: [
+      /visa/i,
+      /sponsorship/i,
+      /authorize/i,
+      /authori[sz]ed/i,
+      /immigration/i,
+      /work permit/i,
+      /eligibility/i,
+    ],
   },
   {
     key: 'location.country',
     prompt: 'Country of residence',
     kind: 'TEXT',
     patterns: [/^country/i, /country of (residence|origin)/i],
+    negativePatterns: [
+      /visa/i,
+      /sponsorship/i,
+      /authorize/i,
+      /authori[sz]ed/i,
+      /immigration/i,
+      /work permit/i,
+      /eligibility/i,
+    ],
   },
   {
     key: 'location.work_from',
@@ -276,11 +296,35 @@ export function matchCanonical(label: string): CanonicalQuestion | undefined {
   const text = label.replace(/\s+/g, ' ').trim();
   if (!text) return undefined;
   for (const q of CANONICAL_QUESTIONS) {
+    // Check if any positive pattern matches
+    let positiveMatch = false;
     for (const p of q.patterns) {
       // Regexes are shared module state; reset lastIndex defensively.
       p.lastIndex = 0;
-      if (p.test(text)) return q;
+      if (p.test(text)) {
+        positiveMatch = true;
+        break;
+      }
     }
+
+    // If no positive pattern matches, skip this question
+    if (!positiveMatch) continue;
+
+    // Check if any negative pattern matches (negative guardrails)
+    if (q.negativePatterns) {
+      for (const np of q.negativePatterns) {
+        // Regexes are shared module state; reset lastIndex defensively.
+        np.lastIndex = 0;
+        if (np.test(text)) {
+          // Negative pattern matched - disqualify this match
+          positiveMatch = false;
+          break;
+        }
+      }
+    }
+
+    // Return this question if positive match and no negative pattern disqualified it
+    if (positiveMatch) return q;
   }
   return undefined;
 }

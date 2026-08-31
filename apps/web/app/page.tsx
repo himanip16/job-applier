@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { api } from '../lib/api';
 import { useOverview, type Overview } from '../lib/overview';
 
@@ -48,7 +49,7 @@ export default function Home() {
         <h2>Cannot reach the server</h2>
         <div className="notice bad">{error}</div>
         <div className="row" style={{ gap: '.6rem', marginTop: '.6rem' }}>
-          <button 
+          <button
             onClick={() => navigator.clipboard.writeText('pnpm dev:server')}
             style={{
               display: 'inline-block',
@@ -59,11 +60,12 @@ export default function Home() {
               cursor: 'pointer',
               fontSize: 'inherit',
             }}
+            title="For local development"
           >
-            Copy start command
+            Copy dev start command
           </button>
           <span className="small muted" style={{ display: 'flex', alignItems: 'center' }}>
-            Server runs on port 8787
+            (For local development only)
           </span>
         </div>
       </div>
@@ -130,6 +132,16 @@ export default function Home() {
 
         <Feature
           step="4"
+          title="LinkedIn outreach"
+          href="/outreach"
+          cta="Open outreach queue"
+        >
+          Sync your LinkedIn connections, generate personalized cold messages, track replies,
+          and manage follow-ups — all with AI-generated outreach that stays within character limits.
+        </Feature>
+
+        <Feature
+          step="5"
           title="Track and learn"
           href="/tracker"
           cta="Open the tracker"
@@ -144,6 +156,11 @@ export default function Home() {
       <div className="panel">
         <h2>Also here</h2>
         <div className="grid2">
+          <Small
+            href="/outreach"
+            title="LinkedIn outreach"
+            note="Sync connections, generate AI messages, track replies and follow-ups"
+          />
           <Small
             href="/retro"
             title="Retrospective"
@@ -208,7 +225,7 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
             {total} saved or new. Best {matches.length} first.
           </p>
         </div>
-        <a href="/discover" className="primary" style={{
+        <Link href="/discover" className="primary" style={{
           display: 'inline-block',
           padding: '.4rem .8rem',
           borderRadius: 'var(--radius-sm)',
@@ -217,7 +234,7 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
           textDecoration: 'none',
         }}>
           See all {total}
-        </a>
+        </Link>
       </div>
 
       <div style={{ marginTop: '.6rem' }}>
@@ -225,7 +242,7 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
           const score = Math.round(m.score);
           const tone = score >= 70 ? 'var(--good)' : score >= 45 ? 'var(--warn)' : 'var(--bad)';
           return (
-            <a
+            <Link
               key={m.id}
               href={`/jobs/${m.id}`}
               className="spread"
@@ -275,7 +292,7 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
                 background: 'var(--border)',
                 fontSize: '.85rem',
               }}>Open</span>
-            </a>
+            </Link>
           );
         })}
       </div>
@@ -297,7 +314,7 @@ function Hero({ ov }: { ov: Overview | null }) {
       </h1>
       <p className="sub" style={{ marginTop: 0, maxWidth: '42rem' }}>
         It finds the openings, ranks them against what you actually want, fills in the
-        applications, and stops to ask you only when it genuinely cannot answer honestly.
+        applications, manages LinkedIn outreach, and stops to ask you only when it genuinely cannot answer honestly.
       </p>
 
       {loading ? (
@@ -315,7 +332,7 @@ function Hero({ ov }: { ov: Overview | null }) {
         </div>
       ) : nothingYet ? (
         <div className="row" style={{ gap: '.6rem', marginTop: '1rem' }}>
-          <a href="/discover" className="primary" style={{
+          <Link href="/discover" className="primary" style={{
             display: 'inline-block',
             padding: '.4rem .8rem',
             borderRadius: 'var(--radius-sm)',
@@ -324,8 +341,8 @@ function Hero({ ov }: { ov: Overview | null }) {
             textDecoration: 'none',
           }}>
             Find jobs for me
-          </a>
-          <a href="/runs" style={{
+          </Link>
+          <Link href="/runs" style={{
             display: 'inline-block',
             padding: '.4rem .8rem',
             borderRadius: 'var(--radius-sm)',
@@ -333,7 +350,7 @@ function Hero({ ov }: { ov: Overview | null }) {
             textDecoration: 'none',
           }}>
             Or paste a job URL
-          </a>
+          </Link>
         </div>
       ) : (
         <div
@@ -392,7 +409,7 @@ function Hero({ ov }: { ov: Overview | null }) {
                   .join(' · ')}
               </div>
             </div>
-            <a href="/runs" className="primary" style={{
+            <Link href="/runs" className="primary" style={{
               display: 'inline-block',
               padding: '.4rem .8rem',
               borderRadius: 'var(--radius-sm)',
@@ -401,7 +418,7 @@ function Hero({ ov }: { ov: Overview | null }) {
               textDecoration: 'none',
             }}>
               Open them
-            </a>
+            </Link>
           </div>
         </div>
       )}
@@ -423,12 +440,12 @@ function Big({
   hint?: string;
 }) {
   return (
-    <a href={href} className="stat" title={hint}>
+    <Link href={href} className="stat" title={hint} style={{ textDecoration: 'none' }}>
       <div className="stat-value" style={{ color: tone ?? 'inherit' }}>
         {value}
       </div>
       <div className="stat-label">{label}</div>
-    </a>
+    </Link>
   );
 }
 
@@ -456,7 +473,7 @@ function SetupPanel({ setup }: { setup: SetupStep[] }) {
             </div>
           </div>
           {!s.done && s.href && (
-            <a href={s.href} style={{
+            <Link href={s.href} style={{
               display: 'inline-block',
               padding: '.3rem .6rem',
               borderRadius: 'var(--radius-sm)',
@@ -464,7 +481,7 @@ function SetupPanel({ setup }: { setup: SetupStep[] }) {
               textDecoration: 'none',
             }}>
               Fix
-            </a>
+            </Link>
           )}
         </div>
       ))}
@@ -511,9 +528,9 @@ function Feature({
         </span>
         <div>
           <div className="row" style={{ gap: '.5rem' }}>
-            <a href={href}>
+            <Link href={href} style={{ textDecoration: 'none' }}>
               <strong>{title}</strong>
-            </a>
+            </Link>
             {badge ? (
               <span className="pill NEEDS_INPUT" style={{ textTransform: 'none' }}>
                 {badge}
@@ -525,7 +542,7 @@ function Feature({
           </p>
         </div>
       </div>
-      <a href={href} style={{ flex: 'none',
+      <Link href={href} style={{ flex: 'none',
         display: 'inline-block',
         padding: '.3rem .6rem',
         borderRadius: 'var(--radius-sm)',
@@ -533,17 +550,17 @@ function Feature({
         textDecoration: 'none',
       }}>
         {cta}
-      </a>
+      </Link>
     </div>
   );
 }
 
 function Small({ href, title, note }: { href: string; title: string; note: string }) {
   return (
-    <a href={href} style={{ textDecoration: 'none', display: 'block', padding: '.6rem 0' }}>
+    <Link href={href} style={{ textDecoration: 'none', display: 'block', padding: '.6rem 0' }}>
       <strong>{title}</strong>
       <div className="muted small">{note}</div>
-    </a>
+    </Link>
   );
 }
 

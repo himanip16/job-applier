@@ -1,7 +1,7 @@
 import { normalizeLabel, type FieldOption } from '@ja/shared';
 
 const AFFIRMATIVE = new Set(['yes', 'y', 'true', '1', 'yes i am', 'i am', 'authorized', 'agree', 'i agree', 'accept']);
-const NEGATIVE = new Set(['no', 'n', 'false', '0', 'not required', 'i do not', 'disagree', 'decline']);
+const NEGATIVE = new Set(['no', 'n', 'false', '0', 'not required', 'i do not', 'disagree', 'decline', 'not subject']);
 const DECLINE_PATTERNS = [
   /decline to (self.?identify|answer|state|disclose)/i,
   /prefer not to (say|answer|disclose|respond)/i,
@@ -53,6 +53,22 @@ export function matchOption(desired: string, options: FieldOption[]): OptionMatc
         return { option: options[wantsYes ? yesIdx : noIdx]!, score: 0.9 };
       }
     }
+    // Fallback: for single boolean intent, find the best matching option
+    // This handles cases where "no" should match "No, I am not subject to any agreements"
+    if (pool.length > 0) {
+      // Score by how well the option label starts with yes/no
+      const scored = pool.map((o) => {
+        const n = normalizeLabel(o.label);
+        let score = 0.7; // Base score for being in the right polarity
+        // Bonus for starting with the exact word
+        if (n.startsWith(want)) score = 0.95;
+        // Bonus for containing the word as a whole word
+        else if (new RegExp(`\\b${want}\\b`).test(n)) score = 0.85;
+        return { option: o, score };
+      });
+      scored.sort((a, b) => b.score - a.score);
+      return scored[0]!;
+    }
     return null;
   }
 
@@ -81,7 +97,7 @@ function isAffirmative(n: string): boolean {
   return /^(yes|y|true)\b/.test(n) || /\bi am\b/.test(n) || /\bauthori[sz]ed\b/.test(n);
 }
 function isNegative(n: string): boolean {
-  return /^(no|n|false)\b/.test(n) || /\bi am not\b/.test(n) || /\bnot authori[sz]ed\b/.test(n);
+  return /^(no|n|false)\b/.test(n) || /\bi am not\b/.test(n) || /\bnot authori[sz]ed\b/.test(n) || /\bnot required\b/.test(n) || /\bnot subject\b/.test(n);
 }
 
 /** The privacy-preserving default for EEO questions, when the form offers one. */

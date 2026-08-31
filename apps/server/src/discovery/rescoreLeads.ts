@@ -178,37 +178,44 @@ export async function rescoreLeadsBatch(profileId: string, leads: Lead[]): Promi
       title: lead.title,
       companyName: lead.companyName,
       location: lead.location ?? undefined,
-      descriptionText: lead.descriptionText,
+      descriptionText: lead.descriptionText ?? '', // Ensure string, not null
       remote: lead.remote,
     }));
 
     try {
-      const assessments = await assessFitBatch({ 
-        candidateContext, 
-        preferences, 
-        rejectionHistory, 
-        jobs 
+      const assessments = await assessFitBatch({
+        candidateContext,
+        preferences,
+        rejectionHistory,
+        jobs
       });
 
       for (let j = 0; j < batch.length; j++) {
         const lead = batch[j];
-        const raw = assessments[j];
+        if (!lead) continue;
         
+        const raw = assessments[j];
+
         if (!raw) {
           outcomes.push({ id: lead.id, ok: false, reason: 'declined', error: DECLINED_MESSAGE });
           continue;
         }
 
         const job = jobs[j];
-        const fit = applyHardRules(raw, { 
-          candidateYears: constraints.candidateYears, 
+        if (!job) {
+          outcomes.push({ id: lead.id, ok: false, reason: 'failed', error: 'Job data missing' });
+          continue;
+        }
+
+        const fit = applyHardRules(raw, {
+          candidateYears: constraints.candidateYears,
           needsSponsorship: constraints.needsSponsorship,
           salaryExpectations: constraints.salaryExpectations,
-          job 
+          job
         });
         const lex = scoreLexically(job, scoring);
         const blended = blendScores(fit, lex);
-        
+
         await prisma.jobLead.update({
           where: { id: lead.id },
           data: {
@@ -228,7 +235,7 @@ export async function rescoreLeadsBatch(profileId: string, leads: Lead[]): Promi
           title: lead.title,
           companyName: lead.companyName,
           location: lead.location ?? undefined,
-          descriptionText: lead.descriptionText,
+          descriptionText: lead.descriptionText ?? '', // Ensure string, not null
           remote: lead.remote,
         };
 
@@ -238,11 +245,11 @@ export async function rescoreLeadsBatch(profileId: string, leads: Lead[]): Promi
             outcomes.push({ id: lead.id, ok: false, reason: 'declined', error: DECLINED_MESSAGE });
             continue;
           }
-          const fit = applyHardRules(raw, { 
-            candidateYears: constraints.candidateYears, 
+          const fit = applyHardRules(raw, {
+            candidateYears: constraints.candidateYears,
             needsSponsorship: constraints.needsSponsorship,
             salaryExpectations: constraints.salaryExpectations,
-            job 
+            job
           });
           const lex = scoreLexically(job, scoring);
           const blended = blendScores(fit, lex);

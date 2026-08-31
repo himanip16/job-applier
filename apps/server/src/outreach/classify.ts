@@ -5,14 +5,18 @@ import type { ContactRole } from '../lib/db.js';
  * Find contacts eligible for cold outreach.
  *
  * Cold outreach criteria:
- * - isConnection = true (synced from LinkedIn)
+ * - isConnection = true (synced from LinkedIn, 1st-degree connections only)
  * - No LinkedIn conversation exists (never messaged)
  * - Role is TALENT or ENGINEERING (not OTHER)
- * - Ordered by connection degree (1st, then 2nd, then 3rd+)
+ * - Ordered by discovery date (oldest first)
  *
  * IMPORTANT: Conversation detection uses the Contact relation (contactId),
  * not URL matching. This ensures consistency since both Contact and
  * LinkedInConversation use canonicalized profile URLs.
+ *
+ * NOTE: Since we filter for isConnection = true, all results are 1st-degree
+ * connections by definition. Degree ordering is removed as it would be
+ * meaningless (all values would be '1st').
  */
 export async function findColdOutreachTargets(profileId: string): Promise<{
   id: string;
@@ -41,15 +45,17 @@ export async function findColdOutreachTargets(profileId: string): Promise<{
       profileUrl: true,
       role: true,
       degree: true,
-      hasConversation: false, // Will be false due to the where clause
     },
     orderBy: [
-      { degree: 'asc' }, // 1st before 2nd before 3rd+
-      { createdAt: 'asc' }, // Oldest first as tiebreaker
+      { discoveredAt: 'asc' }, // Oldest first
     ],
   });
 
-  return contacts;
+  // Add hasConversation: false since we filtered for no conversations
+  return contacts.map(contact => ({
+    ...contact,
+    hasConversation: false,
+  }));
 }
 
 /**
