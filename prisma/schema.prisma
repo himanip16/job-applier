@@ -34,8 +34,9 @@ model User {
   createdAt    DateTime  @default(now())
   lastLoginAt  DateTime?
 
-  profile  Profile?
-  sessions Session[]
+  profile       Profile?
+  sessions      Session[]
+  passwordResets PasswordReset[]
 
   @@map("users")
 }
@@ -57,6 +58,26 @@ model Session {
 
   @@index([userId])
   @@map("sessions")
+}
+
+/// A password reset token.
+///
+/// These are short-lived, single-use tokens sent by email to let a user
+/// regain access to their account without knowing their current password.
+model PasswordReset {
+  id        String   @id @default(cuid())
+  /// Random token sent to the user's email.
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  /// Set when the token is successfully used, to prevent reuse.
+  usedAt    DateTime?
+
+  @@index([userId])
+  @@index([token])
+  @@map("password_resets")
 }
 
 model Profile {
@@ -93,6 +114,9 @@ model Profile {
   resumes      ResumeFile[]
   answers      Answer[]
   applications Application[]
+  linkedinSyncs LinkedInSync[]
+  conversations LinkedInConversation[]
+  outreachItems OutreachItem[]
 
   @@map("profiles")
 }
@@ -574,4 +598,259 @@ model Setting {
   updatedAt DateTime @updatedAt
 
   @@map("settings")
+}
+
+// ---------------------------------------------------------------------------
+// LinkedIn outreach
+// ---------------------------------------------------------------------------
+
+/// Someone at a company worth talking to alongside the application.
+///
+/// Scoped to a profile rather than global, because "who I found while looking
+/// for work" is part of one person's search and not a shared directory. The
+/// unique key is the profile URL, which is the only stable identifier
+/// LinkedIn exposes without an API - names collide and headlines change
+/// weekly.
+model Contact {
+  id        String @id @default(cuid())
+  profileId String
+
+  fullName    String
+  headline    String? @db.Text
+  companyName String
+  /// Lowercased, punctuation-stripped company name, so "Mercury," and
+  /// "mercury" are one company when grouping messages.
+  companyKey  String
+  location    String?
+  /// Canonicalised to https://www.linkedin.com/in/<slug> - the search results
+  /// carry tracking query strings that would otherwise defeat the unique key.
+  profileUrl  String
+  role        ContactRole
+  /// The words that produced the classification, so a wrong one is debuggable
+  /// from the UI instead of from the regex.
+  roleReason  String?
+  /// "1st" | "2nd" | "3rd+", as LinkedIn reports it. This decides whether the
+  /// approach is a connection request or a direct message, so it is recorded
+  /// rather than guessed at send time.
+  degree      String?
+
+  discoveredAt DateTime @default(now())
+
+  // Sync state
+  isConnection      Boolean @default(false)
+  lastSyncedAt      DateTime?
+
+  messages OutreachMessage[]
+  conversations LinkedInConversation[]
+  outreachItems OutreachItem[]
+
+  @@unique([profileId, profileUrl])
+  @@index([profileId, companyKey])
+  @@map("contacts")
+}
+
+enum ContactRole {
+  /// Recruiter, talent acquisition, sourcer, people team.
+  TALENT
+  /// Engineering manager, director, VP, head of engineering, CTO.
+  ENGINEERING
+  OTHER
+}
+
+/// One drafted approach, waiting for you.
+///
+/// Nothing in this table is ever sent by a background job. `status` leaves
+/// DRAFT only inside a request a human initiated, and the row keeps both what
+/// the model wrote (`draftBody`) and what was actually approved (`finalBody`)
+/// so the two can be compared after the fact. That separation is the audit
+/// trail for anything that went out under your name.
+model OutreachMessage {
+  id        String @id @default(cuid())
+  profileId String
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  /// The posting this is about. Denormalised on purpose: the lead can be
+  /// rejected, expire or be deleted, and a sent message still has to be able
+  /// to say what it was about.
+  leadId      String?
+  jobTitle    String
+  jobUrl      String
+  companyName String
+
+  channel   OutreachChannel
+  /// What the model wrote. Never overwritten by an edit.
+  draftBody String  @db.Text
+  /// What you approved. Null until you approve it.
+  finalBody String? @db.Text
+  /// The channel's hard cap, so the editor can enforce the same number the
+  /// send step will.
+  charLimit Int
+
+  status       OutreachStatus @default(DRAFT)
+  /// Why it is SKIPPED or FAILED. Null otherwise.
+  statusReason String?        @db.Text
+
+  /// Whether approving this should also queue the job application. Per-message
+  /// rather than a global setting: reaching out about a role you are not ready
+  /// to apply to is a normal thing to want.
+  alsoApply     Boolean @default(true)
+  applicationId String?
+
+  editedAt   DateTime?
+  approvedAt DateTime?
+  sentAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([profileId, contactId, jobUrl])
+  @@index([profileId, status, createdAt])
+  @@map("outreach_messages")
+}
+
+enum OutreachChannel {
+  /// Invitation with a note. 300 characters, and only for people you are not
+  /// already connected to.
+  CONNECTION_NOTE
+  /// Already connected, so the message box is open.
+  DIRECT_MESSAGE
+  /// Costs a credit. Drafted, never sent automatically.
+  INMAIL
+}
+
+enum OutreachStatus {
+  DRAFT
+  APPROVED
+  SENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+// ---------------------------------------------------------------------------
+// LinkedIn sync
+// ---------------------------------------------------------------------------
+
+model LinkedInSync {
+  id        String   @id @default(cuid())
+  profileId String
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  syncType  SyncType
+  lastSyncAt DateTime?
+  status    SyncStatus @default(PENDING)
+  error     String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([profileId, syncType])
+  @@map("linkedin_sync")
+}
+
+enum SyncType {
+  CONNECTIONS
+  MESSAGES
+}
+
+enum SyncStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model LinkedInConversation {
+  id          String   @id @default(cuid())
+  profileId   String
+  profile     Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  contactId   String
+  contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  linkedinConversationId String
+  linkedinProfileUrl     String
+
+  lastMessageAt DateTime?
+  lastSyncedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages LinkedInMessage[]
+  outreachItems OutreachItem[]
+
+  @@unique([profileId, linkedinConversationId])
+  @@index([profileId, lastMessageAt])
+  @@index([contactId])
+  @@map("linkedin_conversations")
+}
+
+model LinkedInMessage {
+  id              String   @id @default(cuid())
+  conversationId  String
+  conversation    LinkedInConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  linkedinMessageId String
+  senderProfileUrl String
+  isFromMe         Boolean
+  body             String   @db.Text
+  sentAt           DateTime
+
+  createdAt DateTime @default(now())
+
+  @@unique([conversationId, linkedinMessageId])
+  @@index([conversationId, sentAt])
+  @@map("linkedin_messages")
+}
+
+// ---------------------------------------------------------------------------
+// Outreach queue (unified cold/reply/follow-up)
+// ---------------------------------------------------------------------------
+
+model OutreachItem {
+  id        String @id @default(cuid())
+  profileId String
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  type      OutreachType
+
+  leadId      String?
+  jobTitle    String?
+  jobUrl      String?
+  companyName String?
+
+  channel   OutreachChannel
+  draftBody String  @db.Text
+  finalBody String? @db.Text
+  charLimit Int
+
+  status       OutreachStatus @default(DRAFT)
+  statusReason String?        @db.Text
+
+  conversationId String?
+  conversation   LinkedInConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  lastMessages   Json?
+
+  editedAt   DateTime?
+  approvedAt DateTime?
+  sentAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([profileId, contactId, type, jobUrl])
+  @@index([profileId, status, type, createdAt])
+  @@index([contactId])
+  @@map("outreach_items")
+}
+
+enum OutreachType {
+  COLD
+  REPLY
+  FOLLOW_UP
 }

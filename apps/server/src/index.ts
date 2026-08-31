@@ -32,6 +32,7 @@ import { loadSettings } from './lib/secrets.js';
 import { isFirecrawlConfigured } from './discovery/firecrawl.js';
 import { registerTrackerRoutes } from './routes/tracker.js';
 import { registerResumeRoutes } from './routes/resume.js';
+import { registerOutreachRoutes } from './routes/outreach.js';
 
 const app = Fastify({ logger: { level: 'warn' } });
 /**
@@ -514,6 +515,7 @@ registerResumeRoutes(app, requireProfile);
 registerTrackerRoutes(app, requireProfile);
 registerSettingsRoutes(app);
 registerJobDetailRoutes(app, requireProfile);
+registerOutreachRoutes(app);
 
 // ----------------------------------------------------------------- health ---
 

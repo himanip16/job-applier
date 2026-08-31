@@ -139,6 +139,18 @@ function SignInForm() {
                 onChange={(e) => setPassword(e.target.value)}
               />
             </label>
+            {mode === 'signin' && (
+              <p style={{ margin: '-.4rem 0 .9rem', textAlign: 'right' }}>
+                <button
+                  className="ghost"
+                  type="button"
+                  onClick={() => router.push('/reset-request')}
+                  style={{ padding: '.1rem .4rem', fontSize: '.85rem', color: 'var(--accent)' }}
+                >
+                  Forgot password?
+                </button>
+              </p>
+            )}
             {mode === 'register' && (
               <p className="muted small" style={{ margin: '-.4rem 0 .9rem' }}>
                 At least 10 characters. A short phrase you will remember beats a short password

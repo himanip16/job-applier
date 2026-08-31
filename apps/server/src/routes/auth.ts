@@ -11,6 +11,11 @@ import {
   setSessionCookie,
   SESSION_COOKIE,
 } from '../auth/sessions.js';
+import {
+  createPasswordResetToken,
+  markPasswordResetTokenUsed,
+  validatePasswordResetToken,
+} from '../auth/password-reset.js';
 
 /**
  * Signing in.
@@ -126,6 +131,67 @@ export function registerAuthRoutes(app: FastifyInstance) {
     await prisma.session.deleteMany({
       where: { userId: user.id, ...(keep ? { NOT: { token: keep } } : {}) },
     });
+    return { ok: true };
+  });
+
+  /**
+   * Request a password reset.
+   *
+   * This endpoint is deliberately permissive: it always returns success,
+   * even if the email doesn't exist. This prevents account enumeration.
+   */
+  app.post('/api/auth/reset-request', async (req, reply) => {
+    const body = z.object({ email: z.string().trim().min(3).max(320) }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'Give an email address.' });
+
+    const email = body.data.email.toLowerCase();
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    if (user) {
+      const token = await createPasswordResetToken(user.id);
+      // In a real implementation, you would send this token via email:
+      // await sendPasswordResetEmail(user.email, token);
+      // For development, return the token in the response
+      if (process.env.NODE_ENV === 'development') {
+        return { ok: true, token, message: 'Development mode: token returned in response' };
+      }
+    }
+
+    // Always return success to prevent account enumeration
+    return { ok: true };
+  });
+
+  /**
+   * Complete a password reset using a token.
+   */
+  app.post('/api/auth/reset-complete', async (req, reply) => {
+    const body = z
+      .object({
+        token: z.string().min(1),
+        password: z.string().min(1).max(200),
+      })
+      .safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'Give a token and a new password.' });
+
+    const weak = passwordProblem(body.data.password);
+    if (weak) return reply.code(400).send({ error: weak });
+
+    const userId = await validatePasswordResetToken(body.data.token);
+    if (!userId) {
+      return reply.code(400).send({ error: 'That reset link is invalid or has expired. Request a new one.' });
+    }
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: await hashPassword(body.data.password) },
+    });
+
+    // Mark the token as used
+    await markPasswordResetTokenUsed(body.data.token);
+
+    // Sign out all sessions for this user
+    await prisma.session.deleteMany({ where: { userId } });
+
     return { ok: true };
   });
 }
