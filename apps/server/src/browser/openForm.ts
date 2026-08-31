@@ -102,6 +102,28 @@ export async function countFillableInputs(page: Page): Promise<number> {
 }
 
 /**
+ * Whether a resume/CV upload is reachable on screen right now.
+ *
+ * Used to decide whether "there are fillable inputs already" can be trusted
+ * as "this is the application". It usually can be - but a company careers
+ * page can carry something else on the same screen that also asks for a name
+ * and an email: a "join our talent community" widget, a job-alert sign-up.
+ * Those essentially never ask for a resume; a job application almost always
+ * does, even when the field is optional. A live run against a Roku posting
+ * filled exactly such a sidebar widget under the candidate's name, because
+ * three text inputs were enough to satisfy `minInputs` before the real
+ * application - already in the page, just hidden until Apply is clicked -
+ * was ever revealed.
+ */
+async function hasVisibleFileInput(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    return Array.from(document.querySelectorAll<HTMLInputElement>('input[type=file]')).some((el) =>
+      typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null,
+    );
+  });
+}
+
+/**
  * Is a bot-check interstitial on screen right now?
  *
  * Returns the name of the challenge, or null. Distinct from
@@ -216,7 +238,17 @@ export async function openApplicationForm(
   await page.waitForTimeout(700);
 
   // 2. Already on the form? Some URLs point straight at it (Lever's /apply).
-  if (await formReady(page, minInputs, opts.formSelectors)) return;
+  //
+  // Trusted outright when an adapter passed its own formSelectors - it knows
+  // its DOM precisely. The generic fallback does not, and a bare input count
+  // cannot tell a real application from something else on the same page that
+  // also asks for a name and an email - see hasVisibleFileInput. So the
+  // generic path additionally wants resume evidence before it will accept
+  // "the form is already here" and skip the Apply click; failing that it
+  // falls through to step 3 exactly as if nothing had been found yet.
+  if (await formReady(page, minInputs, opts.formSelectors)) {
+    if (opts.formSelectors?.length || (await hasVisibleFileInput(page))) return;
+  }
 
   // 3. Otherwise click through. Two attempts: the first click sometimes lands
   //    before hydration finishes and does nothing at all.

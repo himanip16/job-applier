@@ -174,3 +174,45 @@ describe('a captcha armed on a real form', () => {
     await page.close();
   }, 60_000);
 });
+
+describe('a decoy widget sharing the page with the real application', () => {
+  /**
+   * The Roku failure, reproduced. A live run against a company careers page
+   * filled a "Join our Talent Community" sidebar sign-up under the
+   * candidate's name - First Name, Last Name, Email - and never touched the
+   * real application at all. The sidebar's three text inputs were enough to
+   * satisfy the old "are there fillable inputs yet" check before Apply was
+   * ever clicked, and the real application was already in the page by then,
+   * just hidden until that click.
+   */
+  it('does not settle for a sidebar sign-up that never asked for a resume', async () => {
+    const page = await open();
+    await openApplicationForm(page, `${baseUrl}/careers-page-with-decoy-widget.html`, {
+      applyPatterns: [/^apply$/i],
+    });
+    // Reaching this point at all means it did not stop at the sidebar - it
+    // has a resume field on screen, which the sidebar never offers.
+    const hasResumeField = await page.locator('#app-resume').isVisible();
+    expect(hasResumeField).toBe(true);
+    await page.close();
+  }, 60_000);
+
+  it('extracts the application fields, not the sign-up widget’s', async () => {
+    const page = await open();
+    await openApplicationForm(page, `${baseUrl}/careers-page-with-decoy-widget.html`, {
+      applyPatterns: [/^apply$/i],
+    });
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const labels = fields.map((f) => f.label);
+
+    expect(labels).toContain('Phone');
+    expect(labels).toContain('LinkedIn Profile');
+    expect(fields.some((f) => f.kind === 'FILE')).toBe(true);
+
+    // Both forms carry "First Name" - the point is that the sidebar's own
+    // copy does not also appear, doubled up in the same field list.
+    expect(labels.filter((l) => l === 'First Name')).toHaveLength(1);
+    await page.close();
+  }, 60_000);
+});
+

@@ -35,11 +35,39 @@ const EXTRACTOR = () => {
     const s = getComputedStyle(el as HTMLElement);
     if (s.display === 'none' || s.visibility === 'hidden') return false;
     const r = (el as HTMLElement).getBoundingClientRect();
-    // File inputs are routinely 0x0 behind a styled button; they still count.
+    // File inputs are routinely 0x0 behind a styled button; they still count
+    // - but only when something has deliberately styled them that way, not
+    // when a whole ancestor section is collapsed (`display: none` on a wrapper
+    // does not change this element's own computed `display`, so the check
+    // above misses it; a zero-size box does not distinguish "styled input"
+    // from "not rendered at all"). `checkVisibility`/`offsetParent` answer
+    // the ancestor question directly. Getting this wrong is exactly how a
+    // resume field inside a not-yet-revealed "Apply" section could be read as
+    // present before it actually is.
     if (r.width === 0 && r.height === 0) {
-      return (el as HTMLInputElement).type === 'file';
+      if ((el as HTMLInputElement).type !== 'file') return false;
+      const he = el as HTMLElement;
+      return typeof he.checkVisibility === 'function' ? he.checkVisibility() : he.offsetParent !== null;
     }
     return true;
+  };
+
+  /**
+   * Of several <form> elements on one page, the one that most looks like a
+   * job application - scored on its own visible fields, not the page's.
+   * A resume upload is worth more than any number of text fields: it is the
+   * one thing a newsletter or "talent community" sign-up essentially never
+   * asks for, and a job application almost always does, even when optional.
+   */
+  const bestForm = (forms: HTMLFormElement[], isVisible: (el: Element) => boolean): HTMLFormElement => {
+    const score = (form: HTMLFormElement): number => {
+      const controls = Array.from(
+        form.querySelectorAll<HTMLElement>('input, select, textarea'),
+      ).filter(isVisible);
+      const hasFile = controls.some((el) => (el.getAttribute('type') ?? '').toLowerCase() === 'file');
+      return controls.length + (hasFile ? 1000 : 0);
+    };
+    return forms.reduce((best, next) => (score(next) > score(best) ? next : best));
   };
 
   // Required markers come in many glyphs: *, U+2731 heavy asterisk, fullwidth
@@ -161,7 +189,22 @@ const EXTRACTOR = () => {
   const CAPTCHA_NAMES = /recaptcha|captcha|hcaptcha|cf-turnstile|honeypot/i;
 
   const forms = Array.from(document.querySelectorAll('form'));
-  const roots: Element[] = forms.length ? forms : [document.body];
+  // One form, or none at all (Ashby renders bare React with no <form>
+  // wrapper): every fillable control on the page is fair game. Two or more is
+  // a different situation - a careers page can carry the real application
+  // and something else entirely, also wrapped in its own <form>. A live run
+  // against Roku's board filled a "Join our Talent Community" newsletter
+  // sign-up under the candidate's name because this used to merge every
+  // form's fields into one list; picking the single form that most looks
+  // like a job application, instead of merging, is what keeps a newsletter
+  // widget from ever entering the field list at all. Weighted heavily toward
+  // a resume upload, because a newsletter sign-up essentially never has one.
+  const roots: Element[] =
+    forms.length <= 1
+      ? forms.length
+        ? forms
+        : [document.body]
+      : [bestForm(forms, visible)];
 
   const seenRadioGroups = new Set<string>();
 
