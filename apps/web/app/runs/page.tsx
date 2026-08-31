@@ -51,6 +51,24 @@ export default function RunsPage() {
     }
   }
 
+  async function handleRestart(applicationId: string) {
+    try {
+      await api(`/api/applications/${applicationId}/restart`, { method: 'POST' });
+      load();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleContinue(applicationId: string) {
+    try {
+      await api(`/api/applications/${applicationId}/start`, { method: 'POST' });
+      load();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   return (
     <>
       {health && !health.llmConfigured && (
@@ -128,6 +146,26 @@ export default function RunsPage() {
                       run log
                     </a>
                     {r.blockedReason && <div className="muted small">{r.blockedReason}</div>}
+                    {(r.status === 'FAILED' || r.status === 'BLOCKED' || r.status === 'CANCELLED') && (
+                      <div className="row" style={{ gap: '.3rem', marginTop: '.3rem' }}>
+                        <button
+                          className="primary"
+                          onClick={() => handleRestart(r.id)}
+                          style={{ fontSize: '.75rem', padding: '.2rem .4rem' }}
+                          title="Start fresh from the beginning"
+                        >
+                          Restart
+                        </button>
+                        <button
+                          className="ghost"
+                          onClick={() => handleContinue(r.id)}
+                          style={{ fontSize: '.75rem', padding: '.2rem .4rem' }}
+                          title="Continue from where you left off"
+                        >
+                          Continue
+                        </button>
+                      </div>
+                    )}
                   </td>
                   <td className="small muted">{r.job.ats}</td>
                   <td><span className={`pill ${r.status}`}>{r.status.replace('_', ' ')}</span></td>

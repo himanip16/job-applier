@@ -97,6 +97,33 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
     return { ok: true };
   });
 
+  app.post<{ Params: { id: string } }>('/api/applications/:id/restart', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
+    
+    // Clear all state and start fresh
+    await prisma.application.update({
+      where: { id: req.params.id },
+      data: {
+        status: 'QUEUED',
+        blockedReason: null,
+        attempts: 0,
+        fieldPlan: null,
+        coverLetter: null,
+        confirmation: null,
+      },
+    });
+    
+    // Clear pending questions, events, and artifacts
+    await prisma.pendingQuestion.deleteMany({ where: { applicationId: req.params.id } });
+    await prisma.applicationEvent.deleteMany({ where: { applicationId: req.params.id } });
+    await prisma.artifact.deleteMany({ where: { applicationId: req.params.id } });
+    
+    enqueue(req.params.id);
+    return { ok: true };
+  });
+
   app.post<{ Params: { id: string } }>('/api/applications/:id/answers', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;

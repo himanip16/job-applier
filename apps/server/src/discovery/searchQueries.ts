@@ -63,7 +63,7 @@ Rules:
 
 export async function buildSearchPlan(
   profileId: string,
-  opts: { maxQueries?: number } = {},
+  opts: { maxQueries?: number; country?: string } = {},
 ): Promise<SearchPlan> {
   const maxQueries = opts.maxQueries ?? 6;
 
@@ -102,7 +102,7 @@ export async function buildSearchPlan(
     );
   }
 
-  const country = profile.countryCode || undefined;
+  const country = opts.country || profile.countryCode || undefined;
 
   if (isConfigured()) {
     try {

@@ -95,21 +95,39 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
           </div>
           <div className="row" style={{ gap: '.5rem', alignItems: 'center' }}>
             <span className={`pill ${detail.status}`}>{detail.status.replace('_', ' ')}</span>
-            {(detail.status === 'FAILED' || detail.status === 'BLOCKED') && (
-              <button
-                className="primary"
-                onClick={async () => {
-                  try {
-                    await api(`/api/applications/${id}/start`, { method: 'POST' });
-                    refresh();
-                  } catch (e) {
-                    setError((e as Error).message);
-                  }
-                }}
-                style={{ fontSize: '.85rem', padding: '.3rem .6rem' }}
-              >
-                Resume
-              </button>
+            {(detail.status === 'FAILED' || detail.status === 'BLOCKED' || detail.status === 'CANCELLED') && (
+              <>
+                <button
+                  className="primary"
+                  onClick={async () => {
+                    try {
+                      await api(`/api/applications/${id}/restart`, { method: 'POST' });
+                      refresh();
+                    } catch (e) {
+                      setError((e as Error).message);
+                    }
+                  }}
+                  style={{ fontSize: '.85rem', padding: '.3rem .6rem' }}
+                  title="Start fresh from the beginning, clearing all previous progress"
+                >
+                  Restart
+                </button>
+                <button
+                  className="ghost"
+                  onClick={async () => {
+                    try {
+                      await api(`/api/applications/${id}/start`, { method: 'POST' });
+                      refresh();
+                    } catch (e) {
+                      setError((e as Error).message);
+                    }
+                  }}
+                  style={{ fontSize: '.85rem', padding: '.3rem .6rem' }}
+                  title="Continue from where you left off, preserving all progress"
+                >
+                  Continue
+                </button>
+              </>
             )}
           </div>
         </div>

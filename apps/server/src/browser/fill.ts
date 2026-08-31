@@ -51,21 +51,30 @@ const reactSelectDriver: ControlDriver = {
     for (const want of wants) {
       await input.click({ timeout: FIELD_TIMEOUT_MS });
       await input.fill('').catch(() => {});
-      await input.type(want.slice(0, 40), { delay: 15 });
 
-      const option = await waitForOption(page, field, want);
+      // For location fields, search by city name (first part before comma)
+      const searchTerm = /location|city/i.test(field.label)
+        ? (want.split(',')[0]?.trim() ?? want)
+        : want.slice(0, 40);
+
+      await input.type(searchTerm, { delay: 15 });
+
+      let option = await waitForOption(page, field, want);
       if (!option) {
+        // Fallback to first word prefix if full match fails
         await input.fill('').catch(() => {});
         await input.type(want.split(/[\s,(]/)[0] ?? want, { delay: 15 });
-        const retry = await waitForOption(page, field, want);
-        if (!retry) throw new FillError(`Could not find option "${want}" for ${field.label}`, field);
-        await retry.click();
-      } else {
-        await option.click();
+        option = await waitForOption(page, field, want);
       }
+
+      if (!option) {
+        throw new FillError(`Could not find option "${want}" for ${field.label}`, field);
+      }
+
+      await option.click();
       await page.waitForTimeout(120);
     }
-    await page.keyboard.press('Tab').catch(() => {});
+    await page.keyboard.press('Escape').catch(() => {});
   },
   read: async (page, field) => {
     const shell = page
@@ -493,22 +502,17 @@ async function waitForOption(page: Page, field: FormField, want: string): Promis
     return null;
   }
 
-  const count = await options.count();
+  // BATCH READ: Fetch all inner texts in a single IPC call instead of iterating nth(i)
+  const texts = await options.allInnerTexts().catch(() => []);
+  const optionData = texts
+    .map((t, i) => ({ label: normalizeLabel(t), locator: options.nth(i) }))
+    .filter((o) => o.label);
 
-  // Fetch all inner texts in a single batch call to avoid 200+ IPC round-trips
-  const texts = await options.allInnerTexts();
-  const optionData = texts.map((t, i) => ({
-    label: normalizeLabel(t),
-    locator: options.nth(i),
-  })).filter(o => o.label);
-
-  // Use the same sophisticated matching logic as bestOption()
-  const matched = bestOption(optionData.map(o => ({ label: o.label })), want);
+  const matched = bestOption(optionData.map((o) => ({ label: o.label })), want);
   if (!matched) return null;
 
-  // Find the locator corresponding to the matched option
-  const matchedLocator = optionData.find(o =>
-    normalizeLabel(o.label) === normalizeLabel(matched.label)
+  const matchedLocator = optionData.find(
+    (o) => normalizeLabel(o.label) === normalizeLabel(matched.label)
   )?.locator;
 
   return matchedLocator || null;

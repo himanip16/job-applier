@@ -37,6 +37,16 @@ export function RejectDialog({ lead, categories, onClose, onDone }: RejectDialog
       });
       const r = rRaw as { message: string };
       onDone(r.message);
+    } catch (e) {
+      // If the lead was already deleted or not found, consider it a success
+      // since the user's intent (removing the lead) is accomplished
+      const errorMessage = (e as Error).message;
+      if (errorMessage.includes('Not found') || errorMessage.includes('No job, lead or application')) {
+        onDone('Lead removed successfully');
+      } else {
+        // Re-throw other errors to be handled by the caller
+        throw e;
+      }
     } finally {
       setBusy(false);
     }

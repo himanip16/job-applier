@@ -84,10 +84,14 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   app.post('/api/discovery/crawl', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
-    const { deepScoreTop, companyId } = z
-      .object({ deepScoreTop: z.number().min(0).max(60).default(15), companyId: z.string().optional() })
+    const { deepScoreTop, companyId, country } = z
+      .object({ 
+        deepScoreTop: z.number().min(0).max(60).default(15), 
+        companyId: z.string().optional(),
+        country: z.string().optional()
+      })
       .parse(req.body ?? {});
-    const report = await crawlAll(profile.id, { deepScoreTop, onlyCompanyId: companyId });
+    const report = await crawlAll(profile.id, { deepScoreTop, onlyCompanyId: companyId, country });
     return { report };
   });
 
@@ -109,6 +113,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
         resultsPerQuery: z.number().min(1).max(30).optional(),
         maxBoards: z.number().min(1).max(60).optional(),
         deepScoreTop: z.number().min(0).max(60).default(15),
+        country: z.string().optional(),
       })
       .parse(req.body ?? {});
 
@@ -195,6 +200,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     minScore: z.coerce.number().min(0).max(100).optional(),
     /** Whether a model has read the posting, or only the keyword pass has. */
     depth: z.enum(['any', 'deep', 'quick']).default('any'),
+    country: z.string().trim().optional(),
   });
 
   app.get('/api/leads', async (req, reply) => {
@@ -207,8 +213,15 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     if (query.remote !== 'any') where.remote = query.remote === 'yes';
     if (query.minScore !== undefined) where.score = { gte: query.minScore };
     if (query.depth !== 'any') where.deepScored = query.depth === 'deep';
+    if (query.country) {
+      where.OR = [
+        ...(where.OR || []),
+        { location: { contains: query.country, mode: 'insensitive' } },
+      ];
+    }
     if (query.q) {
       where.OR = [
+        ...(where.OR || []),
         { title: { contains: query.q, mode: 'insensitive' } },
         { companyName: { contains: query.q, mode: 'insensitive' } },
         { location: { contains: query.q, mode: 'insensitive' } },
@@ -450,66 +463,67 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
     await rescoreLexically(profile.id);
 
-    // Auto-tailor resume if requested
-    let tailoredResumeId: string | null = null;
+    enqueue(application.id);
+
+    // Auto-tailor resume asynchronously if requested
     if (autoTailorResume && lead.descriptionText && lead.descriptionText.length >= 200) {
-      try {
-        const full = await prisma.profile.findUniqueOrThrow({
-          where: { id: profile.id },
-          include: { facts: true, resumes: true },
-        });
-
-        const base =
-          full.resumes.find((r) => r.isDefault) ??
-          full.resumes[0];
-        const resumeText = base?.text ?? full.resumeText;
-
-        if (resumeText && resumeText.trim().length >= 100) {
-          const result = await tailorResume({
-            candidateContext: renderCandidateContext(full, resumeText),
-            resumeText,
-            jobTitle: lead.title,
-            companyName: lead.companyName,
-            jobDescription: lead.descriptionText,
+      // Don't await - let this happen in the background
+      void (async () => {
+        try {
+          const full = await prisma.profile.findUniqueOrThrow({
+            where: { id: profile.id },
+            include: { facts: true, resumes: true },
           });
 
-          const rendered = await renderResume(result.text, {
-            profileName: full.fullName,
-            slug: `${lead.companyName}-${lead.title}`,
-          });
+          const base =
+            full.resumes.find((r) => r.isDefault) ??
+            full.resumes[0];
+          const resumeText = base?.text ?? full.resumeText;
 
-          const tailored = await prisma.tailoredResume.create({
-            data: {
-              profileId: full.id,
-              jobId: job.id,
-              baseResumeId: base?.id ?? 'inline',
-              label: `${lead.title} at ${lead.companyName}`,
-              text: result.text,
-              txtPath: rendered.txtPath,
-              docxPath: rendered.docxPath,
-              insertions: result.insertions as unknown as Prisma.InputJsonValue,
-              unsupported: result.unsupported as unknown as Prisma.InputJsonValue,
-              covered: result.covered as unknown as Prisma.InputJsonValue,
-              coverage: result.coverage,
-            },
-          });
+          if (resumeText && resumeText.trim().length >= 100) {
+            const result = await tailorResume({
+              candidateContext: renderCandidateContext(full, resumeText),
+              resumeText,
+              jobTitle: lead.title,
+              companyName: lead.companyName,
+              jobDescription: lead.descriptionText ?? '',
+            });
 
-          // Attach the tailored resume to the application
-          await prisma.application.update({
-            where: { id: application.id },
-            data: { tailoredResumeId: tailored.id },
-          });
+            const rendered = await renderResume(result.text, {
+              profileName: full.fullName,
+              slug: `${lead.companyName}-${lead.title}`,
+            });
 
-          tailoredResumeId = tailored.id;
+            const tailored = await prisma.tailoredResume.create({
+              data: {
+                profileId: full.id,
+                jobId: job.id,
+                baseResumeId: base?.id ?? 'inline',
+                label: `${lead.title} at ${lead.companyName}`,
+                text: result.text,
+                txtPath: rendered.txtPath,
+                docxPath: rendered.docxPath,
+                insertions: result.insertions as unknown as Prisma.InputJsonValue,
+                unsupported: result.unsupported as unknown as Prisma.InputJsonValue,
+                covered: result.covered as unknown as Prisma.InputJsonValue,
+                coverage: result.coverage,
+              },
+            });
+
+            // Attach the tailored resume to the application
+            await prisma.application.update({
+              where: { id: application.id },
+              data: { tailoredResumeId: tailored.id },
+            });
+          }
+        } catch (err) {
+          // Don't fail the application if tailoring fails, just log it
+          console.error('Auto-tailor resume failed:', err);
         }
-      } catch (err) {
-        // Don't fail the application if tailoring fails, just log it
-        console.error('Auto-tailor resume failed:', err);
-      }
+      })();
     }
 
-    enqueue(application.id);
-    return { applicationId: application.id, tailoredResumeId };
+    return { applicationId: application.id };
   });
 
   // ----------------------------------------------- what it has learned so far ---

@@ -3,6 +3,7 @@ import { greenhouseAdapter } from './adapters/greenhouse.js';
 import { leverAdapter } from './adapters/lever.js';
 import { ashbyAdapter } from './adapters/ashby.js';
 import { workableAdapter } from './adapters/workable.js';
+import { oktaAdapter } from './adapters/okta.js';
 import { genericAdapter } from './adapters/generic.js';
 
 /** Order matters: generic must be last, it matches everything. */
@@ -11,6 +12,7 @@ export const ADAPTERS: AtsAdapter[] = [
   leverAdapter,
   ashbyAdapter,
   workableAdapter,
+  oktaAdapter,
   genericAdapter,
 ];
 

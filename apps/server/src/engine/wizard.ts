@@ -296,6 +296,14 @@ export async function walkApplication(args: {
         plan.push(entry(field, answer, false));
         continue;
       }
+
+      // Add explicit logging before attempting DOM fill
+      await bus.emitEvent(
+        applicationId,
+        'LOG',
+        `Filling "${field.label}" with "${truncate(answer.displayValue)}"...`
+      );
+
       const wanted = answer.value as string | string[];
 
       // Is the site holding this field for us?
@@ -425,7 +433,14 @@ export async function walkApplication(args: {
     // ---- Attachments, on whichever step asks for them ----------------------
     if (resumeInput && !resumeAttached) {
       if (!resume) throw new Error('This form wants a resume and none is uploaded to your profile.');
-      await attachFile(page, resumeInput.selector, path.resolve(resume.path));
+      
+      // Use adapter's custom attachFile if available, otherwise use default
+      if (adapter.attachFile) {
+        await adapter.attachFile(page, resumeInput, path.resolve(resume.path));
+      } else {
+        await attachFile(page, resumeInput.selector, path.resolve(resume.path));
+      }
+      
       resumeAttached = true;
       await bus.emitEvent(applicationId, 'FILE_ATTACHED', `Attached ${resume.filename}.`);
       plan.push({
@@ -435,7 +450,14 @@ export async function walkApplication(args: {
     }
     if (coverInput && coverLetter && !coverAttached) {
       const file = await writeCoverLetterFile(applicationId, coverLetter);
-      await attachFile(page, coverInput.selector, file);
+      
+      // Use adapter's custom attachFile if available, otherwise use default
+      if (adapter.attachFile) {
+        await adapter.attachFile(page, coverInput, file);
+      } else {
+        await attachFile(page, coverInput.selector, file);
+      }
+      
       coverAttached = true;
       await bus.emitEvent(applicationId, 'FILE_ATTACHED', 'Attached the generated cover letter.');
     }

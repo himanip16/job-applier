@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../lib/db.js';
 import { syncConnections, getSyncStatus } from '../linkedin/sync.js';
 import { findColdOutreachTargets, countColdTargetsByRole } from '../outreach/classify.js';
@@ -7,36 +7,53 @@ import { generateColdOutreachBatch } from '../outreach/generate.js';
 import { currentUser } from '../auth/sessions.js';
 import { NOT_YOURS } from '../auth/ownership.js';
 
+// Extend FastifyRequest type to include profile
+declare module 'fastify' {
+  interface FastifyRequest {
+    profile?: { id: string };
+  }
+}
+
+/**
+ * Middleware helper to authenticate and load profile
+ */
+async function requireProfile(req: FastifyRequest, reply: FastifyReply) {
+  const user = await currentUser(req);
+  if (!user) {
+    reply.code(401).send({ error: 'Sign in required' });
+    return;
+  }
+
+  const profile = await prisma.profile.findUnique({
+    where: { userId: user.id },
+    select: { id: true },
+  });
+
+  if (!profile) {
+    reply.code(404).send({ error: 'Profile not found' });
+    return;
+  }
+
+  req.profile = profile;
+}
+
 /**
  * Register outreach and LinkedIn sync routes.
  */
 export function registerOutreachRoutes(app: FastifyInstance) {
+  // Apply profile authentication hook to all routes in this scope
+  app.addHook('preHandler', requireProfile);
+
   // LinkedIn sync routes
   app.post('/api/linkedin/sync/connections', async (req, reply) => {
-    const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in required' });
-
-    const profile = await prisma.profile.findUnique({
-      where: { userId: user.id },
-    });
-    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
-
-    const result = await syncConnections(profile.id);
+    const result = await syncConnections(req.profile!.id);
     return reply.send(result);
   });
 
   app.get('/api/linkedin/sync/status', async (req, reply) => {
-    const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in required' });
-
-    const profile = await prisma.profile.findUnique({
-      where: { userId: user.id },
-    });
-    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
-
     const [connectionsStatus, messagesStatus] = await Promise.all([
-      getSyncStatus(profile.id, 'CONNECTIONS'),
-      getSyncStatus(profile.id, 'MESSAGES'),
+      getSyncStatus(req.profile!.id, 'CONNECTIONS'),
+      getSyncStatus(req.profile!.id, 'MESSAGES'),
     ]);
 
     return reply.send({
@@ -47,61 +64,45 @@ export function registerOutreachRoutes(app: FastifyInstance) {
 
   // Cold outreach target routes
   app.get('/api/outreach/cold/targets', async (req, reply) => {
-    const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in required' });
-
-    const profile = await prisma.profile.findUnique({
-      where: { userId: user.id },
-    });
-    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
-
-    const targets = await findColdOutreachTargets(profile.id);
+    const targets = await findColdOutreachTargets(req.profile!.id);
     return reply.send(targets);
   });
 
   app.get('/api/outreach/cold/count', async (req, reply) => {
-    const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in required' });
-
-    const profile = await prisma.profile.findUnique({
-      where: { userId: user.id },
-    });
-    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
-
-    const counts = await countColdTargetsByRole(profile.id);
+    const counts = await countColdTargetsByRole(req.profile!.id);
     return reply.send(counts);
   });
 
   // Generate cold outreach
   app.post('/api/outreach/cold/generate', async (req, reply) => {
-    const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in required' });
-
     const schema = z.object({
-      contactIds: z.array(z.string()),
+      contactIds: z.array(z.string().min(1)).min(1),
       jobLeadId: z.string().optional(),
     });
 
-    const body = schema.parse(req.body);
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'Invalid payload', details: parsed.error.format() });
+    }
+    const body = parsed.data;
 
-    const profile = await prisma.profile.findUnique({
-      where: { userId: user.id },
+    const uniqueContactIds = Array.from(new Set(body.contactIds));
+
+    // Verify all contacts exist and belong to this profile
+    const validContactsCount = await prisma.contact.count({
+      where: {
+        id: { in: uniqueContactIds },
+        profileId: req.profile!.id,
+      },
     });
-    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
 
-    // Verify all contacts belong to this profile
-    const contacts = await prisma.contact.findMany({
-      where: { id: { in: body.contactIds } },
-    });
-
-    const invalidContacts = contacts.filter((c) => c.profileId !== profile.id);
-    if (invalidContacts.length > 0) {
+    if (validContactsCount !== uniqueContactIds.length) {
       return reply.code(403).send({ error: NOT_YOURS });
     }
 
     const result = await generateColdOutreachBatch({
-      profileId: profile.id,
-      contactIds: body.contactIds,
+      profileId: req.profile!.id,
+      contactIds: uniqueContactIds,
       jobLeadId: body.jobLeadId,
     });
 
@@ -110,24 +111,20 @@ export function registerOutreachRoutes(app: FastifyInstance) {
 
   // Outreach item CRUD
   app.get('/api/outreach/items', async (req, reply) => {
-    const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in required' });
-
     const schema = z.object({
       type: z.enum(['COLD', 'REPLY', 'FOLLOW_UP']).optional(),
       status: z.enum(['DRAFT', 'APPROVED', 'SENT', 'SKIPPED']).optional(),
     });
 
-    const query = schema.parse(req.query);
-
-    const profile = await prisma.profile.findUnique({
-      where: { userId: user.id },
-    });
-    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
+    const parsed = schema.safeParse(req.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'Invalid query parameters' });
+    }
+    const query = parsed.data;
 
     const items = await prisma.outreachItem.findMany({
       where: {
-        profileId: profile.id,
+        profileId: req.profile!.id,
         ...(query.type && { type: query.type }),
         ...(query.status && { status: query.status }),
       },
@@ -141,15 +138,7 @@ export function registerOutreachRoutes(app: FastifyInstance) {
   });
 
   app.get('/api/outreach/items/:id', async (req, reply) => {
-    const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in required' });
-
     const { id } = req.params as { id: string };
-
-    const profile = await prisma.profile.findUnique({
-      where: { userId: user.id },
-    });
-    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
 
     const item = await prisma.outreachItem.findUnique({
       where: { id },
@@ -167,39 +156,31 @@ export function registerOutreachRoutes(app: FastifyInstance) {
     });
 
     if (!item) return reply.code(404).send({ error: 'Not found' });
-    if (item.profileId !== profile.id) return reply.code(403).send({ error: NOT_YOURS });
+    if (item.profileId !== req.profile!.id) return reply.code(403).send({ error: NOT_YOURS });
 
     return reply.send(item);
   });
 
   app.put('/api/outreach/items/:id', async (req, reply) => {
-    const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in required' });
-
     const { id } = req.params as { id: string };
 
     const schema = z.object({
-      finalBody: z.string(),
+      finalBody: z.string().trim().min(1),
     });
 
-    const body = schema.parse(req.body);
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'Body text is required' });
+    }
 
-    const profile = await prisma.profile.findUnique({
-      where: { userId: user.id },
-    });
-    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
-
-    const item = await prisma.outreachItem.findUnique({
-      where: { id },
-    });
-
+    const item = await prisma.outreachItem.findUnique({ where: { id } });
     if (!item) return reply.code(404).send({ error: 'Not found' });
-    if (item.profileId !== profile.id) return reply.code(403).send({ error: NOT_YOURS });
+    if (item.profileId !== req.profile!.id) return reply.code(403).send({ error: NOT_YOURS });
 
     const updated = await prisma.outreachItem.update({
       where: { id },
       data: {
-        finalBody: body.finalBody,
+        finalBody: parsed.data.finalBody,
         editedAt: new Date(),
       },
     });
@@ -208,22 +189,11 @@ export function registerOutreachRoutes(app: FastifyInstance) {
   });
 
   app.post('/api/outreach/items/:id/approve', async (req, reply) => {
-    const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in required' });
-
     const { id } = req.params as { id: string };
 
-    const profile = await prisma.profile.findUnique({
-      where: { userId: user.id },
-    });
-    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
-
-    const item = await prisma.outreachItem.findUnique({
-      where: { id },
-    });
-
+    const item = await prisma.outreachItem.findUnique({ where: { id } });
     if (!item) return reply.code(404).send({ error: 'Not found' });
-    if (item.profileId !== profile.id) return reply.code(403).send({ error: NOT_YOURS });
+    if (item.profileId !== req.profile!.id) return reply.code(403).send({ error: NOT_YOURS });
 
     const updated = await prisma.outreachItem.update({
       where: { id },
@@ -238,34 +208,26 @@ export function registerOutreachRoutes(app: FastifyInstance) {
   });
 
   app.post('/api/outreach/items/:id/skip', async (req, reply) => {
-    const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in required' });
-
     const { id } = req.params as { id: string };
 
     const schema = z.object({
       reason: z.string().optional(),
     });
 
-    const body = schema.parse(req.body);
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'Invalid payload' });
+    }
 
-    const profile = await prisma.profile.findUnique({
-      where: { userId: user.id },
-    });
-    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
-
-    const item = await prisma.outreachItem.findUnique({
-      where: { id },
-    });
-
+    const item = await prisma.outreachItem.findUnique({ where: { id } });
     if (!item) return reply.code(404).send({ error: 'Not found' });
-    if (item.profileId !== profile.id) return reply.code(403).send({ error: NOT_YOURS });
+    if (item.profileId !== req.profile!.id) return reply.code(403).send({ error: NOT_YOURS });
 
     const updated = await prisma.outreachItem.update({
       where: { id },
       data: {
         status: 'SKIPPED',
-        statusReason: body.reason,
+        statusReason: parsed.data.reason,
       },
     });
 
@@ -273,22 +235,11 @@ export function registerOutreachRoutes(app: FastifyInstance) {
   });
 
   app.post('/api/outreach/items/:id/mark-sent', async (req, reply) => {
-    const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in required' });
-
     const { id } = req.params as { id: string };
 
-    const profile = await prisma.profile.findUnique({
-      where: { userId: user.id },
-    });
-    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
-
-    const item = await prisma.outreachItem.findUnique({
-      where: { id },
-    });
-
+    const item = await prisma.outreachItem.findUnique({ where: { id } });
     if (!item) return reply.code(404).send({ error: 'Not found' });
-    if (item.profileId !== profile.id) return reply.code(403).send({ error: NOT_YOURS });
+    if (item.profileId !== req.profile!.id) return reply.code(403).send({ error: NOT_YOURS });
 
     const updated = await prisma.outreachItem.update({
       where: { id },

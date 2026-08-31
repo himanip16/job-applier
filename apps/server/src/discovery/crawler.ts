@@ -40,7 +40,7 @@ export interface CrawlReport {
  */
 export async function crawlAll(
   profileId: string,
-  opts: { deepScoreTop?: number; onlyCompanyId?: string } = {},
+  opts: { deepScoreTop?: number; onlyCompanyId?: string; country?: string } = {},
 ): Promise<CrawlReport> {
   const deepScoreTop = opts.deepScoreTop ?? 15;
 
@@ -98,6 +98,34 @@ export async function crawlAll(
       report.jobsSeen += jobs.length;
 
       for (const job of jobs) {
+        // Filter by country if specified
+        if (opts.country && job.location) {
+          const locationLower = job.location.toLowerCase();
+          const countryLower = opts.country.toLowerCase();
+          // Check if location contains the country code or name
+          const countryNames: Record<string, string[]> = {
+            'us': ['united states', 'usa', 'us'],
+            'ca': ['canada'],
+            'gb': ['united kingdom', 'uk', 'gb'],
+            'au': ['australia'],
+            'de': ['germany'],
+            'fr': ['france'],
+            'nl': ['netherlands'],
+            'in': ['india'],
+            'sg': ['singapore'],
+            'ae': ['united arab emirates', 'uae'],
+          };
+          const matchingNames = countryNames[countryLower] || [countryLower];
+          const matchesCountry = matchingNames.some(name => 
+            locationLower.includes(name) || 
+            locationLower.includes(countryLower)
+          );
+          if (!matchesCountry && !job.remote) {
+            // Skip if location doesn't match country and job is not remote
+            continue;
+          }
+        }
+
         const existing = await prisma.jobLead.findUnique({
           where: { profileId_url: { profileId, url: job.url } },
         });

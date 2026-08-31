@@ -29,7 +29,20 @@ export default function JobPage() {
 
   const load = useCallback(async () => {
     setError(null);
-    setD(await api<Detail>(`/api/jobs/${params.id}`));
+    try {
+      setD(await api<Detail>(`/api/jobs/${params.id}`));
+    } catch (e) {
+      const errorMessage = (e as Error).message;
+      // If the lead was deleted (e.g., rejected), redirect to discover
+      if (errorMessage.includes('No job, lead or application with that id')) {
+        setError('This lead was removed. Redirecting to discover...');
+        setTimeout(() => {
+          window.location.href = '/discover';
+        }, 1500);
+      } else {
+        setError(errorMessage);
+      }
+    }
   }, [params.id]);
 
   const handleRescore = useCallback(async () => {

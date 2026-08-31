@@ -51,6 +51,7 @@ interface View {
   minScore: string;
   depth: 'any' | 'deep' | 'quick';
   limit: number;
+  country: string;
 }
 
 const DEFAULT_VIEW: View = {
@@ -62,6 +63,7 @@ const DEFAULT_VIEW: View = {
   minScore: '',
   depth: 'any',
   limit: 25,
+  country: '',
 };
 
 function queryString(view: View, page: number): string {
@@ -76,6 +78,7 @@ function queryString(view: View, page: number): string {
   });
   if (view.q) params.set('q', view.q);
   if (view.minScore) params.set('minScore', view.minScore);
+  if (view.country) params.set('country', view.country);
   return params.toString();
 }
 
@@ -212,7 +215,7 @@ export default function DiscoverPage() {
     try {
       const rRaw = await api('/api/discovery/find', {
         method: 'POST',
-        body: JSON.stringify({ deepScoreTop: 15, dryRun }),
+        body: JSON.stringify({ deepScoreTop: 15, dryRun, country: view.country || undefined }),
       });
       const r = rRaw as { report: SearchReport };
       setReport(r.report);
@@ -236,7 +239,7 @@ export default function DiscoverPage() {
     setError(null);
     setFlash(null);
     try {
-      const crawlRaw = await api('/api/discovery/crawl', { method: 'POST', body: JSON.stringify({ deepScoreTop: 15 }) });
+      const crawlRaw = await api('/api/discovery/crawl', { method: 'POST', body: JSON.stringify({ deepScoreTop: 15, country: view.country || undefined }) });
       const { report } = crawlRaw as { report: Record<string, number | unknown[]> };
       const errs = (report.errors as { company: string; error: string }[]) ?? [];
       setFlash(
@@ -499,7 +502,7 @@ export default function DiscoverPage() {
         {rest.length === 0 ? (
           <p className="muted small" style={{ marginTop: '.8rem' }}>
             {pageInfo.total === 0
-              ? view.q || view.minScore || view.remote !== 'any' || view.depth !== 'any'
+              ? view.q || view.minScore || view.remote !== 'any' || view.depth !== 'any' || view.country !== ''
                 ? 'Nothing matches those filters. Widen them, or clear them.'
                 : 'No jobs here yet. Press “Find jobs for me” above.'
               : 'Everything on this page is in strong matches.'}
@@ -566,7 +569,7 @@ function Controls({
   total: number;
 }) {
   const filtered =
-    view.q !== '' || view.minScore !== '' || view.remote !== 'any' || view.depth !== 'any';
+    view.q !== '' || view.minScore !== '' || view.remote !== 'any' || view.depth !== 'any' || view.country !== '';
 
   return (
     <div
@@ -621,6 +624,26 @@ function Controls({
       </label>
 
       <label className="row small muted" style={{ gap: '.35rem' }}>
+        country
+        <select
+          value={view.country}
+          onChange={(e) => onChange({ country: e.target.value })}
+        >
+          <option value="">any</option>
+          <option value="US">United States</option>
+          <option value="CA">Canada</option>
+          <option value="GB">United Kingdom</option>
+          <option value="AU">Australia</option>
+          <option value="DE">Germany</option>
+          <option value="FR">France</option>
+          <option value="NL">Netherlands</option>
+          <option value="IN">India</option>
+          <option value="SG">Singapore</option>
+          <option value="AE">United Arab Emirates</option>
+        </select>
+      </label>
+
+      <label className="row small muted" style={{ gap: '.35rem' }}>
         score ≥
         <input
           type="number"
@@ -660,7 +683,7 @@ function Controls({
       {filtered && (
         <button
           onClick={() =>
-            onChange({ q: '', minScore: '', remote: 'any', depth: 'any' })
+            onChange({ q: '', minScore: '', remote: 'any', depth: 'any', country: '' })
           }
           title="Clear the filters, keep the sort"
         >
