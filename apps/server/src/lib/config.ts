@@ -26,6 +26,7 @@ const num = (v: string | undefined, d: number) => {
 export const config = {
   port: num(process.env.PORT, 8787),
   databaseUrl: process.env.DATABASE_URL ?? '',
+  testDatabaseUrl: process.env.TEST_DATABASE_URL ?? '',
 
   /**
    * The four values below are getters, not constants.
@@ -114,8 +115,34 @@ export const config = {
   answerConfidenceThreshold: num(process.env.ANSWER_CONFIDENCE_THRESHOLD, 0.82),
   memoryReuseThreshold: num(process.env.MEMORY_REUSE_THRESHOLD, 0.86),
 
+  /**
+   * LinkedIn outreach.
+   *
+   * The send caps sit deliberately under LinkedIn's own limits rather than at
+   * them. LinkedIn restricts accounts that push its weekly invitation ceiling,
+   * and the cost of that is losing the ability to connect with anyone by hand
+   * for weeks - far worse than a slower queue. Raise them knowing that.
+   */
+  linkedinMaxSendsPerHour: num(process.env.LINKEDIN_MAX_SENDS_PER_HOUR, 5),
+  linkedinMaxSendsPerDay: num(process.env.LINKEDIN_MAX_SENDS_PER_DAY, 15),
+  /** LinkedIn's own ceiling is around 100 invitations a week. Stay under it. */
+  linkedinWeeklyInviteLimit: num(process.env.LINKEDIN_WEEKLY_INVITE_LIMIT, 80),
+  /** Result pages to read per search. Each is 25 postings. */
+  linkedinJobPages: num(process.env.LINKEDIN_JOB_PAGES, 3),
+  /** How many people to keep per company, per role. */
+  linkedinContactsPerCompany: num(process.env.LINKEDIN_CONTACTS_PER_COMPANY, 3),
+  /**
+   * Pause between LinkedIn page loads, in ms. Slower than the form filler's
+   * delay on purpose: this is someone else's site being read at volume, and
+   * the rate is the single most visible difference between a person browsing
+   * and a script scraping.
+   */
+  linkedinDelayMs: num(process.env.LINKEDIN_DELAY_MS, 1800),
+
   storageDir: rooted(process.env.STORAGE_DIR ?? './storage'),
   repoRoot: REPO_ROOT,
+  /** Base URL for the web app (used for password reset links, etc.) */
+  webOrigin: process.env.WEB_ORIGIN ?? 'http://localhost:3000',
 } as const;
 
 export const artifactsDir = path.join(config.storageDir, 'artifacts');

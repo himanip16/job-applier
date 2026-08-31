@@ -5,8 +5,10 @@
  * answer bank, so the destructive suites refuse to start unless the database
  * name ends in _test.
  */
+const { config } = await import('../src/lib/config.js');
+
 export function requireTestDatabase(): string {
-  const url = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || '';
+  const url = process.env.TEST_DATABASE_URL || config.testDatabaseUrl || config.databaseUrl || '';
   const name = (url.split('/').pop() ?? '').split('?')[0] ?? '';
   if (!/_test$/.test(name)) {
     throw new Error(

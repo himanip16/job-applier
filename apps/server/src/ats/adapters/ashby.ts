@@ -47,7 +47,7 @@ export const ashbyAdapter: AtsAdapter = {
   },
 
   async extractForm(page) {
-    return extractFields(page, { harvestComboboxOptions: true });
+    return extractFields(page, { harvestComboboxOptions: false });
   },
 
   fileInputs(fields) {

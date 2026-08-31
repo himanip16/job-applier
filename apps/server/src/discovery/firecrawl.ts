@@ -63,8 +63,7 @@ export async function firecrawlSearch(
 ): Promise<SearchResponse> {
   if (!config.firecrawlApiKey) {
     throw new FirecrawlError(
-      'No Firecrawl key configured. Get one at firecrawl.dev and put FIRECRAWL_API_KEY in .env, ' +
-        'then restart the server.',
+      'No Firecrawl key configured. Get one at firecrawl.dev and add it on the Settings page.',
     );
   }
 
@@ -135,7 +134,7 @@ function describeHttpFailure(status: number, bodyText: string): FirecrawlError {
     case 401:
     case 403:
       return new FirecrawlError(
-        `Firecrawl rejected the API key${suffix}. Check FIRECRAWL_API_KEY in .env.`,
+        `Firecrawl rejected the API key${suffix}. Check your key on the Settings page.`,
         status,
       );
     case 402:

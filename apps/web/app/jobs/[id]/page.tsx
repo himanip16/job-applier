@@ -23,6 +23,8 @@ export default function JobPage() {
   const [error, setError] = useState<string | null>(null); // page-load errors
   const [rescoreError, setRescoreError] = useState<string | null>(null); // rescore-only errors
   const [rescoreBusy, setRescoreBusy] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [categories, setCategories] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -42,8 +44,27 @@ export default function JobPage() {
     }
   }, [load]);
 
+  const handleReject = useCallback(async (category?: string, reason?: string) => {
+    try {
+      await api(`/api/leads/${params.id}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ category, reason }),
+      });
+      await load();
+      setRejecting(false);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [params.id, load]);
+
   useEffect(() => {
     load().catch((e) => setError((e as Error).message));
+    api('/api/sources')
+      .then((d) => {
+        const dd = d as { sources: { id: string; handleHint: string }[]; rejectCategories: string[]; searchConfigured: boolean };
+        setCategories(dd.rejectCategories);
+      })
+      .catch(() => {});
   }, [load]);
 
   if (error) {
@@ -58,11 +79,19 @@ export default function JobPage() {
 
   return (
     <>
-      <Header d={d} />
+      <Header d={d} onReject={() => setRejecting(true)} />
       <MatchPanel d={d} busy={rescoreBusy} onRescore={handleRescore} rescoreError={rescoreError} />
       <ApplicationPanel d={d} />
       <InterviewPanel d={d} />
       <OutcomePanel d={d} />
+      {rejecting && d.lead && (
+        <RejectDialog
+          lead={d.lead}
+          categories={categories}
+          onClose={() => setRejecting(false)}
+          onDone={handleReject}
+        />
+      )}
     </>
   );
 }

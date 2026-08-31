@@ -387,7 +387,12 @@ async function deepScore(
       // to be the only place the experience check ran, and it subtracted from
       // the score rather than blocking - so a model's 90 became a 33 and still
       // outranked jobs that were genuinely open.
-      const adjustedFit = applyHardRules(fit, { ...constraints, job: entry.job });
+      const adjustedFit = applyHardRules(fit, { 
+        candidateYears: constraints.candidateYears, 
+        needsSponsorship: constraints.needsSponsorship,
+        salaryExpectations: constraints.salaryExpectations,
+        job: entry.job 
+      });
 
       const lex = scoreLexically(entry.job, scoring);
       const blended = blendScores(adjustedFit, lex);

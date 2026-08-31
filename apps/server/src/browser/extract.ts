@@ -448,10 +448,10 @@ export async function extractFields(
 async function harvestOptions(page: Page, selector: string, max: number): Promise<FieldOption[]> {
   const input = page.locator(selector).first();
   try {
-    await input.scrollIntoViewIfNeeded({ timeout: 3000 });
-    await input.click({ timeout: 5000 });
+    await input.scrollIntoViewIfNeeded({ timeout: 2000 });
+    await input.click({ timeout: 3000 });
     const options = page.locator('[role="option"], .select__option');
-    await options.first().waitFor({ state: 'visible', timeout: 3000 });
+    await options.first().waitFor({ state: 'visible', timeout: 2000 });
     const count = Math.min(await options.count(), max);
     const out: FieldOption[] = [];
     for (let i = 0; i < count; i++) {

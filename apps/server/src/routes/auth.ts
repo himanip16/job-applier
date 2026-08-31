@@ -1,16 +1,18 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import rateLimit from '@fastify/rate-limit';
 import { prisma } from '../lib/db.js';
-import { hashPassword, passwordProblem, verifyPassword } from '../auth/passwords.js';
+import { hashPassword, verifyPassword, passwordProblem } from '../auth/passwords.js';
+import { createSession, destroySession, currentUser, setSessionCookie, clearSessionCookie, readCookie, SESSION_COOKIE } from '../auth/sessions.js';
+import { config } from '../lib/config.js';
 import {
-  clearSessionCookie,
-  createSession,
-  currentUser,
-  destroySession,
-  readCookie,
-  setSessionCookie,
-  SESSION_COOKIE,
-} from '../auth/sessions.js';
+  createPasswordResetToken,
+  completePasswordReset,
+} from '../auth/password-reset.js';
+import { sendPasswordResetEmail } from '../lib/email.js';
+
+/** Precomputed valid scrypt hash for timing-safe login checks when user doesn't exist. */
+const DUMMY_HASH = 'scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
 /**
  * Signing in.
@@ -30,6 +32,15 @@ const Credentials = z.object({
 const BAD_CREDENTIALS = 'That email and password do not match an account.';
 
 export function registerAuthRoutes(app: FastifyInstance) {
+  // Register rate limiting plugin
+  app.register(rateLimit, {
+    max: 10, // 10 requests
+    timeWindow: '1 minute', // per minute
+    errorResponseBuilder: (req, context) => ({
+      error: 'Too many requests. Please try again later.',
+    }),
+  });
+
   /**
    * Who is asking, and whether anyone can sign up.
    *
@@ -62,15 +73,30 @@ export function registerAuthRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: 'There is already an account with that email. Sign in instead.' });
     }
 
-    const user = await prisma.user.create({
-      data: { email, passwordHash: await hashPassword(parsed.data.password) },
-    });
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: { email, passwordHash: await hashPassword(parsed.data.password) },
+      });
+    } catch (err) {
+      // Handle race condition: another request may have created the user first
+      if ((err as { code?: string }).code === 'P2002') {
+        return reply.code(409).send({ error: 'There is already an account with that email. Sign in instead.' });
+      }
+      throw err;
+    }
 
-    // Adopt the pre-sign-in profile rather than stranding it. A single-user
-    // install that has been running for weeks has all its history on a profile
-    // with no owner, and the person creating the first account is that owner.
-    const orphan = await prisma.profile.findFirst({ where: { userId: null } });
-    if (orphan) await prisma.profile.update({ where: { id: orphan.id }, data: { userId: user.id } });
+    // Adopt the pre-sign-in profile rather than stranding it. This is for single-user
+    // migrations where a profile existed before sign-in was implemented. We adopt
+    // the first orphan profile found - if multiple orphans exist, this is non-deterministic,
+    // but that should not happen in normal operation.
+    const orphan = await prisma.profile.findFirst({ 
+      where: { userId: null },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (orphan) {
+      await prisma.profile.update({ where: { id: orphan.id }, data: { userId: user.id } });
+    }
 
     await startSession(reply, req, user.id);
     return { user: { id: user.id, email: user.email }, adoptedExistingProfile: Boolean(orphan) };
@@ -83,11 +109,11 @@ export function registerAuthRoutes(app: FastifyInstance) {
 
     const user = await prisma.user.findUnique({ where: { email } });
     // Hash anyway when there is no such user, so the response time does not
-    // say whether the address is registered.
+    // say whether the address is registered. Use a valid precomputed hash.
     const ok = user
       ? await verifyPassword(parsed.data.password, user.passwordHash)
-      : await verifyPassword(parsed.data.password, 'scrypt$16384$8$1$AAAA$AAAA');
-    if (!user || !ok) return reply.code(401).send({ error: BAD_CREDENTIALS });
+      : await verifyPassword(parsed.data.password, DUMMY_HASH);
+    if (!user || !ok) return reply.code(401).send({ error: BAD_CREDENTIALS, code: 'BAD_CREDENTIALS' });
 
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     await startSession(reply, req, user.id);
@@ -103,29 +129,121 @@ export function registerAuthRoutes(app: FastifyInstance) {
 
   app.post('/api/auth/password', async (req, reply) => {
     const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in first.' });
+    if (!user) return reply.code(401).send({ error: 'Sign in first.', code: 'AUTH_REQUIRED' });
 
     const body = z
       .object({ current: z.string().min(1).max(200), next: z.string().min(1).max(200) })
       .safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'Give your current and new password.' });
 
-    const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
-    if (!(await verifyPassword(body.data.current, row.passwordHash))) {
-      return reply.code(401).send({ error: 'That is not your current password.' });
-    }
     const weak = passwordProblem(body.data.next);
     if (weak) return reply.code(400).send({ error: weak });
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { passwordHash: await hashPassword(body.data.next) },
-    });
-    // Every other browser is signed out; the one that made the change is not.
-    const keep = readCookie(req.headers.cookie, SESSION_COOKIE);
-    await prisma.session.deleteMany({
-      where: { userId: user.id, ...(keep ? { NOT: { token: keep } } : {}) },
-    });
+    // Hash password before transaction (CPU work doesn't need DB)
+    const passwordHash = await hashPassword(body.data.next);
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Verify current password within transaction
+        const row = await tx.user.findUniqueOrThrow({ where: { id: user.id } });
+        if (!(await verifyPassword(body.data.current, row.passwordHash))) {
+          throw new Error('That is not your current password.');
+        }
+
+        // Update password
+        await tx.user.update({
+          where: { id: user.id },
+          data: { passwordHash },
+        });
+
+        // Invalidate all other sessions (keep current session)
+        const keep = readCookie(req.headers.cookie, SESSION_COOKIE);
+        await tx.session.deleteMany({
+          where: { userId: user.id, ...(keep ? { NOT: { token: keep } } : {}) },
+        });
+      });
+
+      return { ok: true };
+    } catch (error) {
+      const message = (error as Error).message;
+      if (message === 'That is not your current password.') {
+        return reply.code(401).send({ error: message });
+      }
+      throw error;
+    }
+  });
+
+  /**
+   * Request a password reset.
+   *
+   * This endpoint is deliberately permissive: it always returns success,
+   * even if the email doesn't exist. This prevents account enumeration.
+   */
+  app.post('/api/auth/reset-request', {
+    config: {
+      rateLimit: {
+        max: 3, // 3 requests
+        timeWindow: '15 minutes', // per 15 minutes (stricter than global limit)
+      },
+    },
+  }, async (req, reply) => {
+    const body = z.object({ email: z.string().trim().min(3).max(320) }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'Give an email address.' });
+
+    const email = body.data.email.toLowerCase();
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    if (user) {
+      const token = await createPasswordResetToken(user.id);
+      const resetUrl = `${config.webOrigin}/reset-complete?token=${token}`;
+      
+      // Send the password reset email
+      const sent = await sendPasswordResetEmail({ email: user.email, resetUrl });
+      
+      if (!sent) {
+        // Log failure but don't reveal to user (prevents account enumeration)
+        console.error('[Auth] Failed to send password reset email', { email: user.email });
+      }
+      
+      // In development mode, return the token for testing
+      if (process.env.NODE_ENV === 'development') {
+        return { ok: true, token, resetUrl, message: 'Development mode: token returned in response' };
+      }
+    }
+
+    // Always return success to prevent account enumeration
+    return { ok: true };
+  });
+
+  /**
+   * Complete a password reset using a token.
+   */
+  app.post('/api/auth/reset-complete', {
+    config: {
+      rateLimit: {
+        max: 5, // 5 requests
+        timeWindow: '15 minutes', // per 15 minutes (stricter than global limit)
+      },
+    },
+  }, async (req, reply) => {
+    const body = z
+      .object({
+        token: z.string().min(1),
+        password: z.string().min(1).max(200),
+      })
+      .safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'Give a token and a new password.' });
+
+    const weak = passwordProblem(body.data.password);
+    if (weak) return reply.code(400).send({ error: weak });
+
+    // Use the atomic completePasswordReset function
+    const success = await completePasswordReset(body.data.token, body.data.password);
+    
+    if (!success) {
+      return reply.code(400).send({ error: 'That reset link is invalid or has expired. Request a new one.' });
+    }
+
     return { ok: true };
   });
 }

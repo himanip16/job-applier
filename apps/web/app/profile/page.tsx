@@ -8,14 +8,14 @@ interface Resume { id: string; label: string; filename: string; bytes: number; i
 interface Profile {
   id: string; email: string; fullName: string; firstName: string; lastName: string;
   phone: string | null; city: string | null; region: string | null; country: string | null;
-  linkedin: string | null; github: string | null; website: string | null; summary: string | null;
+  citizenship: string | null; expectedCTC: string | null; linkedin: string | null; github: string | null; website: string | null; summary: string | null;
   facts: Fact[]; resumes: Resume[];
 }
 
 const FIELDS: [keyof Profile, string][] = [
   ['fullName', 'Full name'], ['firstName', 'First name'], ['lastName', 'Last name'],
   ['email', 'Email'], ['phone', 'Phone'], ['city', 'City'], ['region', 'State / region'],
-  ['country', 'Country'], ['linkedin', 'LinkedIn URL'], ['github', 'GitHub URL'],
+  ['country', 'Country'], ['citizenship', 'Citizenship'], ['expectedCTC', 'Expected CTC (Salary)'], ['linkedin', 'LinkedIn URL'], ['github', 'GitHub URL'],
   ['website', 'Website / portfolio'],
 ];
 
@@ -24,11 +24,14 @@ const FIELDS: [keyof Profile, string][] = [
  * appearing on every single application.
  */
 const SUGGESTED: { key: string; label: string }[] = [
+  { key: 'citizenship.country', label: 'Citizenship country' },
   { key: 'work_auth.authorized', label: 'Legally authorized to work in the country of the role' },
   { key: 'work_auth.sponsorship_required', label: 'Requires visa sponsorship now or in future' },
   { key: 'work_auth.visa_status', label: 'Current visa / work authorization status' },
   { key: 'experience.years_total', label: 'Years of professional experience' },
   { key: 'compensation.expectation', label: 'Salary expectation' },
+  { key: 'compensation.expectation_min', label: 'Minimum salary expectation' },
+  { key: 'compensation.expectation_max', label: 'Maximum salary expectation' },
   { key: 'availability.notice_period', label: 'Notice period' },
   { key: 'availability.start_date', label: 'Earliest start date' },
   { key: 'logistics.relocate', label: 'Willing to relocate' },
@@ -59,6 +62,7 @@ export default function ProfilePage() {
           firstName: profile.firstName, lastName: profile.lastName,
           phone: profile.phone ?? undefined, city: profile.city ?? undefined,
           region: profile.region ?? undefined, country: profile.country ?? undefined,
+          citizenship: profile.citizenship ?? undefined, expectedCTC: profile.expectedCTC ?? undefined,
           linkedin: profile.linkedin ?? undefined, github: profile.github ?? undefined,
           website: profile.website ?? undefined, summary: profile.summary ?? undefined,
         }),

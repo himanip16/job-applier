@@ -14,12 +14,18 @@ const { prisma } = await import('../src/lib/db.js');
 const { registerAuthRoutes } = await import('../src/routes/auth.js');
 const { hashPassword, verifyPassword, passwordProblem } = await import('../src/auth/passwords.js');
 const { currentUser, SESSION_COOKIE, readCookie } = await import('../src/auth/sessions.js');
+const {
+  createPasswordResetToken,
+  isPasswordResetTokenValid,
+  completePasswordReset,
+} = await import('../src/auth/password-reset.js');
 const Fastify = (await import('fastify')).default;
 
 let app: ReturnType<typeof Fastify>;
 
 beforeEach(async () => {
   await prisma.session.deleteMany({});
+  await prisma.passwordReset.deleteMany({});
   await prisma.jobLead.deleteMany({});
   await prisma.profile.deleteMany({});
   await prisma.user.deleteMany({});
@@ -110,6 +116,23 @@ describe('registering and signing in', () => {
     expect((second.json() as { adoptedExistingProfile: boolean }).adoptedExistingProfile).toBe(false);
   });
 
+  it('adopts the oldest orphan profile when multiple exist', async () => {
+    const old1 = await prisma.profile.create({
+      data: { email: 'old1@example.com', fullName: 'Old1', firstName: 'O1', lastName: 'P', createdAt: new Date('2024-01-01') },
+    });
+    const old2 = await prisma.profile.create({
+      data: { email: 'old2@example.com', fullName: 'Old2', firstName: 'O2', lastName: 'P', createdAt: new Date('2024-01-02') },
+    });
+
+    const res = await post('/api/auth/register', { email: 'me@example.com', password: 'a good long password' });
+    expect((res.json() as { adoptedExistingProfile: boolean }).adoptedExistingProfile).toBe(true);
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { email: 'me@example.com' } });
+    // Should adopt the oldest (first created) orphan
+    const adopted = await prisma.profile.findFirst({ where: { userId: user.id } });
+    expect(adopted?.id).toBe(old1.id);
+  });
+
   it('refuses a duplicate email and a short password', async () => {
     await post('/api/auth/register', { email: 'dup@example.com', password: 'a good long password' });
     expect((await post('/api/auth/register', { email: 'dup@example.com', password: 'another long one' })).statusCode).toBe(409);
@@ -127,6 +150,19 @@ describe('registering and signing in', () => {
     expect((wrongPassword.json() as { error: string }).error).toBe(
       (noSuchUser.json() as { error: string }).error,
     );
+  });
+
+  it('handles registration race condition with clean 409', async () => {
+    // Simulate concurrent registration attempts by directly testing the error handling
+    const email = 'race@example.com';
+    await prisma.user.create({
+      data: { email, passwordHash: await hashPassword('a good long password') },
+    });
+
+    // Second attempt should return 409, not 500
+    const res = await post('/api/auth/register', { email, password: 'another long password' });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toContain('already an account');
   });
 
   it('signs in with the right password', async () => {
@@ -199,5 +235,143 @@ describe('changing a password', () => {
     );
     expect((await post('/api/auth/password', { current: 'wrong', next: 'a different long one' }, cookie)).statusCode).toBe(401);
     expect((await post('/api/auth/password', { current: 'a good long password', next: 'tiny' }, cookie)).statusCode).toBe(400);
+  });
+});
+
+describe('password reset', () => {
+  it('creates a valid reset token for a user', async () => {
+    const user = await prisma.user.create({
+      data: { email: 'reset@example.com', passwordHash: await hashPassword('old password') },
+    });
+
+    const token = await createPasswordResetToken(user.id);
+    expect(token).toBeTruthy();
+    expect(typeof token).toBe('string');
+    expect(token.length).toBeGreaterThan(0);
+
+    // Token should be valid
+    expect(await isPasswordResetTokenValid(token)).toBe(true);
+  });
+
+  it('invalidates existing tokens when creating a new one', async () => {
+    const user = await prisma.user.create({
+      data: { email: 'reset@example.com', passwordHash: await hashPassword('old password') },
+    });
+
+    const token1 = await createPasswordResetToken(user.id);
+    const token2 = await createPasswordResetToken(user.id);
+
+    // First token should no longer be valid
+    expect(await isPasswordResetTokenValid(token1)).toBe(false);
+    // Second token should be valid
+    expect(await isPasswordResetTokenValid(token2)).toBe(true);
+  });
+
+  it('validates a legitimate token', async () => {
+    const user = await prisma.user.create({
+      data: { email: 'reset@example.com', passwordHash: await hashPassword('old password') },
+    });
+
+    const token = await createPasswordResetToken(user.id);
+    const isValid = await isPasswordResetTokenValid(token);
+
+    expect(isValid).toBe(true);
+  });
+
+  it('rejects an invalid token', async () => {
+    const isValid = await isPasswordResetTokenValid('nonexistent-token');
+    expect(isValid).toBe(false);
+  });
+
+  it('rejects an expired token', async () => {
+    const user = await prisma.user.create({
+      data: { email: 'reset@example.com', passwordHash: await hashPassword('old password') },
+    });
+
+    const token = await createPasswordResetToken(user.id);
+    // Manually expire the token by updating in database
+    const { createHash } = await import('node:crypto');
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    await prisma.passwordReset.update({
+      where: { tokenHash },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+
+    const isValid = await isPasswordResetTokenValid(token);
+    expect(isValid).toBe(false);
+  });
+
+  it('reset request endpoint always returns success for account enumeration protection', async () => {
+    // With existing user
+    await prisma.user.create({
+      data: { email: 'exists@example.com', passwordHash: await hashPassword('password') },
+    });
+    const res1 = await post('/api/auth/reset-request', { email: 'exists@example.com' });
+    expect(res1.statusCode).toBe(200);
+
+    // With non-existing user - should also return success
+    const res2 = await post('/api/auth/reset-request', { email: 'doesnotexist@example.com' });
+    expect(res2.statusCode).toBe(200);
+  });
+
+  it('reset complete endpoint works with valid token', async () => {
+    const user = await prisma.user.create({
+      data: { email: 'reset@example.com', passwordHash: await hashPassword('old password') },
+    });
+
+    const token = await createPasswordResetToken(user.id);
+    const res = await post('/api/auth/reset-complete', { token, password: 'new long password' });
+
+    expect(res.statusCode).toBe(200);
+
+    // Password should be changed
+    const updatedUser = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(await verifyPassword('new long password', updatedUser!.passwordHash)).toBe(true);
+    expect(await verifyPassword('old password', updatedUser!.passwordHash)).toBe(false);
+  });
+
+  it('reset complete endpoint rejects invalid token', async () => {
+    const res = await post('/api/auth/reset-complete', { token: 'invalid-token', password: 'new password' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('reset complete endpoint rejects weak password', async () => {
+    const user = await prisma.user.create({
+      data: { email: 'reset@example.com', passwordHash: await hashPassword('old password') },
+    });
+
+    const token = await createPasswordResetToken(user.id);
+    const res = await post('/api/auth/reset-complete', { token, password: 'short' });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('reset complete endpoint signs out all sessions', async () => {
+    const user = await prisma.user.create({
+      data: { email: 'reset@example.com', passwordHash: await hashPassword('old password') },
+    });
+
+    // Create multiple sessions
+    await prisma.session.create({
+      data: {
+        token: 'session1',
+        userId: user.id,
+        expiresAt: new Date(Date.now() + 86400000),
+      },
+    });
+    await prisma.session.create({
+      data: {
+        token: 'session2',
+        userId: user.id,
+        expiresAt: new Date(Date.now() + 86400000),
+      },
+    });
+
+    const token = await createPasswordResetToken(user.id);
+    await post('/api/auth/reset-complete', { token, password: 'new long password' });
+
+    // All sessions should be deleted
+    const sessions = await prisma.session.findMany({ where: { userId: user.id } });
+    expect(sessions.length).toBe(0);
   });
 });

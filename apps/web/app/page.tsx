@@ -24,22 +24,22 @@ interface SetupStep {
 }
 
 interface Health {
-  llmConfigured: boolean;
-  headless: boolean;
-  provider: string;
-  writing: string;
-  judgement: string;
-  estimatedCosts: { perApplication: number; perTailoring: number; perDeepScoredLead: number; free: boolean };
+  ok: boolean;
 }
 
 export default function Home() {
   const { data: ov, error } = useOverview();
   const [health, setHealth] = useState<Health | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
 
   // Health is separate and barely changes — a key being added is the only
   // thing that moves it, and that already forces a reload of this page.
   useEffect(() => {
-    api<Health>('/api/health').then(setHealth).catch(() => {});
+    api<Health>('/api/health')
+      .then(setHealth)
+      .catch((err) => {
+        setHealthError(err.message || 'Failed to load status');
+      });
   }, []);
 
   if (error) {
@@ -47,9 +47,25 @@ export default function Home() {
       <div className="panel">
         <h2>Cannot reach the server</h2>
         <div className="notice bad">{error}</div>
-        <p className="small muted" style={{ marginTop: '.6rem' }}>
-          Start it with <code>pnpm dev:server</code>. It listens on :8787.
-        </p>
+        <div className="row" style={{ gap: '.6rem', marginTop: '.6rem' }}>
+          <button 
+            onClick={() => navigator.clipboard.writeText('pnpm dev:server')}
+            style={{
+              display: 'inline-block',
+              padding: '.4rem .8rem',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--border)',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: 'inherit',
+            }}
+          >
+            Copy start command
+          </button>
+          <span className="small muted" style={{ display: 'flex', alignItems: 'center' }}>
+            Server runs on port 8787
+          </span>
+        </div>
       </div>
     );
   }
@@ -154,7 +170,14 @@ export default function Home() {
         </div>
       </div>
 
-      {health && <StatusPanel health={health} submitted={ov?.counts.submitted ?? 0} />}
+      {healthError ? (
+        <div className="panel">
+          <h2>Status unavailable</h2>
+          <div className="notice bad">{healthError}</div>
+        </div>
+      ) : health ? (
+        <StatusPanel health={health} submitted={ov?.counts.submitted ?? 0} />
+      ) : null}
     </>
   );
 }
@@ -182,11 +205,18 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
         <div>
           <h2 style={{ margin: 0 }}>Matches you have not applied to</h2>
           <p className="sub" style={{ margin: '.2rem 0 0' }}>
-            {total} waiting on a decision. Best {matches.length} first.
+            {total} saved or new. Best {matches.length} first.
           </p>
         </div>
-        <a href="/discover">
-          <button className="primary">See all {total}</button>
+        <a href="/discover" className="primary" style={{
+          display: 'inline-block',
+          padding: '.4rem .8rem',
+          borderRadius: 'var(--radius-sm)',
+          background: 'var(--accent)',
+          color: 'white',
+          textDecoration: 'none',
+        }}>
+          See all {total}
         </a>
       </div>
 
@@ -205,6 +235,8 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
                 borderRadius: 'var(--radius-sm)',
                 textDecoration: 'none',
                 color: 'inherit',
+                display: 'flex',
+                alignItems: 'center',
               }}
             >
               <div className="row" style={{ gap: '.55rem', minWidth: 0 }}>
@@ -236,7 +268,13 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
                   </span>
                 )}
               </div>
-              <button style={{ flex: 'none' }}>Open</button>
+              <span style={{
+                flex: 'none',
+                padding: '.3rem .6rem',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--border)',
+                fontSize: '.85rem',
+              }}>Open</span>
             </a>
           );
         })}
@@ -277,11 +315,24 @@ function Hero({ ov }: { ov: Overview | null }) {
         </div>
       ) : nothingYet ? (
         <div className="row" style={{ gap: '.6rem', marginTop: '1rem' }}>
-          <a href="/discover">
-            <button className="primary">Find jobs for me</button>
+          <a href="/discover" className="primary" style={{
+            display: 'inline-block',
+            padding: '.4rem .8rem',
+            borderRadius: 'var(--radius-sm)',
+            background: 'var(--accent)',
+            color: 'white',
+            textDecoration: 'none',
+          }}>
+            Find jobs for me
           </a>
-          <a href="/runs">
-            <button>Or paste a job URL</button>
+          <a href="/runs" style={{
+            display: 'inline-block',
+            padding: '.4rem .8rem',
+            borderRadius: 'var(--radius-sm)',
+            background: 'var(--border)',
+            textDecoration: 'none',
+          }}>
+            Or paste a job URL
           </a>
         </div>
       ) : (
@@ -341,8 +392,15 @@ function Hero({ ov }: { ov: Overview | null }) {
                   .join(' · ')}
               </div>
             </div>
-            <a href="/runs">
-              <button className="primary">Open them</button>
+            <a href="/runs" className="primary" style={{
+              display: 'inline-block',
+              padding: '.4rem .8rem',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--accent)',
+              color: 'white',
+              textDecoration: 'none',
+            }}>
+              Open them
             </a>
           </div>
         </div>
@@ -398,8 +456,14 @@ function SetupPanel({ setup }: { setup: SetupStep[] }) {
             </div>
           </div>
           {!s.done && s.href && (
-            <a href={s.href}>
-              <button>Fix</button>
+            <a href={s.href} style={{
+              display: 'inline-block',
+              padding: '.3rem .6rem',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--border)',
+              textDecoration: 'none',
+            }}>
+              Fix
             </a>
           )}
         </div>
@@ -461,8 +525,14 @@ function Feature({
           </p>
         </div>
       </div>
-      <a href={href} style={{ flex: 'none' }}>
-        <button>{cta}</button>
+      <a href={href} style={{ flex: 'none',
+        display: 'inline-block',
+        padding: '.3rem .6rem',
+        borderRadius: 'var(--radius-sm)',
+        background: 'var(--border)',
+        textDecoration: 'none',
+      }}>
+        {cta}
       </a>
     </div>
   );
@@ -478,46 +548,13 @@ function Small({ href, title, note }: { href: string; title: string; note: strin
 }
 
 function StatusPanel({ health, submitted }: { health: Health; submitted: number }) {
-  const c = health.estimatedCosts;
   return (
     <div className="panel">
       <h2>Status</h2>
       <div className="row" style={{ gap: '2rem', marginTop: '.4rem', alignItems: 'flex-start' }}>
         <Stat label="applications submitted" value={submitted} />
-        <Stat
-          label="model"
-          value={health.provider}
-          note={
-            health.writing === health.judgement
-              ? health.writing
-              : `${health.writing} · ${health.judgement}`
-          }
-        />
-        <Stat
-          label={c.free ? 'cost' : 'per application'}
-          value={c.free ? 'free tier' : `$${c.perApplication.toFixed(3)}`}
-          note={c.free ? 'limited by requests, not spend' : `$${c.perTailoring.toFixed(2)} per resume tailor`}
-        />
-        <Stat
-          label="browser"
-          value={health.headless ? 'headless' : 'visible'}
-          note={health.headless ? 'set HEADLESS=false so you can take over on a captcha' : 'you can take over when needed'}
-        />
+        <Stat label="system" value="operational" />
       </div>
-      {!health.llmConfigured && (
-        <div className="notice bad" style={{ marginTop: '.9rem' }}>
-          No model key configured. Set <code>GEMINI_API_KEY</code> (free at aistudio.google.com/apikey)
-          or <code>ANTHROPIC_API_KEY</code> in <code>.env</code> and restart the server. Form filling
-          from your profile still works without one; cover letters and inference do not.
-        </div>
-      )}
-      {health.headless && (
-        <div className="notice" style={{ marginTop: '.9rem' }}>
-          Running headless. Set <code>HEADLESS=false</code> — a visible, persistent browser profile
-          passes invisible CAPTCHA far more often, and it is the only way you can take over when a
-          challenge appears.
-        </div>
-      )}
     </div>
   );
 }
