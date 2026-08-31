@@ -66,8 +66,8 @@ model Session {
 /// regain access to their account without knowing their current password.
 model PasswordReset {
   id        String   @id @default(cuid())
-  /// Random token sent to the user's email.
-  token     String   @unique
+  /// SHA-256 hash of the random token sent to the user's email.
+  tokenHash String   @unique
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
@@ -76,7 +76,7 @@ model PasswordReset {
   usedAt    DateTime?
 
   @@index([userId])
-  @@index([token])
+  @@index([tokenHash])
   @@map("password_resets")
 }
 

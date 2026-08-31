@@ -47,7 +47,22 @@ export async function verifyPassword(password: string, stored: string): Promise<
   const n = Number(parts[1]);
   const r = Number(parts[2]);
   const p = Number(parts[3]);
-  if (!Number.isInteger(n) || !Number.isInteger(r) || !Number.isInteger(p)) return false;
+  
+  // Validate scrypt parameters to prevent CPU/memory exhaustion attacks
+  if (
+    !Number.isInteger(n) ||
+    !Number.isInteger(r) ||
+    !Number.isInteger(p) ||
+    n < 1024 ||
+    n > 1_048_576 ||
+    r < 1 ||
+    r > 32 ||
+    p < 1 ||
+    p > 8 ||
+    (n & (n - 1)) !== 0  // N must be a power of 2
+  ) {
+    return false;
+  }
 
   let salt: Buffer;
   let expected: Buffer;
@@ -70,12 +85,15 @@ export async function verifyPassword(password: string, stored: string): Promise<
 /**
  * What is wrong with a password, in a sentence, or null if nothing is.
  *
- * Length is the only rule. Composition rules ("one capital, one symbol")
- * measurably push people toward Password1! and away from a long passphrase,
- * which is the opposite of what they are for.
+ * Password must be at least 10 characters and include uppercase, lowercase,
+ * number, and special character for enhanced security.
  */
 export function passwordProblem(password: string): string | null {
-  if (password.length < 10) return 'Use at least 10 characters. A short phrase is ideal.';
+  if (password.length < 10) return 'Use at least 10 characters.';
   if (password.length > 200) return 'That is longer than 200 characters.';
+  if (!/[A-Z]/.test(password)) return 'Include at least one uppercase letter.';
+  if (!/[a-z]/.test(password)) return 'Include at least one lowercase letter.';
+  if (!/\d/.test(password)) return 'Include at least one number.';
+  if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) return 'Include at least one special character (!@#$%^&*(),.?":{}|<>).';
   return null;
 }

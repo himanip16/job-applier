@@ -26,6 +26,7 @@ const num = (v: string | undefined, d: number) => {
 export const config = {
   port: num(process.env.PORT, 8787),
   databaseUrl: process.env.DATABASE_URL ?? '',
+  testDatabaseUrl: process.env.TEST_DATABASE_URL ?? '',
 
   /**
    * The four values below are getters, not constants.
@@ -140,6 +141,8 @@ export const config = {
 
   storageDir: rooted(process.env.STORAGE_DIR ?? './storage'),
   repoRoot: REPO_ROOT,
+  /** Base URL for the web app (used for password reset links, etc.) */
+  webOrigin: process.env.WEB_ORIGIN ?? 'http://localhost:3000',
 } as const;
 
 export const artifactsDir = path.join(config.storageDir, 'artifacts');

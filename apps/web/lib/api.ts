@@ -10,9 +10,14 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
    * failing that way, and the 400 it produces has no `error` field, so the UI
    * rendered a bare "Bad Request" and the click looked like it did nothing.
    */
-  const headers: Record<string, string> = { ...((init?.headers as Record<string, string>) ?? {}) };
-  if (init?.body !== undefined && init.body !== null) {
-    headers['Content-Type'] ??= 'application/json';
+  const headers = new Headers(init?.headers);
+
+  if (
+    init?.body !== undefined &&
+    init.body !== null &&
+    !(init.body instanceof FormData)
+  ) {
+    headers.set('Content-Type', 'application/json');
   }
 
   /**
@@ -24,15 +29,31 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
    * signed out, which looks exactly like a broken login.
    */
   const res = await fetch(`${API}${path}`, { ...init, headers, credentials: 'include' });
-  const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+  
+  const raw = await res.json().catch(() => null);
 
-  if (res.status === 401 && typeof window !== 'undefined') {
+  const body =
+    raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as {
+          error?: string;
+          message?: string;
+          code?: string;
+        })
+      : {};
+
+  // Only redirect on 401 if it's an authentication requirement, not a failed auth attempt
+  if (res.status === 401 && body.code === 'AUTH_REQUIRED' && typeof window !== 'undefined') {
     // The session went away - expired, signed out in another tab, or the
     // server restarted against a fresh database. Send them to sign in rather
     // than showing "Sign in to use this" in place of every panel.
     const here = window.location.pathname + window.location.search;
-    if (!window.location.pathname.startsWith('/signin')) {
+    // Exclude password reset pages from next parameter to prevent redirect loops
+    const isResetPage = window.location.pathname.startsWith('/reset-');
+    if (!window.location.pathname.startsWith('/signin') && !isResetPage) {
       window.location.href = `/signin?next=${encodeURIComponent(here)}`;
+    } else if (isResetPage) {
+      // For reset pages, redirect to signin without next parameter
+      window.location.href = '/signin';
     }
   }
 
@@ -42,5 +63,5 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     // sentence that says what went wrong.
     throw new Error(body.error ?? body.message ?? `${res.status} ${res.statusText}`);
   }
-  return body as T;
+  return raw as T;
 }

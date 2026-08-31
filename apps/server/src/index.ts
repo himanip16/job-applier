@@ -65,6 +65,8 @@ const PUBLIC_API = new Set([
   '/api/auth/login',
   '/api/auth/register',
   '/api/auth/logout',
+  '/api/auth/reset-request',
+  '/api/auth/reset-complete',
   '/api/health',
 ]);
 app.addHook('preHandler', async (req, reply) => {
