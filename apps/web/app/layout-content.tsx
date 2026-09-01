@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { useEffect } from 'react';
+import { usePathname } from 'next/navigation';
 import { Nav } from '../components/Nav';
 import { NeedsYou } from '../components/NeedsYou';
 import { AuthGate } from '../components/AuthGate';
@@ -12,11 +13,14 @@ import { useError } from '../contexts/ErrorContext';
 import { setRateLimitModalHandler } from '../lib/api';
 
 export function LayoutContent({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
   const { rateLimitError, showRateLimitModal, hideRateLimitModal } = useError();
 
   useEffect(() => {
     setRateLimitModalHandler(showRateLimitModal);
   }, [showRateLimitModal]);
+
+  const isPublicRoute = pathname?.startsWith('/signin') || pathname?.startsWith('/signup') || pathname?.startsWith('/reset');
 
   return (
     <>
@@ -34,10 +38,14 @@ export function LayoutContent({ children }: { children: ReactNode }) {
           <AccountMenu />
         </div>
       </header>
-      <AuthGate>
-        <NeedsYou />
+      {isPublicRoute ? (
         <div className="wrap">{children}</div>
-      </AuthGate>
+      ) : (
+        <AuthGate>
+          <NeedsYou />
+          <div className="wrap">{children}</div>
+        </AuthGate>
+      )}
       <RateLimitModal
         isOpen={rateLimitError !== null}
         onClose={hideRateLimitModal}

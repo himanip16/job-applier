@@ -9,6 +9,38 @@ export function setRateLimitModalHandler(handler: (provider: 'anthropic' | 'gemi
   showRateLimitModal = handler;
 }
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public code?: string
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+
+  isNetworkError(): boolean {
+    // Network errors typically don't have a status or have status 0
+    return this.status === 0;
+  }
+
+  isAuthError(): boolean {
+    return this.status === 401;
+  }
+
+  isNotFound(): boolean {
+    return this.status === 404;
+  }
+
+  isServerError(): boolean {
+    return this.status >= 500;
+  }
+
+  isClientError(): boolean {
+    return this.status >= 400 && this.status < 500;
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   /**
    * Only declare a JSON body when there is one.
@@ -86,7 +118,11 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     // `error` is ours; `message` is what the framework produces for things
     // like a malformed body. Falling back to the status alone loses the only
     // sentence that says what went wrong.
-    throw new Error(body.error ?? body.message ?? `${res.status} ${res.statusText}`);
+    throw new ApiError(
+      body.error ?? body.message ?? `${res.status} ${res.statusText}`,
+      res.status,
+      body.code
+    );
   }
   return raw as T;
 }

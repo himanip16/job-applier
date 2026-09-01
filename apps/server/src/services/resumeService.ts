@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { prisma } from '../lib/db.js';
 import { resumesDir } from '../lib/config.js';
 import { extractResumeText, assessResumeText } from '../lib/resumeText.js';
+import { updateProfileKeywords } from '../discovery/keywordExtraction.js';
 
 export interface ResumeUploadResult {
   resume: {
@@ -65,6 +66,11 @@ export async function uploadResume(
     return record;
   });
 
+  // Extract and store keywords from the resume (outside transaction to avoid timeout)
+  if (text && text.trim().length >= 100) {
+    await updateProfileKeywords(profileId);
+  }
+
   return {
     resume: record,
     words: text.split(/\s+/).filter(Boolean).length,
@@ -73,7 +79,7 @@ export async function uploadResume(
 }
 
 export async function setDefaultResume(profileId: string, resumeId: string): Promise<void> {
-  await prisma.$transaction(async (tx) => {
+  const resume = await prisma.$transaction(async (tx) => {
     const resume = await tx.resumeFile.findFirstOrThrow({
       where: { id: resumeId, profileId },
     });
@@ -92,5 +98,12 @@ export async function setDefaultResume(profileId: string, resumeId: string): Pro
       where: { id: profileId },
       data: { resumeText: resume.text },
     });
+
+    return resume;
   });
+
+  // Extract and store keywords from the new default resume (outside transaction to avoid timeout)
+  if (resume.text && resume.text.trim().length >= 100) {
+    await updateProfileKeywords(profileId);
+  }
 }

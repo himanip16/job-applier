@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useOverview } from '../lib/overview';
+import { useAuth } from '../lib/auth';
 
 /**
  * The nudge.
@@ -20,7 +21,9 @@ import { useOverview } from '../lib/overview';
  * carries on without you coming back here.
  */
 export function NeedsYou() {
-  const { data } = useOverview();
+  const auth = useAuth();
+  // Only fetch overview if authenticated and has a profile.
+  const { data } = useOverview(auth.authenticated && !!auth.profile);
   const pathname = usePathname();
   const [dismissed, setDismissed] = useState<string | null>(null);
   const notifiedFor = useRef<string | null>(null);

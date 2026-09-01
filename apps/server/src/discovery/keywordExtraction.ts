@@ -199,7 +199,7 @@ export async function updateProfileKeywords(profileId: string): Promise<void> {
     // Clear keywords if no resume
     await prisma.profile.update({
       where: { id: profileId },
-      data: { resumeKeywords: null },
+      data: { resumeKeywords: null as any },
     });
     return;
   }

@@ -193,7 +193,7 @@ registerResumeRoutes(app, requireProfile);
 registerTrackerRoutes(app, requireProfile);
 registerSettingsRoutes(app);
 registerJobDetailRoutes(app, requireProfile);
-registerOutreachRoutes(app);
+registerOutreachRoutes(app, requireProfile);
 registerProfileRoutes(app, requireProfile);
 registerFactsRoutes(app, requireProfile);
 registerApplicationRoutes(app, requireProfile);

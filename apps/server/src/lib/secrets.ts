@@ -58,7 +58,7 @@ export const EDITABLE_SETTINGS = {
 
 export type SettingKey = keyof typeof EDITABLE_SETTINGS;
 
-export const isSettingKey = (k: string): k is SettingKey => k in EDITABLE_SETTINGS;
+export const isSettingKey = (k: string): k is SettingKey => Object.hasOwn(EDITABLE_SETTINGS, k);
 
 export const NAMED_API_KEY_KEYS = {
   anthropic: 'ANTHROPIC_API_KEYS',
@@ -114,7 +114,6 @@ export async function saveNamedApiKey(
   provider: ApiProvider,
   patch: { id?: string; name: string; value: string },
 ): Promise<NamedApiKey> {
-  const keys = readNamedApiKeys(provider);
   const trimmedName = patch.name.trim();
   const trimmedValue = patch.value.trim();
   if (!trimmedName || !trimmedValue) {
@@ -127,32 +126,132 @@ export async function saveNamedApiKey(
     value: trimmedValue,
   };
 
-  const existing = keys.filter((k) => k.id !== nextKey.id);
-  const updated = [...existing, nextKey].sort((a, b) => a.name.localeCompare(b.name));
-  await setSetting(NAMED_API_KEY_KEYS[provider], JSON.stringify(updated));
+  // Use transaction to prevent race conditions with concurrent modifications
+  const result = await prisma.$transaction(async (tx) => {
+    const keysKey = NAMED_API_KEY_KEYS[provider];
+    const activeKey = NAMED_API_KEY_ACTIVE_KEYS[provider];
 
+    // Read current state from database within transaction
+    const setting = await tx.setting.findUnique({ where: { key: keysKey } });
+    const keys = setting ? parseNamedApiKeys(setting.value) : [];
+
+    // Check for duplicate names (excluding the key being edited)
+    const nameExists = keys.some((k) => k.id !== nextKey.id && k.name === trimmedName);
+    if (nameExists) {
+      throw new Error('An API key with this name already exists.');
+    }
+
+    // Check if there's an explicit active key BEFORE saving
+    const activeSetting = await tx.setting.findUnique({ where: { key: activeKey } });
+    const hasExplicitActiveKey = !!activeSetting?.value;
+
+    const existing = keys.filter((k) => k.id !== nextKey.id);
+    const updated = [...existing, nextKey].sort((a, b) => a.name.localeCompare(b.name));
+
+    // Update keys
+    await tx.setting.upsert({
+      where: { key: keysKey },
+      create: { key: keysKey, value: JSON.stringify(updated) },
+      update: { value: JSON.stringify(updated) },
+    });
+
+    // Only set as active if there was no explicit active key before
+    if (!hasExplicitActiveKey) {
+      await tx.setting.upsert({
+        where: { key: activeKey },
+        create: { key: activeKey, value: nextKey.id },
+        update: { value: nextKey.id },
+      });
+    }
+
+    return { hasExplicitActiveKey };
+  });
+
+  // Update cache after successful transaction
+  const keys = readNamedApiKeys(provider);
+  cache.set(NAMED_API_KEY_KEYS[provider], JSON.stringify(keys));
+  
   const activeId = activeNamedApiKeyId(provider);
-  if (!activeId) await setActiveApiKey(provider, nextKey.id);
+  if (activeId) {
+    cache.set(NAMED_API_KEY_ACTIVE_KEYS[provider], activeId);
+  } else {
+    cache.delete(NAMED_API_KEY_ACTIVE_KEYS[provider]);
+  }
+
   return nextKey;
 }
 
 export async function setActiveApiKey(provider: ApiProvider, id: string): Promise<void> {
-  const keys = readNamedApiKeys(provider);
-  if (!keys.some((k) => k.id === id)) {
-    throw new Error('That API key is not in the saved list.');
-  }
-  await setSetting(NAMED_API_KEY_ACTIVE_KEYS[provider], id);
+  // Use transaction to prevent race conditions
+  await prisma.$transaction(async (tx) => {
+    const keysKey = NAMED_API_KEY_KEYS[provider];
+    const activeKey = NAMED_API_KEY_ACTIVE_KEYS[provider];
+
+    // Verify the key exists in the saved list
+    const setting = await tx.setting.findUnique({ where: { key: keysKey } });
+    const keys = setting ? parseNamedApiKeys(setting.value) : [];
+    if (!keys.some((k) => k.id === id)) {
+      throw new Error('That API key is not in the saved list.');
+    }
+
+    // Set as active
+    await tx.setting.upsert({
+      where: { key: activeKey },
+      create: { key: activeKey, value: id },
+      update: { value: id },
+    });
+  });
+
+  // Update cache after successful transaction
+  cache.set(NAMED_API_KEY_ACTIVE_KEYS[provider], id);
 }
 
 export async function clearNamedApiKey(provider: ApiProvider, id: string): Promise<void> {
-  const keys = readNamedApiKeys(provider);
-  const remaining = keys.filter((k) => k.id !== id);
-  await setSetting(NAMED_API_KEY_KEYS[provider], JSON.stringify(remaining));
+  // Use transaction to prevent race conditions with concurrent modifications
+  await prisma.$transaction(async (tx) => {
+    const keysKey = NAMED_API_KEY_KEYS[provider];
+    const activeKey = NAMED_API_KEY_ACTIVE_KEYS[provider];
 
-  const active = activeNamedApiKeyId(provider);
-  if (active === id) {
-    await clearSetting(NAMED_API_KEY_ACTIVE_KEYS[provider]);
-    if (remaining[0]) await setActiveApiKey(provider, remaining[0].id);
+    // Read current state from database within transaction
+    const setting = await tx.setting.findUnique({ where: { key: keysKey } });
+    const keys = setting ? parseNamedApiKeys(setting.value) : [];
+    const remaining = keys.filter((k) => k.id !== id);
+
+    // Update keys
+    if (remaining.length === 0) {
+      await tx.setting.deleteMany({ where: { key: keysKey } });
+    } else {
+      await tx.setting.upsert({
+        where: { key: keysKey },
+        create: { key: keysKey, value: JSON.stringify(remaining) },
+        update: { value: JSON.stringify(remaining) },
+      });
+    }
+
+    // Handle active key
+    const activeSetting = await tx.setting.findUnique({ where: { key: activeKey } });
+    const activeId = activeSetting?.value;
+    if (activeId === id) {
+      await tx.setting.deleteMany({ where: { key: activeKey } });
+      if (remaining[0]) {
+        await tx.setting.upsert({
+          where: { key: activeKey },
+          create: { key: activeKey, value: remaining[0].id },
+          update: { value: remaining[0].id },
+        });
+      }
+    }
+  });
+
+  // Update cache after successful transaction
+  const keys = readNamedApiKeys(provider);
+  cache.set(NAMED_API_KEY_KEYS[provider], JSON.stringify(keys));
+  
+  const activeId = activeNamedApiKeyId(provider);
+  if (activeId) {
+    cache.set(NAMED_API_KEY_ACTIVE_KEYS[provider], activeId);
+  } else {
+    cache.delete(NAMED_API_KEY_ACTIVE_KEYS[provider]);
   }
 }
 
@@ -165,13 +264,14 @@ export async function clearNamedApiKey(provider: ApiProvider, id: string): Promi
  */
 export async function loadSettings(): Promise<number> {
   try {
-    const rows = await prisma.setting.findMany();
+    // Clear cache before fetching to avoid race conditions with concurrent writes
     cache.clear();
+    const rows = await prisma.setting.findMany();
     for (const row of rows) if (row.value) cache.set(row.key, row.value);
     loaded = true;
     return cache.size;
   } catch {
-    loaded = true;
+    // Don't mark as loaded on error - allows retry and prevents stale state
     return 0;
   }
 }
@@ -207,11 +307,14 @@ export function secretOrigin(key: string, ...envFallbacks: string[]): 'saved' | 
 export async function setSetting(key: string, value: string): Promise<void> {
   const trimmed = value.trim();
   if (!trimmed) return clearSetting(key);
-  await prisma.setting.upsert({
-    where: { key },
-    create: { key, value: trimmed },
-    update: { value: trimmed },
+  await prisma.$transaction(async (tx) => {
+    await tx.setting.upsert({
+      where: { key },
+      create: { key, value: trimmed },
+      update: { value: trimmed },
+    });
   });
+  // Update cache after successful transaction
   cache.set(key, trimmed);
 }
 
@@ -223,7 +326,10 @@ export async function setSetting(key: string, value: string): Promise<void> {
  * .env, and the settings page says which is in force.
  */
 export async function clearSetting(key: string): Promise<void> {
-  await prisma.setting.deleteMany({ where: { key } });
+  await prisma.$transaction(async (tx) => {
+    await tx.setting.deleteMany({ where: { key } });
+  });
+  // Update cache after successful transaction
   cache.delete(key);
 }
 
@@ -247,6 +353,7 @@ export const settingsLoaded = (): boolean => loaded;
  */
 export function maskSecret(value: string): string {
   if (!value) return '';
-  if (value.length <= 8) return '••••';
-  return `${value.slice(0, 4)}••••${value.slice(-4)}`;
+  if (value.length <= 12) return '••••';
+  // Reveal only 2 characters at start and 2 at end for longer keys
+  return `${value.slice(0, 2)}••••${value.slice(-2)}`;
 }

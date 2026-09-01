@@ -3,6 +3,7 @@ import { normalizeLabel, tokenize } from '@ja/shared';
 import { prisma, type Prisma } from '../lib/db.js';
 import { generate, describeLlmError } from '../llm/client.js';
 import type { DiscoveredJob } from './sources.js';
+import { getTopSkills, type ResumeKeyword } from './keywordExtraction.js';
 
 /**
  * Ranking leads, and learning to rank them better.
@@ -140,7 +141,23 @@ export async function loadScoringContext(profileId: string): Promise<ScoringCont
     loadSignals(profileId),
     prisma.profile.findUnique({ where: { id: profileId }, include: { facts: true } }),
   ]);
-  return { signals, vocabulary: profile ? profileVocabulary(profile) : new Set() };
+  
+  const baseVocabulary: Set<string> = profile ? profileVocabulary(profile) : new Set();
+  
+  // Boost vocabulary with extracted resume keywords for better matching
+  const resumeKeywords = (profile?.resumeKeywords as ResumeKeyword[] | null) ?? [];
+  const topSkills = getTopSkills(resumeKeywords, 20);
+  
+  // Add top skills to vocabulary with higher weight consideration
+  const enhancedVocabulary = new Set<string>(baseVocabulary);
+  for (const skill of topSkills) {
+    const normalized = normalizeLabel(skill);
+    if (normalized) {
+      enhancedVocabulary.add(normalized);
+    }
+  }
+  
+  return { signals, vocabulary: enhancedVocabulary };
 }
 
 export interface LexicalScore {

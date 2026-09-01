@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { useOverview } from '../lib/overview';
+import { useAuth } from '../lib/auth';
 
 /**
  * Navigation that explains itself.
@@ -126,9 +127,11 @@ const ITEMS: { href: string; label: string; hint: string; icon: ReactNode }[] = 
 
 export function Nav() {
   const pathname = usePathname();
+  const auth = useAuth();
   // Shares one poller with whatever else on the page wants these numbers,
   // rather than running a second interval against the same endpoint.
-  const { data } = useOverview();
+  // Only fetch overview if authenticated and has a profile.
+  const { data } = useOverview(auth.authenticated && !!auth.profile);
   const badges = { runs: data?.needsYou.total ?? 0, discover: data?.counts.leadsNew ?? 0 };
 
   // Nothing here works signed out - every link bounces straight back to

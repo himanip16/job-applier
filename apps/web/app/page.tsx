@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '../lib/api';
 import { useOverview, type Overview } from '../lib/overview';
+import { useAuth } from '../lib/auth';
 
 /**
  * The overview.
@@ -29,28 +30,138 @@ interface Health {
 }
 
 export default function Home() {
-  const { data: ov, error } = useOverview();
+  const auth = useAuth();
+  const { data: ov, error } = useOverview(auth.authenticated && !!auth.profile);
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   // Health is separate and barely changes — a key being added is the only
   // thing that moves it, and that already forces a reload of this page.
   useEffect(() => {
+    let isMounted = true;
+    
     api<Health>('/api/health')
-      .then(setHealth)
+      .then((data) => {
+        if (isMounted) {
+          setHealth(data);
+        }
+      })
       .catch((err) => {
-        setHealthError(err.message || 'Failed to load status');
+        if (isMounted) {
+          setHealthError(err.message || 'Failed to load status');
+        }
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  if (error) {
+  // Show loading state while checking authentication
+  if (auth.loading) {
     return (
       <div className="panel">
-        <h2>Cannot reach the server</h2>
-        <div className="notice bad">{error}</div>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(9rem, 1fr))',
+            gap: '.75rem',
+            marginTop: '1.1rem',
+          }}
+        >
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="skel" style={{ height: '4.5rem' }} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Show auth error if authentication check failed
+  if (auth.error) {
+    return (
+      <div className="panel">
+        <h2>Authentication error</h2>
+        <div className="notice bad">{auth.error}</div>
+      </div>
+    );
+  }
+
+  // Show sign-in prompt if not authenticated
+  if (!auth.authenticated) {
+    return (
+      <div className="panel">
+        <h2>Sign in required</h2>
+        <p className="sub">Please sign in to access your job search dashboard.</p>
+        <Link href="/signin" className="primary" style={{
+          display: 'inline-block',
+          padding: '.4rem .8rem',
+          borderRadius: 'var(--radius-sm)',
+          background: 'var(--accent)',
+          color: 'white',
+          textDecoration: 'none',
+        }}>
+          Sign in
+        </Link>
+      </div>
+    );
+  }
+
+  // Show profile creation prompt if authenticated but no profile
+  if (!auth.profile) {
+    return (
+      <div className="panel">
+        <h2>Create your profile</h2>
+        <p className="sub">Please create your profile to get started with job applications.</p>
+        <Link href="/profile" className="primary" style={{
+          display: 'inline-block',
+          padding: '.4rem .8rem',
+          borderRadius: 'var(--radius-sm)',
+          background: 'var(--accent)',
+          color: 'white',
+          textDecoration: 'none',
+        }}>
+          Create profile
+        </Link>
+      </div>
+    );
+  }
+
+  // Show overview error if overview fetch failed
+  if (error) {
+    let errorMessage = error;
+    let errorTitle = 'Cannot reach the server';
+
+    // Try to classify error from message string
+    if (error.includes('Failed to fetch') || error.includes('ECONNREFUSED') || error.includes('NetworkError')) {
+      errorTitle = 'Cannot reach the server';
+      errorMessage = 'The application server is unavailable. Please check your connection and try again.';
+    } else if (error.includes('401') || error.includes('AUTH_REQUIRED')) {
+      errorTitle = 'Authentication required';
+      errorMessage = 'Please sign in to access this page.';
+    } else if (error.includes('404') || error.includes('not found')) {
+      errorTitle = 'Resource not found';
+      errorMessage = 'The requested resource could not be found.';
+    } else if (error.includes('500') || error.includes('502') || error.includes('503')) {
+      errorTitle = 'Server error';
+      errorMessage = 'The server encountered an error. Please try again later.';
+    }
+
+    return (
+      <div className="panel">
+        <h2>{errorTitle}</h2>
+        <div className="notice bad">{errorMessage}</div>
         <div className="row" style={{ gap: '.6rem', marginTop: '.6rem' }}>
           <button
-            onClick={() => navigator.clipboard.writeText('pnpm dev:server')}
+            onClick={() => {
+              if (navigator.clipboard) {
+                navigator.clipboard.writeText('pnpm dev:server').then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                });
+              }
+            }}
             style={{
               display: 'inline-block',
               padding: '.4rem .8rem',
@@ -62,7 +173,7 @@ export default function Home() {
             }}
             title="For local development"
           >
-            Copy dev start command
+            {copied ? 'Copied!' : 'Copy dev start command'}
           </button>
           <span className="small muted" style={{ display: 'flex', alignItems: 'center' }}>
             (For local development only)
@@ -254,9 +365,10 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
                 color: 'inherit',
                 display: 'flex',
                 alignItems: 'center',
+                overflow: 'hidden',
               }}
             >
-              <div className="row" style={{ gap: '.55rem', minWidth: 0 }}>
+              <div className="row" style={{ gap: '.55rem', minWidth: 0, flex: 1, overflow: 'hidden' }}>
                 <span
                   style={{
                     flex: 'none',
@@ -274,16 +386,20 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
                 >
                   {score}
                 </span>
-                <strong style={{ color: 'var(--text)' }}>{m.title}</strong>
-                <span className="muted small">· {m.companyName}</span>
-                {m.remote && <span className="src">remote</span>}
-                {m.location && <span className="muted small">{m.location}</span>}
-                {m.status === 'SHORTLISTED' && <span className="src">saved</span>}
-                {!m.deepScored && (
-                  <span className="src" title="Ranked on keywords only, not read in full">
-                    quick score
-                  </span>
-                )}
+                <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                  <strong style={{ color: 'var(--text)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.title}</strong>
+                  <div className="row" style={{ gap: '.55rem', marginTop: '.1rem', overflow: 'hidden' }}>
+                    <span className="muted small" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.companyName}</span>
+                    {m.remote && <span className="src">remote</span>}
+                    {m.location && <span className="muted small" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.location}</span>}
+                    {m.status === 'SHORTLISTED' && <span className="src">saved</span>}
+                    {!m.deepScored && (
+                      <span className="src" title="Ranked on keywords only, not read in full">
+                        quick score
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
               <span style={{
                 flex: 'none',
@@ -401,9 +517,9 @@ function Hero({ ov }: { ov: Overview | null }) {
               </strong>
               <div className="muted small">
                 {[
-                  y!.needsInput && `${y!.needsInput} run(s) asking a question`,
-                  y!.inReview && `${y!.inReview} filled and awaiting your approval`,
-                  y!.needsHuman && `${y!.needsHuman} blocked on a captcha or login`,
+                  y?.needsInput && `${y.needsInput} run(s) asking a question`,
+                  y?.inReview && `${y.inReview} filled and awaiting your approval`,
+                  y?.needsHuman && `${y.needsHuman} blocked on a captcha or login`,
                 ]
                   .filter(Boolean)
                   .join(' · ')}
@@ -504,6 +620,10 @@ function Feature({
   badge?: number;
   children: React.ReactNode;
 }) {
+  const handleLinkClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+  };
+
   return (
     <div
       className="spread"
@@ -528,7 +648,7 @@ function Feature({
         </span>
         <div>
           <div className="row" style={{ gap: '.5rem' }}>
-            <Link href={href} style={{ textDecoration: 'none' }}>
+            <Link href={href} style={{ textDecoration: 'none' }} onClick={handleLinkClick}>
               <strong>{title}</strong>
             </Link>
             {badge ? (
@@ -548,7 +668,7 @@ function Feature({
         borderRadius: 'var(--radius-sm)',
         background: 'var(--border)',
         textDecoration: 'none',
-      }}>
+      }} onClick={handleLinkClick}>
         {cta}
       </Link>
     </div>
@@ -570,16 +690,20 @@ function StatusPanel({ health, submitted }: { health: Health; submitted: number 
       <h2>Status</h2>
       <div className="row" style={{ gap: '2rem', marginTop: '.4rem', alignItems: 'flex-start' }}>
         <Stat label="applications submitted" value={submitted} />
-        <Stat label="system" value="operational" />
+        <Stat 
+          label="system" 
+          value={health.ok ? 'operational' : 'degraded'} 
+          tone={health.ok ? undefined : 'var(--warn)'}
+        />
       </div>
     </div>
   );
 }
 
-function Stat({ label, value, note }: { label: string; value: string | number; note?: string }) {
+function Stat({ label, value, note, tone }: { label: string; value: string | number; note?: string; tone?: string }) {
   return (
     <div>
-      <div style={{ fontSize: '1.25rem', fontWeight: 600 }}>{value}</div>
+      <div style={{ fontSize: '1.25rem', fontWeight: 600, color: tone ?? 'inherit' }}>{value}</div>
       <div className="muted small">{label}</div>
       {note && <div className="muted small" style={{ opacity: 0.75 }}>{note}</div>}
     </div>
