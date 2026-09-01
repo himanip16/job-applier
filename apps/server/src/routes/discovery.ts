@@ -6,7 +6,7 @@ import { crawlAll, rescore } from '../discovery/crawler.js';
 import { findJobs } from '../discovery/findJobs.js';
 import { isFirecrawlConfigured } from '../discovery/firecrawl.js';
 import { learnFromDecision, loadSignals } from '../discovery/scoring.js';
-import { rescoreByIds, rescoreLexically, rescoreLeadsBatch } from '../discovery/rescoreLeads.js';
+import { rescoreByIds, rescoreLexically, rescoreLeadsBatch, cleanupLeads } from '../discovery/rescoreLeads.js';
 import { NOT_YOURS, ownedLead, ownedSignal } from '../auth/ownership.js';
 import { adapterFor } from '../ats/registry.js';
 import { enqueue } from '../engine/queue.js';
@@ -604,6 +604,32 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       update: { weight, origin: 'STATED' },
     });
     return { signal, total: (await loadSignals(profile.id)).size };
+  });
+
+  // --------------------------------------------------------------- cleanup ---
+
+  /**
+   * Clean up old leads based on various criteria.
+   *
+   * Provides a way to remove old, low-scoring, or otherwise unwanted leads
+   * to maintain a clean and relevant queue.
+   */
+  app.post('/api/leads/cleanup', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+
+    const body = z
+      .object({
+        olderThanDays: z.number().min(1).max(365).default(20),
+        status: z.enum(['NEW', 'SHORTLISTED', 'REJECTED', 'APPLIED', 'EXPIRED', 'ALL']).default('ALL'),
+        maxScore: z.number().min(0).max(100).default(40),
+        quickScoreOnly: z.boolean().default(false),
+        dryRun: z.boolean().default(false),
+      })
+      .parse(req.body ?? {});
+
+    const result = await cleanupLeads(profile.id, body);
+    return result;
   });
 }
 

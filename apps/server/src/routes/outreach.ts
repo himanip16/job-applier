@@ -6,6 +6,7 @@ import { findColdOutreachTargets, countColdTargetsByRole } from '../outreach/cla
 import { generateColdOutreachBatch } from '../outreach/generate.js';
 import { currentUser } from '../auth/sessions.js';
 import { NOT_YOURS } from '../auth/ownership.js';
+import { linkedInPage, isLoggedIn, hasLinkedInSession } from '../linkedin/session.js';
 
 // Extend FastifyRequest type to include profile
 declare module 'fastify' {
@@ -60,6 +61,79 @@ export function registerOutreachRoutes(app: FastifyInstance) {
       connections: connectionsStatus,
       messages: messagesStatus,
     });
+  });
+
+  // LinkedIn connection flow
+  app.post('/api/linkedin/connect', async (req, reply) => {
+    try {
+      // Update status to WAITING_FOR_SIGN_IN
+      await prisma.profile.update({
+        where: { id: req.profile!.id },
+        data: { linkedinConnectionStatus: 'WAITING_FOR_SIGN_IN' },
+      });
+
+      // Launch browser and navigate to LinkedIn
+      const page = await linkedInPage();
+      await page.goto('https://www.linkedin.com', { waitUntil: 'domcontentloaded', timeout: 45_000 });
+
+      // Check if already logged in
+      const loggedIn = await isLoggedIn(page);
+      
+      if (loggedIn) {
+        await prisma.profile.update({
+          where: { id: req.profile!.id },
+          data: { linkedinConnectionStatus: 'CONNECTED' },
+        });
+        await page.close();
+        return reply.send({ status: 'CONNECTED', message: 'Already logged in to LinkedIn' });
+      }
+
+      // Keep page open for user to sign in
+      return reply.send({ status: 'WAITING_FOR_SIGN_IN', message: 'Browser opened. Please sign in to LinkedIn.' });
+    } catch (err) {
+      const error = (err as Error).message;
+      await prisma.profile.update({
+        where: { id: req.profile!.id },
+        data: { linkedinConnectionStatus: 'NOT_CONNECTED' },
+      });
+      return reply.code(500).send({ error: 'Failed to open LinkedIn', details: error });
+    }
+  });
+
+  app.get('/api/linkedin/connection-status', async (req, reply) => {
+    const profile = await prisma.profile.findUnique({
+      where: { id: req.profile!.id },
+      select: { linkedinConnectionStatus: true },
+    });
+
+    if (!profile) {
+      return reply.code(404).send({ error: 'Profile not found' });
+    }
+
+    // If status is WAITING_FOR_SIGN_IN, check if user has completed sign-in
+    if (profile.linkedinConnectionStatus === 'WAITING_FOR_SIGN_IN') {
+      try {
+        const hasSession = await hasLinkedInSession();
+        if (hasSession) {
+          // Verify by checking page state
+          const page = await linkedInPage();
+          const loggedIn = await isLoggedIn(page);
+          await page.close();
+
+          if (loggedIn) {
+            await prisma.profile.update({
+              where: { id: req.profile!.id },
+              data: { linkedinConnectionStatus: 'CONNECTED' },
+            });
+            return reply.send({ status: 'CONNECTED' });
+          }
+        }
+      } catch (err) {
+        // If we can't check, return current status
+      }
+    }
+
+    return reply.send({ status: profile.linkedinConnectionStatus });
   });
 
   // Cold outreach target routes

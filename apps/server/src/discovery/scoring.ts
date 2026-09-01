@@ -174,8 +174,8 @@ export interface LexicalScore {
  * instead of bunching it around the middle. The ranking test over real board
  * titles is what keeps them honest.
  */
-const AFFINITY_NEUTRAL = 0.35;
-const AFFINITY_GAIN = 7;
+const AFFINITY_NEUTRAL = 0.30;
+const AFFINITY_GAIN = 9;
 
 /**
  * How much neutral evidence every coverage figure starts with.

@@ -18,7 +18,7 @@ export function registerResumeUploadRoutes(app: FastifyInstance, requireProfile:
   app.post('/api/resume', {
     preHandler: async (req, reply) => {
       const profile = await requireProfile(req, reply);
-      if (!profile) return reply.code(401).send({ error: 'Sign in to use this.' });
+      if (!profile) return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
       (req as any).profile = profile;
     }
   }, async (req, reply) => {
@@ -56,7 +56,7 @@ export function registerResumeUploadRoutes(app: FastifyInstance, requireProfile:
   app.post<{ Params: { id: string } }>('/api/resume/:id/default', {
     preHandler: async (req, reply) => {
       const profile = await requireProfile(req, reply);
-      if (!profile) return reply.code(401).send({ error: 'Sign in to use this.' });
+      if (!profile) return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
       (req as any).profile = profile;
     }
   }, async (req, reply) => {

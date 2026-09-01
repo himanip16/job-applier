@@ -126,6 +126,7 @@ export default function DiscoverPage() {
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<JobLead | null>(null);
+  const [cleanupDialog, setCleanupDialog] = useState(false);
   // Keyed by lead. An error from a card has to appear on that card: the shared
   // banner at the top of the page is often a screen away from the button that
   // was pressed, which makes a failed click look like a dead button.
@@ -423,6 +424,13 @@ export default function DiscoverPage() {
             >
               {busy === 'rescore-all' ? 'Rescoring…' : 'Rescore all jobs'}
             </button>
+            <button
+              disabled={busy !== null}
+              onClick={() => setCleanupDialog(true)}
+              title="Clean up old or low-scoring leads"
+            >
+              Cleanup
+            </button>
           </div>
         </div>
 
@@ -572,7 +580,211 @@ export default function DiscoverPage() {
           }}
         />
       )}
+
+      {cleanupDialog && (
+        <CleanupDialog
+          onClose={() => setCleanupDialog(false)}
+          onDone={async (msg: string) => {
+            setCleanupDialog(false);
+            setFlash(msg);
+            await load();
+          }}
+        />
+      )}
     </>
+  );
+}
+
+function CleanupDialog({
+  onClose,
+  onDone,
+}: {
+  onClose: () => void;
+  onDone: (msg: string) => void;
+}) {
+  const [olderThanDays, setOlderThanDays] = useState(20);
+  const [status, setStatus] = useState<'ALL' | 'NEW' | 'SHORTLISTED' | 'REJECTED' | 'APPLIED' | 'EXPIRED'>('ALL');
+  const [maxScore, setMaxScore] = useState<number>(40);
+  const [quickScoreOnly, setQuickScoreOnly] = useState(false);
+  const [dryRun, setDryRun] = useState(true);
+  const [preview, setPreview] = useState<{ deleted: number; byStatus: Record<string, number>; samples: string[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function handlePreview() {
+    setBusy(true);
+    try {
+      const result = await api<{ deleted: number; byStatus: Record<string, number>; samples: string[] }>('/api/leads/cleanup', {
+        method: 'POST',
+        body: JSON.stringify({ olderThanDays, status, maxScore, quickScoreOnly, dryRun: true }),
+      });
+      setPreview(result);
+    } catch (e) {
+      console.error('Preview failed:', e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCleanup() {
+    setBusy(true);
+    try {
+      const result = await api<{ deleted: number; byStatus: Record<string, number>; samples: string[] }>('/api/leads/cleanup', {
+        method: 'POST',
+        body: JSON.stringify({ olderThanDays, status, maxScore, quickScoreOnly, dryRun: false }),
+      });
+      onDone(`Cleaned up ${result.deleted} lead(s).`);
+    } catch (e) {
+      console.error('Cleanup failed:', e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0, 0, 0, 0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--bg)',
+          padding: '1.5rem',
+          borderRadius: 'var(--radius)',
+          maxWidth: '500px',
+          width: '90%',
+          maxHeight: '80vh',
+          overflowY: 'auto',
+          border: '1px solid var(--border)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3>Cleanup Old Leads</h3>
+        <p className="sub" style={{ marginBottom: '1rem' }}>
+          Remove old, low-scoring, or otherwise unwanted leads to keep your queue clean.
+        </p>
+
+        <div style={{ marginBottom: '1rem' }}>
+          <label className="row small muted" style={{ gap: '.35rem', marginBottom: '.5rem' }}>
+            Remove leads older than
+            <input
+              type="number"
+              min={1}
+              max={365}
+              value={olderThanDays}
+              onChange={(e) => setOlderThanDays(Number(e.target.value))}
+              style={{ width: '4rem' }}
+            />
+            days
+          </label>
+
+          <label className="row small muted" style={{ gap: '.35rem', marginBottom: '.5rem' }}>
+            Status
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as typeof status)}
+              style={{ flex: 1 }}
+            >
+              <option value="ALL">All statuses</option>
+              <option value="NEW">New</option>
+              <option value="SHORTLISTED">Shortlisted</option>
+              <option value="REJECTED">Rejected</option>
+              <option value="APPLIED">Applied</option>
+              <option value="EXPIRED">Expired</option>
+            </select>
+          </label>
+
+          <label className="row small muted" style={{ gap: '.35rem', marginBottom: '.5rem' }}>
+            Max score (below this)
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={maxScore}
+              onChange={(e) => setMaxScore(Number(e.target.value) || 0)}
+              style={{ width: '4rem' }}
+            />
+          </label>
+
+          <label className="row small muted" style={{ gap: '.35rem', marginBottom: '.5rem' }}>
+            <input
+              type="checkbox"
+              checked={quickScoreOnly}
+              onChange={(e) => setQuickScoreOnly(e.target.checked)}
+            />
+            Only quick-scored leads (not read in full)
+          </label>
+        </div>
+
+        <div style={{ marginBottom: '1rem' }}>
+          <label className="row small muted" style={{ gap: '.35rem' }}>
+            <input
+              type="checkbox"
+              checked={dryRun}
+              onChange={(e) => {
+                setDryRun(e.target.checked);
+                setPreview(null);
+              }}
+            />
+            Dry run (preview only, don't delete)
+          </label>
+        </div>
+
+        {preview && (
+          <div style={{ marginBottom: '1rem', padding: '1rem', background: 'var(--panel-2)', borderRadius: 'var(--radius)' }}>
+            <p className="small">
+              <strong>Preview:</strong> {preview.deleted} lead(s) would be deleted
+            </p>
+            {Object.keys(preview.byStatus).length > 0 && (
+              <p className="small muted">
+                By status: {Object.entries(preview.byStatus).map(([s, c]) => `${s}: ${c}`).join(', ')}
+              </p>
+            )}
+            {preview.samples.length > 0 && (
+              <div className="small muted" style={{ marginTop: '.5rem' }}>
+                <strong>Sample titles:</strong>
+                <ul style={{ margin: '.25rem 0 0 1.5rem', paddingLeft: '1rem' }}>
+                  {preview.samples.map((s, i) => (
+                    <li key={i}>{s}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="row" style={{ gap: '.5rem', justifyContent: 'flex-end' }}>
+          <button onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            onClick={handlePreview}
+            disabled={busy || !dryRun}
+          >
+            {busy ? 'Loading…' : 'Preview'}
+          </button>
+          {!dryRun && (
+            <button
+              className="primary"
+              onClick={handleCleanup}
+              disabled={busy || !preview}
+            >
+              {busy ? 'Cleaning…' : `Delete ${preview?.deleted ?? 0} leads`}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

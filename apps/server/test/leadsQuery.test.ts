@@ -19,6 +19,8 @@ const { requireTestDatabase } = await import('./testDb.js');
 requireTestDatabase();
 
 const { prisma } = await import('../src/lib/db.js');
+const { rescoreLexically } = await import('../src/discovery/rescoreLeads.js');
+const { scoreLexically, loadScoringContext } = await import('../src/discovery/scoring.js');
 const { registerDiscoveryRoutes, MAX_RESCORE_BATCH } = await import('../src/routes/discovery.js');
 const Fastify = (await import('fastify')).default;
 
@@ -268,6 +270,43 @@ describe('rescoring only what was picked', () => {
     expect(body.results[2]!.reason).toBe('not-found');
     // The one with no description was never sent to the model.
     expect(generateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an already strong lead alive for later re-evaluation even when the lexical pass looks hopeless', async () => {
+    const strongLead = await prisma.jobLead.create({
+      data: {
+        profileId,
+        url: 'https://job-boards.greenhouse.io/acme/jobs/strong-lexical-drift',
+        ats: 'greenhouse',
+        title: 'Customer Support Specialist',
+        companyName: 'Acme',
+        location: 'Remote - US',
+        remote: false,
+        descriptionText: 'We support customers and answer inbound questions across chat and email.',
+        score: 85,
+        deepScored: false,
+        discoveredAt: new Date(),
+      },
+    });
+
+    const ctx = await loadScoringContext(profileId);
+    const lex = scoreLexically(
+      {
+        title: strongLead.title,
+        descriptionText: strongLead.descriptionText ?? '',
+        location: strongLead.location ?? undefined,
+      },
+      ctx,
+    );
+    expect(lex.score).toBeLessThan(15);
+
+    const updated = await rescoreLexically(profileId);
+    const after = await prisma.jobLead.findUnique({ where: { id: strongLead.id } });
+
+    expect(updated).toBeGreaterThan(0);
+    expect(after).not.toBeNull();
+    expect(after!.score).toBe(85);
+    expect(after!.deepScored).toBe(false);
   });
 
   it('refuses a batch larger than one press should ever ask for', async () => {

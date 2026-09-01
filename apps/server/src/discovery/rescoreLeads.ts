@@ -54,8 +54,13 @@ export const DECLINED_MESSAGE = 'The model declined to assess this one.';
  * Deleting on a cheap keyword score is a strong action taken on weak
  * evidence, so the bar is set at the bottom of the observed distribution
  * rather than at the midpoint - see the note at the call site.
+ *
+ * Strong matches are never pruned out of the queue; they are explicitly
+ * re-evaluated so a good lead keeps a chance to be revisited rather than being
+ * silently dropped on a stale lexical read.
  */
 const PRUNE_BELOW = 15;
+const STRONG_MATCH_THRESHOLD = 70;
 
 type Lead = Awaited<ReturnType<typeof prisma.jobLead.findFirstOrThrow>>;
 
@@ -182,6 +187,9 @@ export async function rescoreLeadsBatch(profileId: string, leads: Lead[]): Promi
       remote: lead.remote,
     }));
 
+    // Track which leads were successfully processed in batch to avoid duplicates in fallback
+    const processedLeadIds = new Set<string>();
+
     try {
       const assessments = await assessFitBatch({
         candidateContext,
@@ -194,16 +202,24 @@ export async function rescoreLeadsBatch(profileId: string, leads: Lead[]): Promi
         const lead = batch[j];
         if (!lead) continue;
         
+        // Bounds check: ensure assessments has enough items
+        if (j >= assessments.length) {
+          outcomes.push({ id: lead.id, ok: false, reason: 'failed', error: 'Assessment missing for this lead' });
+          continue;
+        }
+        
         const raw = assessments[j];
 
         if (!raw) {
           outcomes.push({ id: lead.id, ok: false, reason: 'declined', error: DECLINED_MESSAGE });
+          processedLeadIds.add(lead.id);
           continue;
         }
 
         const job = jobs[j];
         if (!job) {
           outcomes.push({ id: lead.id, ok: false, reason: 'failed', error: 'Job data missing' });
+          processedLeadIds.add(lead.id);
           continue;
         }
 
@@ -226,11 +242,17 @@ export async function rescoreLeadsBatch(profileId: string, leads: Lead[]): Promi
           },
         });
         outcomes.push({ id: lead.id, ok: true, score: blended });
+        processedLeadIds.add(lead.id);
       }
     } catch (err) {
       // If batch fails, fall back to individual scoring for this batch
       console.error('Batch scoring failed for batch, falling back to individual:', err);
       for (const lead of batch) {
+        // Skip leads that were already processed before the batch failed
+        if (processedLeadIds.has(lead.id)) {
+          continue;
+        }
+
         const job = {
           title: lead.title,
           companyName: lead.companyName,
@@ -344,7 +366,12 @@ export async function rescoreLexically(profileId: string): Promise<number> {
     // permanently delete most of a healthy queue on every crawl. Fifteen is
     // where the honest bottom of the distribution sits: marketing, support
     // and compliance postings for a backend engineer.
-    if (lex.score < PRUNE_BELOW) {
+    //
+    // Strong matches are explicitly re-evaluated instead of being pruned out on
+    // a stale lexical pass. If a lead was already a standout, keep it alive to
+    // be reconsidered and scored again.
+    const isStrongMatch = (lead.score ?? 0) >= STRONG_MATCH_THRESHOLD;
+    if (!isStrongMatch && lex.score < PRUNE_BELOW) {
       await prisma.jobLead.delete({ where: { id: lead.id } }).catch(() => {});
       pruned++;
       continue;
@@ -355,6 +382,7 @@ export async function rescoreLexically(profileId: string): Promise<number> {
       data: {
         score: lex.score,
         scoreReasons: serialiseReasons(lex, null),
+        deepScored: false,
         scoredAt: new Date(),
       },
     });
@@ -362,4 +390,106 @@ export async function rescoreLexically(profileId: string): Promise<number> {
   }
   if (pruned) process.stdout.write(`[discovery] pruned ${pruned} hopeless lead(s)\n`);
   return updated;
+}
+
+/**
+ * Cleanup old leads based on various criteria.
+ *
+ * This provides a way to clean up the leads queue by removing old, low-scoring,
+ * or otherwise unwanted leads. Useful for maintaining a clean and relevant queue.
+ */
+export interface CleanupOptions {
+  /** Only clean up leads older than this many days */
+  olderThanDays?: number;
+  /** Only clean up leads with this status */
+  status?: 'NEW' | 'SHORTLISTED' | 'REJECTED' | 'APPLIED' | 'EXPIRED' | 'ALL';
+  /** Only clean up leads with score below this threshold */
+  maxScore?: number;
+  /** Only clean up leads that haven't been deep scored */
+  quickScoreOnly?: boolean;
+  /** Dry run - don't actually delete, just report what would be deleted */
+  dryRun?: boolean;
+}
+
+export interface CleanupResult {
+  /** Number of leads that would be/were deleted */
+  deleted: number;
+  /** Breakdown by status */
+  byStatus: Record<string, number>;
+  /** Sample of lead titles that would be/were deleted */
+  samples: string[];
+}
+
+export async function cleanupLeads(profileId: string, opts: CleanupOptions = {}): Promise<CleanupResult> {
+  const {
+    olderThanDays = 20,
+    status = 'ALL',
+    maxScore = 40,
+    quickScoreOnly = false,
+    dryRun = false,
+  } = opts;
+
+  const where: any = { profileId };
+  
+  if (status !== 'ALL') {
+    where.status = status;
+  }
+  
+  if (olderThanDays > 0) {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - olderThanDays);
+    where.discoveredAt = { lt: cutoffDate };
+  }
+  
+  if (maxScore !== undefined) {
+    // Include null scores (unscored leads) in the filter
+    where.OR = [
+      { score: null },
+      { score: { lt: maxScore } },
+    ];
+  }
+  
+  if (quickScoreOnly) {
+    where.deepScored = false;
+  }
+
+  // First, count and sample what would be deleted
+  const leadsToDelete = await prisma.jobLead.findMany({
+    where,
+    select: { id: true, title: true, status: true },
+    take: 1000, // Safety limit
+  });
+
+  const byStatus: Record<string, number> = {};
+  const samples: string[] = [];
+  
+  for (const lead of leadsToDelete) {
+    byStatus[lead.status] = (byStatus[lead.status] || 0) + 1;
+    if (samples.length < 10) {
+      samples.push(lead.title);
+    }
+  }
+
+  if (dryRun) {
+    return {
+      deleted: leadsToDelete.length,
+      byStatus,
+      samples,
+    };
+  }
+
+  // Actually delete the leads
+  const deleteResult = await prisma.jobLead.deleteMany({
+    where,
+  });
+
+  if (deleteResult.count > 0) {
+    process.stdout.write(`[discovery] cleaned up ${deleteResult.count} old lead(s)\n`);
+  }
+
+  return {
+    deleted: deleteResult.count,
+    byStatus,
+    samples,
+  };
 }

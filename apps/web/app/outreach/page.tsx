@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/api';
+import { showToast } from '../../components/Toast';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 
 interface Contact {
   id: string;
@@ -30,6 +32,12 @@ interface OutreachItem {
   sentAt: string | null;
 }
 
+interface TabConfig {
+  type: TabType;
+  label: string;
+  count: number;
+}
+
 interface ColdTarget {
   id: string;
   fullName: string;
@@ -50,14 +58,40 @@ export default function OutreachPage() {
   const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [syncStatus, setSyncStatus] = useState<{ connections: any } | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<string>('NOT_CONNECTED');
   const [editingItem, setEditingItem] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [tabCounts, setTabCounts] = useState<Record<TabType, number>>({ COLD: 0, REPLY: 0, FOLLOW_UP: 0 });
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    showInput?: boolean;
+    inputValue?: string;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  });
 
   const loadItems = useCallback(async () => {
     setLoading(true);
     try {
       const data = await api<OutreachItem[]>(`/api/outreach/items?type=${activeTab}`);
       setItems(data);
+      
+      // Load counts for all tabs (fall back to local counting if endpoint fails)
+      try {
+        const counts = await api<Record<TabType, number>>('/api/outreach/items/counts');
+        setTabCounts(counts);
+      } catch (countErr) {
+        // If counts endpoint fails, count locally from loaded data
+        console.warn('Failed to load counts, using local data:', countErr);
+        // This is a simple fallback - ideally we'd load all tabs to get accurate counts
+        setTabCounts(prev => ({ ...prev, [activeTab]: data.length }));
+      }
     } catch (err) {
       console.error('Failed to load items:', err);
     }
@@ -82,6 +116,15 @@ export default function OutreachPage() {
     }
   }, []);
 
+  const loadConnectionStatus = useCallback(async () => {
+    try {
+      const data = await api<{ status: string }>('/api/linkedin/connection-status');
+      setConnectionStatus(data.status);
+    } catch (err) {
+      console.error('Failed to load connection status:', err);
+    }
+  }, []);
+
   useEffect(() => {
     loadItems();
     if (activeTab === 'COLD') {
@@ -91,22 +134,49 @@ export default function OutreachPage() {
 
   useEffect(() => {
     loadSyncStatus();
-  }, [loadSyncStatus]);
+    loadConnectionStatus();
+  }, [loadSyncStatus, loadConnectionStatus]);
+
+  // Poll connection status when waiting for sign-in
+  useEffect(() => {
+    if (connectionStatus === 'WAITING_FOR_SIGN_IN') {
+      const interval = setInterval(() => {
+        loadConnectionStatus();
+      }, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [connectionStatus, loadConnectionStatus]);
+
+  const handleConnectLinkedIn = async () => {
+    try {
+      const result = await api<{ status: string; message: string }>('/api/linkedin/connect', { method: 'POST' });
+      setConnectionStatus(result.status);
+      if (result.status === 'CONNECTED') {
+        await loadSyncStatus();
+        await loadColdTargets();
+        showToast('LinkedIn connected successfully', 'success');
+      }
+    } catch (err) {
+      console.error('Failed to connect LinkedIn:', err);
+      showToast('Failed to open LinkedIn. Check console for details.', 'error');
+    }
+  };
 
   const handleSyncConnections = async () => {
     try {
       await api('/api/linkedin/sync/connections', { method: 'POST' });
       await loadSyncStatus();
       await loadColdTargets();
+      showToast('Connections synced successfully', 'success');
     } catch (err) {
       console.error('Failed to sync connections:', err);
-      alert('Failed to sync connections. Check console for details.');
+      showToast('Failed to sync connections. Check console for details.', 'error');
     }
   };
 
   const handleGenerateCold = async () => {
     if (selectedTargets.size === 0) {
-      alert('Select at least one contact to generate outreach for.');
+      showToast('Select at least one contact to generate outreach for.', 'error');
       return;
     }
     try {
@@ -118,11 +188,13 @@ export default function OutreachPage() {
       await loadItems();
       await loadColdTargets();
       if (result.errors.length > 0) {
-        alert(`Generated ${result.created.length} items. ${result.errors.length} failed.`);
+        showToast(`Generated ${result.created.length} items. ${result.errors.length} failed.`, 'error');
+      } else {
+        showToast(`Generated ${result.created.length} messages successfully`, 'success');
       }
     } catch (err) {
       console.error('Failed to generate outreach:', err);
-      alert('Failed to generate outreach. Check console for details.');
+      showToast('Failed to generate outreach. Check console for details.', 'error');
     }
   };
 
@@ -139,9 +211,10 @@ export default function OutreachPage() {
       });
       setEditingItem(null);
       await loadItems();
+      showToast('Message saved successfully', 'success');
     } catch (err) {
       console.error('Failed to save edit:', err);
-      alert('Failed to save edit.');
+      showToast('Failed to save edit.', 'error');
     }
   };
 
@@ -162,33 +235,45 @@ export default function OutreachPage() {
     try {
       await api(`/api/outreach/items/${itemId}/approve`, { method: 'POST' });
       await loadItems();
+      showToast('Message approved', 'success');
     } catch (err) {
       console.error('Failed to approve:', err);
-      alert('Failed to approve item.');
+      showToast('Failed to approve item.', 'error');
     }
   };
 
   const handleSkip = async (itemId: string) => {
-    const reason = prompt('Reason for skipping (optional):');
-    try {
-      await api(`/api/outreach/items/${itemId}/skip`, {
-        method: 'POST',
-        body: JSON.stringify({ reason }),
-      });
-      await loadItems();
-    } catch (err) {
-      console.error('Failed to skip:', err);
-      alert('Failed to skip item.');
-    }
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Skip this message',
+      message: 'Add a reason for skipping (optional):',
+      onConfirm: async () => {
+        try {
+          await api(`/api/outreach/items/${itemId}/skip`, {
+            method: 'POST',
+            body: JSON.stringify({ reason: confirmDialog.inputValue?.trim() }),
+          });
+          await loadItems();
+          showToast('Message skipped', 'info');
+          setConfirmDialog({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+        } catch (err) {
+          console.error('Failed to skip:', err);
+          showToast('Failed to skip item.', 'error');
+        }
+      },
+      showInput: true,
+      inputValue: '',
+    });
   };
 
   const handleMarkSent = async (itemId: string) => {
     try {
       await api(`/api/outreach/items/${itemId}/mark-sent`, { method: 'POST' });
       await loadItems();
+      showToast('Message marked as sent', 'success');
     } catch (err) {
       console.error('Failed to mark as sent:', err);
-      alert('Failed to mark as sent.');
+      showToast('Failed to mark as sent.', 'error');
     }
   };
 
@@ -211,72 +296,129 @@ export default function OutreachPage() {
     <div className="panel">
       <h1>Outreach Queue</h1>
 
-      <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
+      <Tabs activeTab={activeTab} onTabChange={setActiveTab} tabCounts={tabCounts} />
+      
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        showInput={confirmDialog.showInput}
+        inputValue={confirmDialog.inputValue}
+        onInputChange={(value) => setConfirmDialog(prev => ({ ...prev, inputValue: value }))}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog({ isOpen: false, title: '', message: '', onConfirm: () => {} })}
+      />
 
       {activeTab === 'COLD' && (
         <div style={{ marginTop: '1rem' }}>
-          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-            <button onClick={handleSyncConnections}>
-              Sync Connections
-            </button>
-            {syncStatus?.connections && (
-              <span className="small muted">
-                Last synced: {syncStatus.connections.lastSyncAt 
-                  ? new Date(syncStatus.connections.lastSyncAt).toLocaleString()
-                  : 'Never'}
-                {' '}({syncStatus.connections.status})
-              </span>
+          {connectionStatus === 'WAITING_FOR_SIGN_IN' && (
+            <div style={{ 
+              padding: '0.75rem', 
+              background: 'var(--warn-soft)', 
+              border: '1px solid var(--warn-border)', 
+              borderRadius: 'var(--radius)', 
+              marginBottom: '1rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+            }}>
+              <span style={{ fontSize: '1.2rem' }}>🔗</span>
+              <div>
+                <strong>LinkedIn sign-in window opened</strong> — Sign in there to connect your account.
+              </div>
+            </div>
+          )}
+          
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center' }}>
+            {connectionStatus === 'NOT_CONNECTED' && (
+              <button className="primary" onClick={handleConnectLinkedIn}>
+                Connect LinkedIn
+              </button>
+            )}
+            {connectionStatus === 'CONNECTED' && (
+              <>
+                <button onClick={handleSyncConnections}>
+                  Sync Connections
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span style={{ color: 'var(--good)', fontSize: '1.2rem' }}>✓</span>
+                  <span className="small muted" style={{ color: 'var(--good)' }}>
+                    LinkedIn connected
+                  </span>
+                </div>
+                {syncStatus?.connections && (
+                  <span className="small muted">
+                    Last synced: {syncStatus.connections.lastSyncAt 
+                      ? new Date(syncStatus.connections.lastSyncAt).toLocaleString()
+                      : 'Never'}
+                  </span>
+                )}
+              </>
             )}
           </div>
 
           {coldTargets.length > 0 && (
-            <div style={{ marginBottom: '1rem', padding: '1rem', background: '#f5f5f5', borderRadius: '4px' }}>
-              <div style={{ marginBottom: '0.5rem' }}>
-                <strong>{coldTargets.length} cold targets available</strong>
+            <div style={{ marginBottom: '1rem', padding: '1rem', background: 'var(--panel-2)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+              <div style={{ marginBottom: '0.75rem' }}>
+                <strong style={{ fontSize: '1rem' }}>{coldTargets.length} contacts found</strong>
+                <div className="small muted" style={{ marginTop: '0.25rem' }}>
+                  Select people → Generate messages → Review messages
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
                 <button 
                   onClick={() => setSelectedTargets(new Set(coldTargets.map(t => t.id)))}
                   disabled={selectedTargets.size === coldTargets.length}
+                  className="small"
                 >
                   Select All
                 </button>
                 <button 
                   onClick={() => setSelectedTargets(new Set())}
                   disabled={selectedTargets.size === 0}
+                  className="small"
                 >
                   Clear Selection
                 </button>
+                <div style={{ flex: 1 }} />
+                <span className="small muted" style={{ marginRight: '0.5rem' }}>
+                  {selectedTargets.size} selected
+                </span>
                 <button 
+                  className="primary"
                   onClick={handleGenerateCold}
                   disabled={selectedTargets.size === 0}
                 >
-                  Generate ({selectedTargets.size})
+                  Generate messages
                 </button>
               </div>
-              <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+              
+              <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
                 {coldTargets.map((target) => (
                   <div
                     key={target.id}
                     style={{
-                      padding: '0.5rem',
-                      borderBottom: '1px solid #ddd',
+                      padding: '0.75rem',
+                      borderBottom: '1px solid var(--border)',
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '0.5rem',
+                      gap: '0.75rem',
+                      background: selectedTargets.has(target.id) ? 'var(--accent-soft)' : 'transparent',
                     }}
                   >
                     <input
                       type="checkbox"
                       checked={selectedTargets.has(target.id)}
                       onChange={() => toggleTargetSelection(target.id)}
+                      style={{ width: '18px', height: '18px' }}
                     />
                     <div style={{ flex: 1 }}>
-                      <strong>{target.fullName}</strong>
-                      <div className="small muted">
+                      <strong style={{ fontSize: '0.95rem' }}>{target.fullName}</strong>
+                      <div className="small muted" style={{ marginTop: '0.15rem' }}>
                         {target.role === 'TALENT' ? 'Recruiter' : target.role === 'ENGINEERING' ? 'Engineering Manager' : target.role} at {target.companyName}
                       </div>
-                      <div className="small muted">
+                      <div className="small muted" style={{ marginTop: '0.05rem' }}>
                         {target.degree ? `${target.degree}-degree connection` : 'Connection'} • {target.hasConversation ? 'has previous conversation' : 'no previous conversation'}
                       </div>
                     </div>
@@ -317,23 +459,44 @@ export default function OutreachPage() {
   );
 }
 
-function Tabs({ activeTab, onTabChange }: { activeTab: TabType; onTabChange: (tab: TabType) => void }) {
-  const tabs: TabType[] = ['COLD', 'REPLY', 'FOLLOW_UP'];
+function Tabs({ activeTab, onTabChange, tabCounts }: { activeTab: TabType; onTabChange: (tab: TabType) => void; tabCounts: Record<TabType, number> }) {
+  const tabs: { type: TabType; label: string }[] = [
+    { type: 'COLD', label: 'Cold outreach' },
+    { type: 'REPLY', label: 'Replies' },
+    { type: 'FOLLOW_UP', label: 'Follow-ups' },
+  ];
+  
   return (
-    <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid #ddd', paddingBottom: '0.5rem' }}>
+    <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>
       {tabs.map((tab) => (
         <button
-          key={tab}
-          onClick={() => onTabChange(tab)}
+          key={tab.type}
+          onClick={() => onTabChange(tab.type)}
           style={{
             padding: '0.5rem 1rem',
-            background: activeTab === tab ? '#e0e0e0' : 'transparent',
+            background: activeTab === tab.type ? 'var(--accent-soft)' : 'transparent',
             border: 'none',
             cursor: 'pointer',
-            fontWeight: activeTab === tab ? 'bold' : 'normal',
+            fontWeight: activeTab === tab.type ? '600' : 'normal',
+            color: activeTab === tab.type ? 'var(--accent)' : 'var(--text)',
+            borderRadius: 'var(--radius-sm)',
+            transition: 'background var(--fast) var(--ease), color var(--fast) var(--ease)',
           }}
         >
-          {tab}
+          {tab.label}
+          {tabCounts[tab.type] > 0 && (
+            <span style={{ 
+              marginLeft: '0.4rem', 
+              fontSize: '0.75rem', 
+              opacity: 0.7,
+              background: activeTab === tab.type ? 'var(--accent)' : 'var(--border)',
+              color: activeTab === tab.type ? 'var(--accent-contrast)' : 'var(--muted)',
+              padding: '0.1rem 0.4rem',
+              borderRadius: '999px',
+            }}>
+              {tabCounts[tab.type]}
+            </span>
+          )}
         </button>
       ))}
     </div>
@@ -373,21 +536,20 @@ function OutreachItemCard({
   return (
     <div
       style={{
-        border: '1px solid #ddd',
-        borderRadius: '4px',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
         padding: '1rem',
         marginBottom: '1rem',
-        background: isOverLimit ? '#fff5f5' : 'white',
+        background: isOverLimit ? 'var(--bad-soft)' : 'var(--panel-2)',
       }}
     >
       <div style={{ marginBottom: '0.5rem' }}>
-        <strong>{item.contact.fullName}</strong>
-        <div className="small muted">
-          {item.contact.headline} • {item.contact.companyName}
-          {item.jobTitle && ` • ${item.jobTitle} at ${item.companyName}`}
+        <strong style={{ fontSize: '1rem' }}>{item.contact.fullName}</strong>
+        <div className="small muted" style={{ marginTop: '0.1rem' }}>
+          {item.contact.headline || item.contact.role} · {item.contact.companyName}
         </div>
-        <div className="small muted">
-          {item.type} • {item.status} • {item.contact.degree}
+        <div className="small muted" style={{ marginTop: '0.1rem' }}>
+          {item.contact.degree ? `${item.contact.degree}-degree connection` : 'Connection'}
         </div>
       </div>
 
@@ -407,32 +569,33 @@ function OutreachItemCard({
         <div style={{ marginBottom: '0.5rem' }}>
           <div
             style={{
-              padding: '0.5rem',
-              background: '#f5f5f5',
-              borderRadius: '4px',
+              padding: '0.75rem',
+              background: 'var(--bg-subtle)',
+              borderRadius: 'var(--radius-sm)',
               whiteSpace: 'pre-wrap',
               fontFamily: 'monospace',
+              border: '1px solid var(--border)',
             }}
           >
             {currentBody}
           </div>
           <div className="small muted" style={{ marginTop: '0.25rem' }}>
             {currentBody.length} / {item.charLimit} characters
-            {isOverLimit && <span style={{ color: 'red' }}> (OVER LIMIT)</span>}
+            {isOverLimit && <span style={{ color: 'var(--bad)', marginLeft: '0.5rem' }}>OVER LIMIT</span>}
           </div>
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
         {!isEditing && item.status === 'DRAFT' && (
           <button onClick={onEditStart}>Edit</button>
         )}
-        <button onClick={onCopy}>Copy</button>
-        <button onClick={onOpenLinkedIn}>Open LinkedIn</button>
+        <button className="ghost small" onClick={onCopy}>Copy</button>
+        <button className="ghost small" onClick={onOpenLinkedIn}>Open profile</button>
         {item.status === 'DRAFT' && (
           <>
-            <button onClick={onApprove}>Approve</button>
-            <button onClick={onSkip}>Skip</button>
+            <button className="primary" onClick={onApprove}>Approve</button>
+            <button className="ghost" onClick={onSkip}>Skip</button>
           </>
         )}
         {item.status === 'APPROVED' && (

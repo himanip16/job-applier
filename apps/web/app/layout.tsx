@@ -2,6 +2,7 @@ import './globals.css';
 import type { ReactNode } from 'react';
 import { ErrorProvider } from '../contexts/ErrorContext';
 import { LayoutContent } from './layout-content';
+import { ToastProvider } from '../components/Toast';
 
 export const metadata = {
   title: 'Job Applier',
@@ -13,7 +14,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en">
       <body>
         <ErrorProvider>
-          <LayoutContent>{children}</LayoutContent>
+          <ToastProvider>
+            <LayoutContent>{children}</LayoutContent>
+          </ToastProvider>
         </ErrorProvider>
       </body>
     </html>

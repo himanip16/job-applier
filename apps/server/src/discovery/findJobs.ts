@@ -1,7 +1,17 @@
 import { prisma, type Prisma } from '../lib/db.js';
+import { buildSearchPlan, titleMatchesPlan, type SearchPlan } from './searchQueries.js';
+import {
+  scoreLexically,
+  loadScoringContext,
+  serialiseReasons,
+  type ScoringContext,
+} from './scoring.js';
+import { rescoreLeadsBatch, rescoreLexically } from './rescoreLeads.js';
+import { firecrawlSearch, fetchBoard, isFirecrawlConfigured, type SearchHit } from './firecrawl.js';
+import { canonicalUrl, sourceById, type DiscoveredJob } from './sources.js';
 import { config } from '../lib/config.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
-import { sourceById, type DiscoveredJob } from './sources.js';
+import { applyHardRules, extractCandidateConstraints } from './hardRules.js';
 import {
   ATS_SEARCH_DOMAINS,
   boardKey,
@@ -9,20 +19,6 @@ import {
   parseBoardUrl,
   type BoardRef,
 } from './boardUrls.js';
-import { firecrawlSearch, isFirecrawlConfigured, type SearchHit } from './firecrawl.js';
-import { buildSearchPlan, titleMatchesPlan, type SearchPlan } from './searchQueries.js';
-import { rescoreLexically } from './rescoreLeads.js';
-import { applyHardRules, extractCandidateConstraints } from './hardRules.js';
-import {
-  assessFit,
-  blendScores,
-  buildPreferences,
-  buildRejectionHistory,
-  loadScoringContext,
-  type ScoringContext,
-  scoreLexically,
-  serialiseReasons,
-} from './scoring.js';
 
 /**
  * Finding openings without being told where to look.
@@ -279,12 +275,25 @@ export async function findJobs(
       const wanted = matchedUrls.has(canonical) || titleMatchesPlan(job.title, plan.roleTitles);
       if (!wanted) continue;
 
+      // Additional filter: if the job title clearly doesn't match the role family, skip it
+      // This catches cases where domain words match but the role is completely different
+      if (!matchedUrls.has(canonical) && plan.roleTitles.length > 0) {
+        const titleLower = job.title.toLowerCase();
+        const hasEngineeringRole = /\b(engineer|developer|backend|frontend|full[- ]?stack|platform|infrastructure|sre|devops|data|ml|machine learning)\b/i.test(titleLower);
+        const planHasEngineering = plan.roleTitles.some(r => /\b(engineer|developer|backend|frontend|full[- ]?stack|platform|infrastructure|sre|devops|data|ml|machine learning)\b/i.test(r));
+        
+        // If plan is for engineering but job is clearly not, skip it
+        if (planHasEngineering && !hasEngineeringRole) {
+          const clearlyNonEngineering = /\b(manager|director|vp|head|recruiter|sales|marketing|design|product|hr|people|operations|finance|legal|compliance|auditor|analyst|specialist)\b/i.test(titleLower);
+          if (clearlyNonEngineering) continue;
+        }
+      }
+
       report.jobsSeen++;
       if (existing.has(canonical)) {
         report.skippedAlreadySeen++;
         continue;
       }
-      existing.add(canonical);
 
       const named: DiscoveredJob = { ...job, companyName: outcome.company || job.companyName };
       const lex = scoreLexically(named, scoring);
@@ -307,6 +316,8 @@ export async function findJobs(
             deepScored: false,
           },
         });
+        // Only add to existing set after successful DB creation to avoid state corruption on errors
+        existing.add(canonical);
         report.newLeads++;
         outcome.kept++;
         fresh.push({ id: lead.id, job: named, lexScore: lex.score });
@@ -320,7 +331,19 @@ export async function findJobs(
 
   // ---- 4. read the most promising in full ----------------------------------
   if (fresh.length && deepScoreTop > 0) {
-    report.deepScored = await deepScore(profileId, fresh, deepScoreTop, scoring, report);
+    // Use batch scoring to avoid rate limits from sequential LLM calls
+    const shortlist = [...fresh].sort((a, b) => b.lexScore - a.lexScore).slice(0, deepScoreTop);
+    const leadsToScore = await prisma.jobLead.findMany({
+      where: { id: { in: shortlist.map(s => s.id) } },
+    });
+    const outcomes = await rescoreLeadsBatch(profileId, leadsToScore);
+    report.deepScored = outcomes.filter(o => o.ok).length;
+    // Add any scoring errors to the report
+    for (const outcome of outcomes) {
+      if (!outcome.ok && outcome.error) {
+        report.errors.push({ where: `scoring lead ${outcome.id}`, error: outcome.error });
+      }
+    }
   }
 
   // Re-rank what was already in the queue too. Leads stored before the resume
@@ -353,67 +376,6 @@ async function registerCompany(
   return { id: created.id, created: true };
 }
 
-async function deepScore(
-  profileId: string,
-  fresh: { id: string; job: DiscoveredJob; lexScore: number }[],
-  top: number,
-  scoring: ScoringContext,
-  report: JobSearchReport,
-): Promise<number> {
-  const profile = await prisma.profile.findUnique({
-    where: { id: profileId },
-    include: { facts: true },
-  });
-  if (!profile) return 0;
-
-  const candidateContext = renderCandidateContext(profile, profile.resumeText);
-  const constraints = extractCandidateConstraints(profile);
-  const preferences = await buildPreferences(profileId);
-  const rejectionHistory = await buildRejectionHistory(profileId);
-
-  let done = 0;
-  const shortlist = [...fresh].sort((a, b) => b.lexScore - a.lexScore).slice(0, top);
-  for (const entry of shortlist) {
-    try {
-      const fit = await assessFit({
-        candidateContext,
-        preferences,
-        rejectionHistory,
-        job: entry.job,
-      });
-      if (!fit) continue;
-
-      // Both hard rules, on the same path every other scorer uses. This used
-      // to be the only place the experience check ran, and it subtracted from
-      // the score rather than blocking - so a model's 90 became a 33 and still
-      // outranked jobs that were genuinely open.
-      const adjustedFit = applyHardRules(fit, { 
-        candidateYears: constraints.candidateYears, 
-        needsSponsorship: constraints.needsSponsorship,
-        salaryExpectations: constraints.salaryExpectations,
-        job: entry.job 
-      });
-
-      const lex = scoreLexically(entry.job, scoring);
-      const blended = blendScores(adjustedFit, lex);
-      await prisma.jobLead.update({
-        where: { id: entry.id },
-        data: {
-          score: blended,
-          scoreReasons: serialiseReasons(lex, adjustedFit) as Prisma.InputJsonValue,
-          deepScored: true,
-          scoredAt: new Date(),
-        },
-      });
-      done++;
-    } catch (err) {
-      // The lead keeps its lexical score and can be re-scored later; losing it
-      // over a scoring hiccup would be much worse.
-      report.errors.push({ where: `scoring ${entry.job.title}`, error: (err as Error).message });
-    }
-  }
-  return done;
-}
 
 /** Leads built from the search result alone, when a board API will not answer. */
 function fallbackJobsFromHits(
@@ -435,7 +397,7 @@ function fallbackJobsFromHits(
       url: preferHttps(hit.url),
       ats: ref.ats,
       title: cleanHitTitle(hit.title) || hit.url,
-      companyName: companyName ?? ref.slug,
+      companyName: companyName || ref.slug,
       remote: /\bremote\b/i.test(`${hit.title} ${hit.description}`),
       // Search descriptions are a couple of sentences, so this lead gets a
       // weaker score than a hydrated one. Better than losing it.

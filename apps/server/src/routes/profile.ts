@@ -5,7 +5,6 @@ import { currentUser } from '../auth/sessions.js';
 import type { RequireProfile } from './discovery.js';
 
 const ProfileInput = z.object({
-  email: z.string().email(),
   fullName: z.string().min(1),
   firstName: z.string().min(1),
   lastName: z.string().min(1),
@@ -26,7 +25,7 @@ const ProfileInput = z.object({
 export function registerProfileRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   app.get('/api/profile', async (req, reply) => {
     const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in to use this.' });
+    if (!user) return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
     const profile = await prisma.profile.findUnique({
       where: { userId: user.id },
       include: { facts: { orderBy: { key: 'asc' } }, resumes: { orderBy: { createdAt: 'desc' } } },
@@ -36,7 +35,7 @@ export function registerProfileRoutes(app: FastifyInstance, requireProfile: Requ
 
   app.put('/api/profile', async (req, reply) => {
     const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in to use this.' });
+    if (!user) return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
     const parseResult = ProfileInput.safeParse(req.body);
     if (!parseResult.success) {
       return reply.code(400).send({ error: 'Invalid input', issues: parseResult.error.issues });
@@ -47,10 +46,6 @@ export function registerProfileRoutes(app: FastifyInstance, requireProfile: Requ
       update: body,
       create: { ...body, userId: user.id },
     });
-    // Sync email to User to prevent divergence
-    if (profile.email !== user.email) {
-      await prisma.user.update({ where: { id: user.id }, data: { email: profile.email } });
-    }
     return { profile };
   });
 }
