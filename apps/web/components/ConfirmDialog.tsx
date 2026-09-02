@@ -6,7 +6,7 @@ interface ConfirmDialogProps {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  onConfirm: () => void;
+  onConfirm: (inputValue?: string) => void;
   onCancel: () => void;
   showInput?: boolean;
   inputPlaceholder?: string;
@@ -48,7 +48,7 @@ export function ConfirmDialog({
         )}
         
         <div className="row">
-          <button className="primary" onClick={onConfirm}>
+          <button className="primary" onClick={() => onConfirm(inputValue)}>
             {confirmLabel}
           </button>
           <button onClick={onCancel}>

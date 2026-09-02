@@ -188,14 +188,28 @@ export function getDomains(keywords: ResumeKeyword[]): string[] {
  *
  * Extracts keywords from the resume and stores them in the profile.
  * This should be called whenever the resume is updated.
+ *
+ * This function uses an optimistic concurrency check to prevent race conditions
+ * where an older keyword extraction could overwrite a newer one.
  */
-export async function updateProfileKeywords(profileId: string): Promise<void> {
+export async function updateProfileKeywords(profileId: string, expectedResumeText?: string): Promise<void> {
   const profile = await prisma.profile.findUnique({
     where: { id: profileId },
     select: { resumeText: true },
   });
 
-  if (!profile || !profile.resumeText) {
+  if (!profile) {
+    return; // Profile doesn't exist, nothing to update
+  }
+
+  // If expectedResumeText is provided, verify it matches current to prevent stale overwrites
+  if (expectedResumeText !== undefined && profile.resumeText !== expectedResumeText) {
+    // Resume text has changed since this operation started, skip update
+    // A newer operation will handle the updated text
+    return;
+  }
+
+  if (!profile.resumeText) {
     // Clear keywords if no resume
     await prisma.profile.update({
       where: { id: profileId },
@@ -205,9 +219,19 @@ export async function updateProfileKeywords(profileId: string): Promise<void> {
   }
 
   const keywords = extractResumeKeywords(profile.resumeText);
-  
-  await prisma.profile.update({
-    where: { id: profileId },
+
+  // Use optimistic concurrency check to ensure we're not overwriting with stale data
+  const result = await prisma.profile.updateMany({
+    where: {
+      id: profileId,
+      resumeText: profile.resumeText, // Only update if resume text hasn't changed
+    },
     data: { resumeKeywords: keywords as any },
   });
+
+  // If no rows were updated, it means the resume text changed and another
+  // operation will handle the keyword extraction
+  if (result.count === 0) {
+    // Silently skip - a newer operation will handle this
+  }
 }

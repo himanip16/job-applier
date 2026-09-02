@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { api } from '../../lib/api';
 import { showToast } from '../../components/Toast';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -58,15 +58,21 @@ export default function OutreachPage() {
   const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [syncStatus, setSyncStatus] = useState<{ connections: any } | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<string>('NOT_CONNECTED');
+  const [connectionStatus, setConnectionStatus] = useState<'NOT_CONNECTED' | 'WAITING_FOR_SIGN_IN' | 'CONNECTED' | 'ERROR'>('NOT_CONNECTED');
   const [editingItem, setEditingItem] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const [tabCounts, setTabCounts] = useState<Record<TabType, number>>({ COLD: 0, REPLY: 0, FOLLOW_UP: 0 });
+  const [pollErrorCount, setPollErrorCount] = useState(0);
+  
+  // Refs for race condition prevention
+  const activeTabRef = useRef<TabType>('COLD');
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const MAX_POLL_ERRORS = 5; // Stop after 5 consecutive errors
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     title: string;
     message: string;
-    onConfirm: () => void;
+    onConfirm: (inputValue?: string) => void;
     showInput?: boolean;
     inputValue?: string;
   }>({
@@ -77,25 +83,52 @@ export default function OutreachPage() {
   });
 
   const loadItems = useCallback(async () => {
+    // Cancel any in-flight request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    
+    // Create new abort controller for this request
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    
+    // Track which tab this request is for
+    const requestedTab = activeTab;
+    activeTabRef.current = requestedTab;
+    
     setLoading(true);
     try {
-      const data = await api<OutreachItem[]>(`/api/outreach/items?type=${activeTab}`);
-      setItems(data);
+      const data = await api<OutreachItem[]>(
+        `/api/outreach/items?type=${activeTab}`,
+        { signal: abortController.signal }
+      );
       
-      // Load counts for all tabs (fall back to local counting if endpoint fails)
-      try {
-        const counts = await api<Record<TabType, number>>('/api/outreach/items/counts');
-        setTabCounts(counts);
-      } catch (countErr) {
-        // If counts endpoint fails, count locally from loaded data
-        console.warn('Failed to load counts, using local data:', countErr);
-        // This is a simple fallback - ideally we'd load all tabs to get accurate counts
-        setTabCounts(prev => ({ ...prev, [activeTab]: data.length }));
+      // Only update state if this is still the active tab
+      if (activeTabRef.current === requestedTab) {
+        setItems(data);
+
+        // Load counts for all tabs
+        try {
+          const counts = await api<Record<TabType, number>>('/api/outreach/items/counts');
+          setTabCounts(counts);
+        } catch (countErr) {
+          console.error('Failed to load counts:', countErr);
+          // Fallback: update count for current tab only
+          setTabCounts(prev => ({ ...prev, [activeTab]: data.length }));
+        }
       }
     } catch (err) {
+      // Ignore aborted requests
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
       console.error('Failed to load items:', err);
+    } finally {
+      if (activeTabRef.current === requestedTab) {
+        setLoading(false);
+      }
+      abortControllerRef.current = null;
     }
-    setLoading(false);
   }, [activeTab]);
 
   const loadColdTargets = useCallback(async () => {
@@ -119,11 +152,19 @@ export default function OutreachPage() {
   const loadConnectionStatus = useCallback(async () => {
     try {
       const data = await api<{ status: string }>('/api/linkedin/connection-status');
-      setConnectionStatus(data.status);
+      setConnectionStatus(data.status as 'NOT_CONNECTED' | 'WAITING_FOR_SIGN_IN' | 'CONNECTED' | 'ERROR');
+      setPollErrorCount(0); // Reset error count on success
     } catch (err) {
       console.error('Failed to load connection status:', err);
+      setPollErrorCount(prev => prev + 1);
+      
+      // Stop polling after too many errors
+      if (pollErrorCount >= MAX_POLL_ERRORS - 1) {
+        setConnectionStatus('ERROR');
+        showToast('Connection check failed repeatedly. Please refresh the page.', 'error');
+      }
     }
-  }, []);
+  }, [pollErrorCount]);
 
   useEffect(() => {
     loadItems();
@@ -132,6 +173,15 @@ export default function OutreachPage() {
     }
   }, [loadItems, loadColdTargets, activeTab]);
 
+  // Cleanup abort controller on unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
   useEffect(() => {
     loadSyncStatus();
     loadConnectionStatus();
@@ -139,18 +189,22 @@ export default function OutreachPage() {
 
   // Poll connection status when waiting for sign-in
   useEffect(() => {
-    if (connectionStatus === 'WAITING_FOR_SIGN_IN') {
+    if (connectionStatus === 'WAITING_FOR_SIGN_IN' && pollErrorCount < MAX_POLL_ERRORS) {
+      // Exponential backoff: 2s, 4s, 8s, 16s, 32s
+      const backoffInterval = Math.min(2000 * Math.pow(2, pollErrorCount), 32000);
+      
       const interval = setInterval(() => {
         loadConnectionStatus();
-      }, 2000);
+      }, backoffInterval);
+      
       return () => clearInterval(interval);
     }
-  }, [connectionStatus, loadConnectionStatus]);
+  }, [connectionStatus, loadConnectionStatus, pollErrorCount]);
 
   const handleConnectLinkedIn = async () => {
     try {
       const result = await api<{ status: string; message: string }>('/api/linkedin/connect', { method: 'POST' });
-      setConnectionStatus(result.status);
+      setConnectionStatus(result.status as 'NOT_CONNECTED' | 'WAITING_FOR_SIGN_IN' | 'CONNECTED' | 'ERROR');
       if (result.status === 'CONNECTED') {
         await loadSyncStatus();
         await loadColdTargets();
@@ -175,26 +229,34 @@ export default function OutreachPage() {
   };
 
   const handleGenerateCold = async () => {
-    if (selectedTargets.size === 0) {
-      showToast('Select at least one contact to generate outreach for.', 'error');
-      return;
-    }
+    // No selection means all eligible contacts, which is the common outreach flow.
+    const selectedBefore = selectedTargets.size > 0
+      ? Array.from(selectedTargets)
+      : coldTargets.map(target => target.id);
+    if (selectedBefore.length === 0) return;
     try {
       const result = await api<{ created: Array<{ id: string; contactId: string }>; errors: Array<{ contactId: string; error: string }> }>('/api/outreach/cold/generate', {
         method: 'POST',
-        body: JSON.stringify({ contactIds: Array.from(selectedTargets) }),
+        body: JSON.stringify({ contactIds: selectedBefore }),
       });
-      setSelectedTargets(new Set());
+      
+      // Only clear selection if there were no errors
+      if (result.errors.length === 0) {
+        setSelectedTargets(new Set());
+        showToast(`Generated ${result.created.length} messages successfully`, 'success');
+      } else {
+        // Keep only the failed contacts selected for retry
+        const failedContactIds = new Set(result.errors.map(e => e.contactId));
+        setSelectedTargets(failedContactIds);
+        showToast(`Generated ${result.created.length} items. ${result.errors.length} failed. Failed contacts remain selected for retry.`, 'error');
+      }
+      
       await loadItems();
       await loadColdTargets();
-      if (result.errors.length > 0) {
-        showToast(`Generated ${result.created.length} items. ${result.errors.length} failed.`, 'error');
-      } else {
-        showToast(`Generated ${result.created.length} messages successfully`, 'success');
-      }
     } catch (err) {
       console.error('Failed to generate outreach:', err);
       showToast('Failed to generate outreach. Check console for details.', 'error');
+      // Don't clear selection on error - let user retry
     }
   };
 
@@ -223,8 +285,34 @@ export default function OutreachPage() {
     setEditText('');
   };
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = async (text: string) => {
+    try {
+      // Check if clipboard API is available
+      if (!navigator.clipboard || !navigator.clipboard.writeText) {
+        // Fallback for older browsers or non-secure contexts
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand('copy');
+          showToast('Copied to clipboard', 'success');
+        } catch (fallbackErr) {
+          showToast('Failed to copy to clipboard', 'error');
+        }
+        document.body.removeChild(textArea);
+        return;
+      }
+      
+      // Use modern clipboard API
+      await navigator.clipboard.writeText(text);
+      showToast('Copied to clipboard', 'success');
+    } catch (err) {
+      console.error('Failed to copy:', err);
+      showToast('Failed to copy to clipboard', 'error');
+    }
   };
 
   const handleOpenLinkedIn = (profileUrl: string) => {
@@ -247,11 +335,11 @@ export default function OutreachPage() {
       isOpen: true,
       title: 'Skip this message',
       message: 'Add a reason for skipping (optional):',
-      onConfirm: async () => {
+      onConfirm: async (inputValue?: string) => {
         try {
           await api(`/api/outreach/items/${itemId}/skip`, {
             method: 'POST',
-            body: JSON.stringify({ reason: confirmDialog.inputValue?.trim() }),
+            body: JSON.stringify({ reason: inputValue?.trim() }),
           });
           await loadItems();
           showToast('Message skipped', 'info');
@@ -270,7 +358,7 @@ export default function OutreachPage() {
     try {
       await api(`/api/outreach/items/${itemId}/mark-sent`, { method: 'POST' });
       await loadItems();
-      showToast('Message marked as sent', 'success');
+      showToast('Message sent on LinkedIn', 'success');
     } catch (err) {
       console.error('Failed to mark as sent:', err);
       showToast('Failed to mark as sent.', 'error');
@@ -329,6 +417,24 @@ export default function OutreachPage() {
             </div>
           )}
           
+          {connectionStatus === 'ERROR' && (
+            <div style={{ 
+              padding: '0.75rem', 
+              background: 'var(--bad-soft)', 
+              border: '1px solid var(--bad-border)', 
+              borderRadius: 'var(--radius)', 
+              marginBottom: '1rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+            }}>
+              <span style={{ fontSize: '1.2rem' }}>⚠️</span>
+              <div>
+                <strong>Connection check failed</strong> — Please refresh the page to try again.
+              </div>
+            </div>
+          )}
+          
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center' }}>
             {connectionStatus === 'NOT_CONNECTED' && (
               <button className="primary" onClick={handleConnectLinkedIn}>
@@ -376,7 +482,7 @@ export default function OutreachPage() {
                 </button>
                 <button 
                   onClick={() => setSelectedTargets(new Set())}
-                  disabled={selectedTargets.size === 0}
+                  disabled={coldTargets.length === 0}
                   className="small"
                 >
                   Clear Selection
@@ -390,7 +496,7 @@ export default function OutreachPage() {
                   onClick={handleGenerateCold}
                   disabled={selectedTargets.size === 0}
                 >
-                  Generate messages
+                  {selectedTargets.size > 0 ? 'Generate selected' : 'Generate for all'}
                 </button>
               </div>
               
@@ -560,8 +666,19 @@ function OutreachItemCard({
             onChange={(e) => onEditChange(e.target.value)}
             style={{ width: '100%', minHeight: '100px', fontFamily: 'monospace' }}
           />
+          <div className="small muted" style={{ marginTop: '0.25rem' }}>
+            {editText.length} / {item.charLimit} characters
+            {editText.length > item.charLimit && (
+              <span style={{ color: 'var(--bad)', marginLeft: '0.5rem' }}>OVER LIMIT</span>
+            )}
+          </div>
           <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-            <button onClick={onEditSave}>Save</button>
+            <button 
+              onClick={onEditSave}
+              disabled={editText.length > item.charLimit}
+            >
+              Save
+            </button>
             <button onClick={onEditCancel}>Cancel</button>
           </div>
         </div>
@@ -599,7 +716,7 @@ function OutreachItemCard({
           </>
         )}
         {item.status === 'APPROVED' && (
-          <button onClick={onMarkSent}>Mark as Sent</button>
+          <button className="primary" onClick={onMarkSent}>Send on LinkedIn</button>
         )}
       </div>
 

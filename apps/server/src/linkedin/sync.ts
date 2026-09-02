@@ -232,6 +232,7 @@ export async function syncConnections(profileId: string): Promise<{
             degree: conn.degree,
             isConnection: true,
             lastSyncedAt: new Date(),
+            discoveredAt: new Date(), // Explicitly set on create
           },
         });
         

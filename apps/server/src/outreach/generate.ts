@@ -25,6 +25,7 @@ export async function generateColdOutreach(input: {
       where: { id: input.profileId },
       include: {
         facts: true,
+        user: true,
       },
     }),
   ]);
@@ -36,8 +37,11 @@ export async function generateColdOutreach(input: {
   let jobDescription = '';
 
   if (input.jobLeadId) {
-    const lead = await prisma.jobLead.findUnique({
-      where: { id: input.jobLeadId },
+    const lead = await prisma.jobLead.findFirst({
+      where: { 
+        id: input.jobLeadId,
+        profileId: input.profileId,
+      },
       include: {
         company: true,
       },
@@ -56,7 +60,15 @@ export async function generateColdOutreach(input: {
   }
 
   // Build candidate context
-  const candidateContext = buildCandidateContext(profile);
+  const candidateContext = buildCandidateContext({
+    fullName: profile.fullName,
+    firstName: profile.firstName,
+    lastName: profile.lastName,
+    email: profile.user?.email,
+    summary: profile.summary,
+    resumeText: profile.resumeText,
+    facts: profile.facts.map(f => ({ key: f.key, label: f.label, value: f.value })),
+  });
 
   // Determine channel based on connection degree
   // Since findColdOutreachTargets only returns isConnection=true (1st-degree),
@@ -64,13 +76,24 @@ export async function generateColdOutreach(input: {
   const channel: OutreachChannel = contact.isConnection ? 'DIRECT_MESSAGE' : 'CONNECTION_NOTE';
   const charLimit = CHAR_LIMITS[channel];
 
-  // Validate contact role - only TALENT and ENGINEERING are supported for cold outreach
-  if (contact.role === 'OTHER') {
-    throw new Error('Cold outreach is only supported for TALENT and ENGINEERING roles');
+  // Check for existing DRAFT or APPROVED outreach for this contact
+  const existing = await prisma.outreachItem.findFirst({
+    where: {
+      profileId: input.profileId,
+      contactId: input.contactId,
+      status: { in: ['DRAFT', 'APPROVED'] },
+    },
+  });
+
+  if (existing) {
+    throw new Error(`Outreach already exists for this contact (ID: ${existing.id}). Use the existing draft or skip it first.`);
   }
 
   // Generate message draft
-  const contactRole: Exclude<ContactRole, 'OTHER'> = contact.role;
+  // Unknown roles use the referral message. Excluding them made a large part
+  // of a connection sync silently ineligible for outreach.
+  const contactRole: Exclude<ContactRole, 'OTHER'> =
+    contact.role === 'TALENT' ? 'TALENT' : 'ENGINEERING';
   const draft = await draftOutreach({
     candidateContext,
     contactFirstName: firstNameOf(contact.fullName),
@@ -115,7 +138,7 @@ function buildCandidateContext(profile: {
   fullName: string;
   firstName: string;
   lastName: string;
-  email: string;
+  email?: string | null;
   summary?: string | null;
   resumeText?: string | null;
   facts: Array<{ key: string; label: string; value: string }>;
@@ -123,7 +146,9 @@ function buildCandidateContext(profile: {
   const parts: string[] = [];
 
   parts.push(`Name: ${profile.fullName}`);
-  parts.push(`Email: ${profile.email}`);
+  if (profile.email) {
+    parts.push(`Email: ${profile.email}`);
+  }
 
   if (profile.summary) {
     parts.push(`Summary: ${profile.summary}`);

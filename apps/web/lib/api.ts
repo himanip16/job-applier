@@ -41,7 +41,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+export async function api<T>(path: string, init?: RequestInit & { signal?: AbortSignal }): Promise<T> {
   /**
    * Only declare a JSON body when there is one.
    *
@@ -70,7 +70,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
    * making cookies work naturally with SameSite=Lax.
    */
   const url = API ? `${API}${path}` : path;
-  const res = await fetch(url, { ...init, headers, credentials: 'include' });
+  const res = await fetch(url, { ...init, headers, credentials: 'include', signal: init?.signal });
   
   const raw = await res.json().catch(() => null);
 

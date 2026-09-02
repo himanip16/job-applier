@@ -1,10 +1,15 @@
 import path from 'node:path';
-import { writeFile } from 'node:fs/promises';
+import { writeFile, unlink } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { prisma } from '../lib/db.js';
 import { resumesDir } from '../lib/config.js';
 import { extractResumeText, assessResumeText } from '../lib/resumeText.js';
 import { updateProfileKeywords } from '../discovery/keywordExtraction.js';
+
+// Allowed file extensions for security
+const ALLOWED_EXTENSIONS = new Set(['.pdf', '.docx', '.doc', '.txt']);
+// Maximum file size to prevent DoS (10MB)
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 export interface ResumeUploadResult {
   resume: {
@@ -29,46 +34,97 @@ export async function uploadResume(
   label?: string
 ): Promise<ResumeUploadResult> {
   const buf = await file.toBuffer();
-  const ext = path.extname(file.filename) || '.pdf';
+
+  // Validate file size to prevent DoS
+  if (buf.length > MAX_FILE_SIZE) {
+    throw new Error(`File size exceeds maximum allowed size of ${MAX_FILE_SIZE / 1024 / 1024}MB`);
+  }
+
+  // Validate file extension to prevent arbitrary file upload
+  const ext = path.extname(file.filename).toLowerCase();
+  if (!ext || !ALLOWED_EXTENSIONS.has(ext)) {
+    throw new Error(`Invalid file extension. Allowed extensions: ${Array.from(ALLOWED_EXTENSIONS).join(', ')}`);
+  }
+
   const secureName = `${randomBytes(16).toString('hex')}${ext}`;
   const dest = path.join(resumesDir, secureName);
+
+  // Write file to disk first
   await writeFile(dest, buf);
 
   let text = '';
   let warning: string | undefined;
+  let textExtractionSuccess = false;
+
   try {
     text = await extractResumeText(dest, file.mimetype);
     warning = assessResumeText(text).warning;
+    textExtractionSuccess = true;
   } catch (err) {
     warning = (err as Error).message;
+    text = '';
   }
 
-  const record = await prisma.$transaction(async (tx) => {
-    const existingCount = await tx.resumeFile.count({ where: { profileId } });
-    const isFirst = existingCount === 0;
-    const record = await tx.resumeFile.create({
-      data: {
-        profileId,
-        label: label ?? 'Default',
-        filename: file.filename,
-        mimeType: file.mimetype,
-        path: dest,
-        bytes: buf.length,
-        isDefault: isFirst,
-        text,
-      },
+  let record;
+  try {
+    record = await prisma.$transaction(async (tx) => {
+      // Check if profile exists
+      const profile = await tx.profile.findUnique({
+        where: { id: profileId },
+        select: { id: true },
+      });
+
+      if (!profile) {
+        throw new Error('Profile not found');
+      }
+
+      // Always create with isDefault: false first to avoid race condition
+      const record = await tx.resumeFile.create({
+        data: {
+          profileId,
+          label: label ?? 'Default',
+          filename: file.filename,
+          mimeType: file.mimetype,
+          path: dest,
+          bytes: buf.length,
+          isDefault: false,
+          text,
+        },
+      });
+
+      // Check if this is the only resume for the profile - if so, make it default
+      const totalResumes = await tx.resumeFile.count({ where: { profileId } });
+      if (totalResumes === 1) {
+        const updatedRecord = await tx.resumeFile.update({
+          where: { id: record.id },
+          data: { isDefault: true },
+        });
+
+        // Only update profile resumeText if text extraction succeeded
+        if (textExtractionSuccess && text) {
+          await tx.profile.update({ where: { id: profileId }, data: { resumeText: text } });
+        }
+
+        return updatedRecord;
+      }
+
+      return record;
     });
-
-    if (isFirst) {
-      await tx.profile.update({ where: { id: profileId }, data: { resumeText: text } });
+  } catch (transactionErr) {
+    // If database transaction fails, clean up the orphaned file
+    try {
+      await unlink(dest);
+    } catch (unlinkErr) {
+      // Log but don't throw - file cleanup is best-effort
+      console.error('Failed to cleanup orphaned file after transaction error:', unlinkErr);
     }
-
-    return record;
-  });
+    throw transactionErr;
+  }
 
   // Extract and store keywords from the resume (outside transaction to avoid timeout)
-  if (text && text.trim().length >= 100) {
-    await updateProfileKeywords(profileId);
+  // Pass the expected resume text for concurrency check
+  if (textExtractionSuccess && text && text.trim().length >= 100) {
+    await updateProfileKeywords(profileId, text);
   }
 
   return {
@@ -94,16 +150,20 @@ export async function setDefaultResume(profileId: string, resumeId: string): Pro
       data: { isDefault: true },
     });
 
-    await tx.profile.update({
-      where: { id: profileId },
-      data: { resumeText: resume.text },
-    });
+    // Only update profile resumeText if the resume has valid text
+    if (resume.text && resume.text.trim().length > 0) {
+      await tx.profile.update({
+        where: { id: profileId },
+        data: { resumeText: resume.text },
+      });
+    }
 
     return resume;
   });
 
   // Extract and store keywords from the new default resume (outside transaction to avoid timeout)
+  // Pass the expected resume text for concurrency check
   if (resume.text && resume.text.trim().length >= 100) {
-    await updateProfileKeywords(profileId);
+    await updateProfileKeywords(profileId, resume.text);
   }
 }
