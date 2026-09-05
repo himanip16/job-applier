@@ -2,9 +2,15 @@
  * Design system.
  *
  * One token set drives every page: colour, spacing, radius, shadow and
- * motion are all variables so a page never hardcodes a look of its own. Panel
- * chrome, buttons, inputs, pills and tables are themed once, here, so a
- * change to what a button looks like is one edit instead of forty.
+ * motion are all variables so a page never hardcodes a look of its own.
+ *
+ * The rule this file exists to enforce: a page writes class names, not
+ * styles. Anything a page needs more than once - a button, a filter bar, a
+ * row in a list, a disclosure - is themed once here so changing what a
+ * button looks like is one edit instead of forty. Components are element
+ * agnostic on purpose: `.btn` looks the same on <a>, <button> and <label>,
+ * because "a link that acts like a button" is a thing every page has and
+ * styling it inline is how they drifted apart in the first place.
  */
 
 :root {
@@ -60,21 +66,33 @@
   --space-4: 1rem;
   --space-5: 1.5rem;
   --space-6: 2rem;
+
+  /* ---- type scale ---------------------------------------------------------*/
+  --fs-xs: 0.72rem;
+  --fs-sm: 0.82rem;
+  --fs-md: 0.9rem;
+  --fs-base: 0.95rem;
+  --fs-lg: 1.05rem;
+  --fs-xl: 1.35rem;
+  --fs-2xl: 1.75rem;
+
+  /* Width of the content column. One number, so a page never invents its own. */
+  --content: 1140px;
 }
 
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f5f6f8;
+    --bg: #f6f7f9;
     --bg-subtle: #eef0f3;
     --panel: #ffffff;
-    --panel-2: #f4f5f8;
-    --panel-hover: #eceef2;
-    --border: #e1e4ea;
-    --border-strong: #c9ced8;
+    --panel-2: #f5f6f9;
+    --panel-hover: #eceef3;
+    --border: #e3e6ec;
+    --border-strong: #c6ccd7;
 
-    --text: #171a21;
-    --text-dim: #4b5361;
-    --muted: #6b7381;
+    --text: #14171e;
+    --text-dim: #495162;
+    --muted: #6a7280;
 
     --accent: #3b6fe0;
     --accent-hover: #2f5fcc;
@@ -96,9 +114,9 @@
     --bad-soft: rgba(211, 59, 62, 0.09);
     --bad-border: rgba(211, 59, 62, 0.3);
 
-    --shadow-sm: 0 1px 2px rgba(20, 24, 34, 0.06);
-    --shadow-md: 0 10px 26px -10px rgba(20, 24, 34, 0.16), 0 2px 6px rgba(20, 24, 34, 0.06);
-    --shadow-lg: 0 24px 56px -16px rgba(20, 24, 34, 0.24);
+    --shadow-sm: 0 1px 2px rgba(20, 24, 34, 0.05);
+    --shadow-md: 0 10px 26px -10px rgba(20, 24, 34, 0.14), 0 2px 6px rgba(20, 24, 34, 0.05);
+    --shadow-lg: 0 24px 56px -16px rgba(20, 24, 34, 0.22);
   }
 }
 
@@ -119,9 +137,9 @@ body {
 }
 
 h1, h2, h3 { font-weight: 650; letter-spacing: -0.015em; color: var(--text); }
-h1 { font-size: 1.7rem; margin: 0 0 0.3rem; }
-h2 { font-size: 1.05rem; margin: 0 0 0.2rem; }
-h3 { font-size: 0.95rem; margin: 0 0 0.2rem; }
+h1 { font-size: var(--fs-2xl); margin: 0 0 0.3rem; }
+h2 { font-size: var(--fs-lg); margin: 0 0 0.2rem; }
+h3 { font-size: var(--fs-base); margin: 0 0 0.2rem; }
 p { margin: 0 0 0.7rem; }
 
 a { color: var(--accent); text-decoration: none; transition: color var(--fast) var(--ease); }
@@ -143,7 +161,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--space-4) 0
   border-radius: 4px;
 }
 
-.wrap { max-width: 1080px; margin: 0 auto; padding: 1.75rem 1.25rem 5rem; }
+.wrap { max-width: var(--content); margin: 0 auto; padding: 1.75rem 1.5rem 5rem; }
 
 /* ----------------------------------------------------------------- header */
 
@@ -155,14 +173,15 @@ header.top {
   position: sticky; top: 0; z-index: 30;
 }
 header.top .inner {
-  max-width: 1080px; margin: 0 auto; padding: 0.7rem 1.25rem;
-  display: flex; align-items: center; gap: 1.5rem;
+  max-width: var(--content); margin: 0 auto; padding: 0.55rem 1.5rem;
+  display: flex; align-items: center; gap: 1.25rem;
 }
 .brand {
   display: inline-flex; align-items: center; gap: 0.5rem;
-  color: var(--text); font-weight: 700; font-size: 0.95rem;
+  color: var(--text); font-weight: 700; font-size: var(--fs-md);
   letter-spacing: -0.01em; flex: none;
 }
+.brand:hover { text-decoration: none; color: var(--text); }
 .brand .brand-mark {
   width: 26px; height: 26px; border-radius: 8px;
   background: linear-gradient(155deg, var(--accent), var(--accent-active));
@@ -171,15 +190,28 @@ header.top .inner {
   flex: none;
 }
 
+/*
+ * One row, always.
+ *
+ * Nine links and an account block did not fit, so the row wrapped and the
+ * second line sat under the logo looking like a rendering fault. The nav now
+ * scrolls sideways instead of wrapping: a nav that runs off the edge reads as
+ * "there is more this way", a nav that wraps reads as broken.
+ */
 header.top nav {
-  display: flex; gap: 0.15rem; margin-right: auto; font-size: 0.85rem;
-  flex-wrap: wrap; align-items: center;
+  display: flex; gap: 0.1rem; margin-right: auto; font-size: var(--fs-sm);
+  align-items: center; flex-wrap: nowrap;
+  min-width: 0; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
 }
+header.top nav::-webkit-scrollbar { display: none; }
 header.top nav a {
   color: var(--muted); text-decoration: none;
-  padding: 0.4rem 0.65rem; border-radius: var(--radius-sm);
-  display: inline-flex; align-items: center; gap: 0.4rem;
-  white-space: nowrap;
+  padding: 0.38rem 0.6rem; border-radius: var(--radius-sm);
+  display: inline-flex; align-items: center; gap: 0.38rem;
+  white-space: nowrap; flex: none;
   transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
   position: relative;
 }
@@ -195,9 +227,50 @@ header.top nav a.active svg { opacity: 1; color: var(--accent); }
   box-shadow: var(--shadow-sm);
 }
 
-@media (max-width: 900px) {
-  header.top .inner { flex-wrap: wrap; }
-  header.top nav { order: 3; width: 100%; margin-right: 0; padding-top: 0.3rem; border-top: 1px solid var(--border); }
+/* ------------------------------------------------------------- account */
+
+.account { position: relative; flex: none; }
+.account-btn {
+  padding: 0.2rem 0.35rem 0.2rem 0.2rem; gap: 0.3rem;
+  background: transparent; border-color: transparent;
+}
+.account-btn:hover:not(:disabled) { background: var(--panel-2); border-color: var(--border); }
+.account-avatar {
+  flex: none; width: 1.65rem; height: 1.65rem; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.72rem; font-weight: 700;
+}
+.account-caret {
+  width: 0.4rem; height: 0.4rem; flex: none;
+  border-right: 1.6px solid var(--muted); border-bottom: 1.6px solid var(--muted);
+  transform: translateY(-2px) rotate(45deg);
+}
+.account-menu {
+  position: absolute; right: 0; top: calc(100% + 0.45rem);
+  min-width: 15rem; padding: 0.3rem;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-md);
+  z-index: 40; animation: fadein var(--fast) var(--ease);
+}
+.account-menu-head {
+  padding: 0.5rem 0.6rem 0.6rem; margin-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border); font-size: var(--fs-sm);
+}
+.account-menu-item {
+  display: block; width: 100%; text-align: left;
+  padding: 0.45rem 0.6rem; border-radius: var(--radius-sm);
+  font-size: var(--fs-md); color: var(--text); background: transparent;
+  border: 0; cursor: pointer; text-decoration: none;
+  font: inherit; font-size: var(--fs-md);
+}
+.account-menu-item:hover { background: var(--panel-2); text-decoration: none; color: var(--text); }
+.account-menu-item.danger { color: var(--bad); }
+.account-menu-item.danger:hover { background: var(--bad-soft); }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
 /* -------------------------------------------------------------- surfaces */
@@ -206,12 +279,28 @@ header.top nav a.active svg { opacity: 1; color: var(--accent); }
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 1.35rem 1.4rem;
-  margin-bottom: 1.1rem;
+  padding: 1.25rem 1.35rem;
+  margin-bottom: 1rem;
   box-shadow: var(--shadow-sm);
 }
-.panel h2 { margin: 0 0 0.2rem; font-size: 1.05rem; }
-.panel .sub { color: var(--muted); font-size: 0.87rem; margin: 0 0 0.9rem; line-height: 1.5; }
+.panel h2 { margin: 0 0 0.2rem; font-size: var(--fs-lg); }
+.panel .sub { color: var(--muted); font-size: var(--fs-md); margin: 0 0 0.9rem; line-height: 1.5; max-width: 68ch; }
+.panel > .sub:last-child { margin-bottom: 0; }
+
+/*
+ * A panel's title bar.
+ *
+ * Every page had a heading on the left and an action on the right, laid out
+ * inline eight different ways. This is that pattern, once, with the rule
+ * that the actions never squash the title.
+ */
+.panel-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 1rem; margin-bottom: 0.9rem;
+}
+.panel-head > :first-child { min-width: 0; }
+.panel-head .sub { margin-bottom: 0; }
+.panel-head-actions { display: flex; gap: 0.45rem; flex: none; align-items: center; flex-wrap: wrap; }
 
 .card {
   background: var(--panel-2);
@@ -224,16 +313,16 @@ header.top nav a.active svg { opacity: 1; color: var(--accent); }
 
 label.field { display: block; margin-bottom: 0.9rem; }
 label.field > span {
-  display: block; font-size: 0.8rem; font-weight: 560; color: var(--text-dim);
+  display: block; font-size: var(--fs-sm); font-weight: 560; color: var(--text-dim);
   margin-bottom: 0.3rem;
 }
 
 input[type=text], input[type=email], input[type=url], input[type=password],
 input[type=number], input[type=search], input[type=date], select, textarea {
-  width: 100%; padding: 0.55rem 0.7rem;
+  width: 100%; padding: 0.5rem 0.7rem;
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font: inherit;
+  font: inherit; font-size: var(--fs-md);
   transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), background var(--fast) var(--ease);
 }
 input::placeholder, textarea::placeholder { color: var(--muted); }
@@ -248,45 +337,88 @@ input:focus, select:focus, textarea:focus {
   box-shadow: 0 0 0 3px var(--accent-soft);
   background: var(--panel);
 }
+input:disabled, select:disabled, textarea:disabled { opacity: 0.55; cursor: not-allowed; }
 input[type=checkbox], input[type=radio] {
   width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer;
+  flex: none;
 }
+
+/* A checkbox and its wording as one clickable unit, aligned on the first line. */
+.check {
+  display: inline-flex; align-items: flex-start; gap: 0.5rem;
+  font-size: var(--fs-md); color: var(--text-dim); cursor: pointer; line-height: 1.45;
+}
+.check input { margin-top: 0.14rem; }
 
 /* ------------------------------------------------------------------ buttons */
 
-button {
-  font: inherit; font-weight: 560; font-size: 0.87rem;
-  padding: 0.5rem 0.95rem; border-radius: var(--radius-sm);
+/*
+ * Element agnostic.
+ *
+ * `.btn` is the whole button look and it is not tied to <button>, because
+ * half the buttons in this app are links - "See all", "Open them", "Fix" -
+ * and when only `button.primary` existed, every one of those links grew its
+ * own inline copy of the styles that then drifted.
+ */
+button, .btn {
+  font: inherit; font-weight: 560; font-size: var(--fs-md);
+  padding: 0.45rem 0.85rem; border-radius: var(--radius-sm);
   border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
-  cursor: pointer;
+  cursor: pointer; text-decoration: none;
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+  white-space: nowrap; vertical-align: middle;
   transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease),
               color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
-button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--panel-hover); }
-button:active:not(:disabled) { transform: translateY(1px); }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
+button:hover:not(:disabled), .btn:hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--border-strong); background: var(--panel-hover);
+  text-decoration: none; color: var(--text);
+}
+button:active:not(:disabled), .btn:active:not(:disabled) { transform: translateY(1px); }
 
-button.primary {
+button.primary, .btn.primary, a.primary {
   background: var(--accent); border-color: var(--accent); color: var(--accent-contrast);
   box-shadow: var(--shadow-sm);
 }
-button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-button.primary:active:not(:disabled) { background: var(--accent-active); border-color: var(--accent-active); }
-
-button.danger { color: var(--bad); }
-button.danger:hover:not(:disabled) { border-color: var(--bad-border); background: var(--bad-soft); }
-
-button.ghost {
-  background: transparent; border-color: transparent;
+button.primary:hover:not(:disabled), .btn.primary:hover:not(:disabled), a.primary:hover {
+  background: var(--accent-hover); border-color: var(--accent-hover); color: var(--accent-contrast);
 }
-button.ghost:hover:not(:disabled) { background: var(--panel-2); border-color: var(--border); }
+button.primary:active:not(:disabled), .btn.primary:active:not(:disabled) {
+  background: var(--accent-active); border-color: var(--accent-active);
+}
+
+button.danger, .btn.danger { color: var(--bad); }
+button.danger:hover:not(:disabled), .btn.danger:hover:not(:disabled) {
+  border-color: var(--bad-border); background: var(--bad-soft); color: var(--bad);
+}
+
+button.ghost, .btn.ghost { background: transparent; border-color: transparent; }
+button.ghost:hover:not(:disabled), .btn.ghost:hover:not(:disabled) {
+  background: var(--panel-2); border-color: var(--border);
+}
 /* Reasserted after .ghost, which would otherwise win the shared hover rule
    and turn a "reject" button's hover state plain gray instead of red. */
-button.danger.ghost:hover:not(:disabled) { background: var(--bad-soft); border-color: var(--bad-border); }
-
-button.small, .btn-small {
-  padding: 0.3rem 0.6rem; font-size: 0.78rem; border-radius: var(--radius-sm);
+button.danger.ghost:hover:not(:disabled), .btn.danger.ghost:hover:not(:disabled) {
+  background: var(--bad-soft); border-color: var(--bad-border);
 }
+
+button.small, .btn.small, .btn-small {
+  padding: 0.28rem 0.55rem; font-size: var(--fs-sm); border-radius: var(--radius-sm);
+}
+
+/*
+ * Disabled has to read as disabled.
+ *
+ * Opacity alone left a disabled primary as a pale lavender slab that looked
+ * like a third button variant rather than an unavailable one. A disabled
+ * control drops its fill entirely and keeps only the outline.
+ */
+button:disabled, .btn[aria-disabled='true'] {
+  cursor: not-allowed;
+  background: var(--panel-2); border-color: var(--border);
+  color: var(--muted); box-shadow: none; opacity: 1;
+}
+button.ghost:disabled { background: transparent; border-color: transparent; }
 
 /* -------------------------------------------------------------------- layout */
 
@@ -296,9 +428,130 @@ button.small, .btn-small {
 .stack { display: flex; flex-direction: column; gap: 0.5rem; }
 
 .section-title {
-  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
   color: var(--muted); margin: 0 0 0.6rem;
 }
+
+/*
+ * A filter bar whose controls line up.
+ *
+ * The old one was a flex row of <label>s each containing its own caption and
+ * control, so captions sat on the baseline of their control and every field
+ * started at a different height - and a lone icon button dropped onto a line
+ * of its own. Here each field is a column of caption-over-control, and the
+ * grid keeps every control on the same line whatever the caption says.
+ */
+.toolbar {
+  display: flex; flex-wrap: wrap; align-items: flex-end;
+  gap: 0.65rem 0.8rem;
+  padding: 0.85rem 0.95rem;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.toolbar .field {
+  display: flex; flex-direction: column; gap: 0.25rem; min-width: 0;
+}
+.toolbar .field > .cap {
+  font-size: var(--fs-xs); font-weight: 640; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--muted); white-space: nowrap;
+}
+.toolbar .field > input, .toolbar .field > select { min-width: 0; }
+.toolbar .grow { flex: 1 1 12rem; }
+/* Anything without a caption still sits on the control line, not above it. */
+.toolbar > button, .toolbar > .btn, .toolbar > .toolbar-note { margin-bottom: 1px; }
+.toolbar-note { font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; }
+.toolbar-sep { flex: 1 1 auto; }
+
+/* A segmented control: every option looks like an option, not just the chosen one. */
+.tabs {
+  display: inline-flex; gap: 2px; padding: 3px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: var(--radius); flex-wrap: wrap;
+}
+.tabs > button, .tabs > .btn {
+  border-color: transparent; background: transparent; color: var(--muted);
+  padding: 0.32rem 0.7rem; font-size: var(--fs-sm); font-weight: 600;
+  box-shadow: none;
+}
+.tabs > button:hover:not(:disabled), .tabs > .btn:hover { background: var(--panel-hover); border-color: transparent; color: var(--text); }
+.tabs > button[aria-selected='true'], .tabs > .btn[aria-selected='true'] {
+  background: var(--panel); color: var(--text);
+  border-color: var(--border); box-shadow: var(--shadow-sm);
+}
+
+/*
+ * A list of rows inside a panel.
+ *
+ * Repeated on six pages as a hand-built flex row with a hairline border on
+ * top. The hairline belongs between rows, never above the first or below the
+ * last, which is what kept looking slightly wrong.
+ */
+.list { display: flex; flex-direction: column; }
+.list > .list-row + .list-row { border-top: 1px solid var(--border); }
+.list-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; padding: 0.7rem 0.5rem;
+  border-radius: var(--radius-sm);
+  color: inherit; text-decoration: none;
+  transition: background var(--fast) var(--ease);
+}
+a.list-row:hover, .list-row.clickable:hover {
+  background: var(--panel-2); text-decoration: none; color: inherit;
+}
+.list-row-main { display: flex; align-items: center; gap: 0.55rem; min-width: 0; flex-wrap: wrap; }
+.list-row-title { font-weight: 620; color: var(--text); }
+.list-row-actions { display: flex; gap: 0.4rem; flex: none; align-items: center; }
+
+/* A label above a value, the way every detail panel wants it. */
+.kv { display: grid; gap: 0.15rem; }
+.kv > dt, .kv > .k { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 640; }
+.kv > dd, .kv > .v { margin: 0; font-size: var(--fs-md); color: var(--text); }
+
+/* A <details> that matches the rest of the app instead of a raw triangle. */
+.disclosure { padding: 0; }
+.disclosure > summary {
+  list-style: none; cursor: pointer;
+  padding: 0.9rem 1.35rem;
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: var(--fs-md); border-radius: var(--radius-lg);
+  transition: background var(--fast) var(--ease);
+}
+.disclosure > summary::-webkit-details-marker { display: none; }
+.disclosure > summary:hover { background: var(--panel-2); }
+.disclosure > summary::before {
+  content: ''; flex: none; width: 0.5rem; height: 0.5rem;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg); margin-right: 0.15rem;
+  transition: transform var(--fast) var(--ease);
+}
+.disclosure[open] > summary::before { transform: rotate(45deg); }
+.disclosure[open] > summary { border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.disclosure > .disclosure-body { padding: 0 1.35rem 1.15rem; }
+/* The same disclosure nested inside a panel, where the panel already pays for
+   the outer padding and a full-width hover band would look like a mistake. */
+.disclosure.inline > summary { padding: 0.35rem 0; border-radius: var(--radius-sm); }
+.disclosure.inline > summary:hover { background: transparent; color: var(--text); }
+.disclosure.inline > .disclosure-body { padding: 0.4rem 0 0; }
+
+/* ------------------------------------------------------------ setup list */
+
+.setup-dot {
+  flex: none; width: 0.6rem; height: 0.6rem; border-radius: 999px;
+  border: 2px solid var(--accent); background: transparent;
+  margin-top: 0.35rem; align-self: flex-start;
+}
+.setup-done {
+  gap: 0.35rem 1rem; margin-top: 0.9rem; padding-top: 0.8rem;
+  border-top: 1px solid var(--border); font-size: var(--fs-sm);
+}
+.setup-tick { color: var(--good); font-weight: 700; margin-right: 0.3rem; }
+
+/* ---------------------------------------------------------- settings rows */
+
+.setting-row { padding: 1rem 0; }
+.setting-row + .setting-row { border-top: 1px solid var(--border); }
+.setting-row:first-of-type { padding-top: 0.25rem; }
+.setting-row:last-of-type { padding-bottom: 0.25rem; }
 
 /* --------------------------------------------------------------------- pills */
 
@@ -307,7 +560,7 @@ button.small, .btn-small {
   font-size: 0.7rem; font-weight: 650; letter-spacing: 0.03em;
   padding: 0.2rem 0.55rem; border-radius: 999px;
   background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
-  text-transform: uppercase;
+  text-transform: uppercase; white-space: nowrap;
 }
 .pill.QUEUED, .pill.PREPARING, .pill.FILLING, .pill.SUBMITTING {
   color: var(--accent); background: var(--accent-soft); border-color: var(--accent-border);
@@ -326,17 +579,28 @@ button.small, .btn-small {
   font-size: 0.66rem; letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600;
   color: var(--muted); border: 1px solid var(--border);
   border-radius: 4px; padding: 0.05rem 0.32rem;
-  background: var(--panel-2);
+  background: var(--panel-2); white-space: nowrap;
 }
 .src.USER, .src.PROFILE, .src.RULE { color: var(--good); border-color: var(--good-border); background: var(--good-soft); }
 .src.INFERRED, .src.MEMORY_FUZZY { color: var(--warn); border-color: var(--warn-border); background: var(--warn-soft); }
 .src.GENERATED { color: var(--accent); border-color: var(--accent-border); background: var(--accent-soft); }
 
+/* A match score, coloured by how good it is. */
+.score {
+  flex: none; min-width: 2.4rem; text-align: center;
+  font-weight: 700; font-variant-numeric: tabular-nums; font-size: var(--fs-sm);
+  border-radius: var(--radius-sm); padding: 0.2rem 0.35rem;
+  border: 1px solid transparent;
+}
+.score.high { color: var(--good); background: var(--good-soft); border-color: var(--good-border); }
+.score.mid  { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-border); }
+.score.low  { color: var(--bad);  background: var(--bad-soft);  border-color: var(--bad-border); }
+
 /* -------------------------------------------------------------------- tables */
 
-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+table { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }
 th {
-  text-align: left; color: var(--muted); font-weight: 630; font-size: 0.72rem;
+  text-align: left; color: var(--muted); font-weight: 630; font-size: var(--fs-xs);
   text-transform: uppercase; letter-spacing: 0.05em; padding: 0.5rem 0.6rem;
   border-bottom: 1px solid var(--border);
 }
@@ -378,7 +642,7 @@ tbody tr:hover { background: var(--panel-2); }
 
 .q { border-top: 1px solid var(--border); padding: 0.9rem 0; }
 .q:first-of-type { border-top: 0; }
-.q .why { font-size: 0.82rem; color: var(--muted); margin: 0.2rem 0 0.5rem; }
+.q .why { font-size: var(--fs-sm); color: var(--muted); margin: 0.2rem 0 0.5rem; }
 .q .why.policy { color: var(--warn); }
 
 /* ------------------------------------------------------------------- notices */
@@ -387,35 +651,40 @@ tbody tr:hover { background: var(--panel-2); }
   display: flex; gap: 0.55rem; align-items: flex-start;
   border: 1px solid var(--accent-border);
   padding: 0.65rem 0.85rem; background: var(--accent-soft);
-  border-radius: var(--radius); font-size: 0.88rem; line-height: 1.5;
+  border-radius: var(--radius); font-size: var(--fs-md); line-height: 1.5;
 }
 .notice.bad { border-color: var(--bad-border); background: var(--bad-soft); }
 .notice.good { border-color: var(--good-border); background: var(--good-soft); }
+.notice.warn { border-color: var(--warn-border); background: var(--warn-soft); }
 
 /* ------------------------------------------------------------------ helpers */
 
 .muted { color: var(--muted); }
-.small { font-size: 0.85rem; }
+.small { font-size: var(--fs-sm); }
+.nums { font-variant-numeric: tabular-nums; }
+.truncate { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shot { max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.7rem; }
 
 .stat {
   display: block; text-decoration: none; color: inherit;
-  padding: 0.9rem 1rem; border-radius: var(--radius);
+  padding: 0.85rem 1rem; border-radius: var(--radius);
   border: 1px solid var(--border); background: var(--panel-2);
   transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
 .stat:hover { border-color: var(--border-strong); background: var(--panel-hover); text-decoration: none; transform: translateY(-1px); }
 .stat .stat-value {
-  font-size: 1.7rem; font-weight: 700; line-height: 1.1;
+  font-size: var(--fs-2xl); font-weight: 700; line-height: 1.1;
   font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
 }
-.stat .stat-label { color: var(--muted); font-size: 0.82rem; margin-top: 0.15rem; }
+.stat .stat-label { color: var(--muted); font-size: var(--fs-sm); margin-top: 0.15rem; }
 
 .lead-row:hover { background: var(--panel-2); }
 
 .empty-state {
   text-align: center; padding: 2.5rem 1.5rem; color: var(--muted);
-  border: 1px dashed var(--border); border-radius: var(--radius); font-size: 0.9rem;
+  border: 1px dashed var(--border); border-radius: var(--radius); font-size: var(--fs-base);
 }
 
 .spinner {
@@ -435,7 +704,21 @@ tbody tr:hover { background: var(--panel-2); }
 
 .fade-in { animation: fadein 220ms var(--ease); }
 
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 900px) {
+  header.top .inner { gap: 0.75rem; }
+  .panel-head { flex-direction: column; gap: 0.6rem; }
+}
+
 @media (max-width: 640px) {
   .wrap { padding: 1.1rem 0.9rem 4rem; }
   .panel { padding: 1rem 1.05rem; }
+  .disclosure > summary { padding: 0.8rem 1.05rem; }
+  .disclosure > .disclosure-body { padding: 0 1.05rem 1rem; }
 }

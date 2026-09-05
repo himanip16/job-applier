@@ -48,23 +48,10 @@ export default function Home() {
         <h2>Cannot reach the server</h2>
         <div className="notice bad">{error}</div>
         <div className="row" style={{ gap: '.6rem', marginTop: '.6rem' }}>
-          <button 
-            onClick={() => navigator.clipboard.writeText('pnpm dev:server')}
-            style={{
-              display: 'inline-block',
-              padding: '.4rem .8rem',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--border)',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: 'inherit',
-            }}
-          >
+          <button onClick={() => navigator.clipboard.writeText('pnpm dev:server')}>
             Copy start command
           </button>
-          <span className="small muted" style={{ display: 'flex', alignItems: 'center' }}>
-            Server runs on port 8787
-          </span>
+          <span className="small muted">Server runs on port 8787</span>
         </div>
       </div>
     );
@@ -80,13 +67,12 @@ export default function Home() {
 
       {ov && !ov.ready && <SetupPanel setup={ov.setup} />}
 
-      <details className="panel">
-        <summary style={{ cursor: 'pointer' }}>
-          <strong>How it works</strong>{' '}
-          <span className="muted small">
-            — four parts, each usable on its own
-          </span>
+      <details className="panel disclosure">
+        <summary>
+          <strong>How it works</strong>
+          <span className="muted small">four parts, each usable on its own</span>
         </summary>
+        <div className="disclosure-body">
 
         <Feature
           step="1"
@@ -139,11 +125,12 @@ export default function Home() {
           wrong.
           {ov?.counts.upcomingRounds ? ` ${ov.counts.upcomingRounds} round(s) scheduled.` : ''}
         </Feature>
+        </div>
       </details>
 
       <div className="panel">
         <h2>Also here</h2>
-        <div className="grid2">
+        <div className="stats" style={{ marginTop: '.7rem' }}>
           <Small
             href="/retro"
             title="Retrospective"
@@ -201,64 +188,26 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
 
   return (
     <div className="panel">
-      <div className="spread">
+      <div className="panel-head">
         <div>
-          <h2 style={{ margin: 0 }}>Matches you have not applied to</h2>
-          <p className="sub" style={{ margin: '.2rem 0 0' }}>
-            {total} saved or new. Best {matches.length} first.
-          </p>
+          <h2>Matches you have not applied to</h2>
+          <p className="sub">{total} saved or new. Best {matches.length} first.</p>
         </div>
-        <a href="/discover" className="primary" style={{
-          display: 'inline-block',
-          padding: '.4rem .8rem',
-          borderRadius: 'var(--radius-sm)',
-          background: 'var(--accent)',
-          color: 'white',
-          textDecoration: 'none',
-        }}>
+        <a href="/discover" className="btn primary">
           See all {total}
         </a>
       </div>
 
-      <div style={{ marginTop: '.6rem' }}>
+      <div className="list">
         {matches.map((m) => {
           const score = Math.round(m.score);
-          const tone = score >= 70 ? 'var(--good)' : score >= 45 ? 'var(--warn)' : 'var(--bad)';
+          const band = score >= 70 ? 'high' : score >= 45 ? 'mid' : 'low';
           return (
-            <a
-              key={m.id}
-              href={`/jobs/${m.id}`}
-              className="spread"
-              style={{
-                borderTop: '1px solid var(--border)',
-                padding: '.6rem .3rem',
-                borderRadius: 'var(--radius-sm)',
-                textDecoration: 'none',
-                color: 'inherit',
-                display: 'flex',
-                alignItems: 'center',
-              }}
-            >
-              <div className="row" style={{ gap: '.55rem', minWidth: 0 }}>
-                <span
-                  style={{
-                    flex: 'none',
-                    minWidth: '2.1rem',
-                    textAlign: 'center',
-                    fontWeight: 700,
-                    fontVariantNumeric: 'tabular-nums',
-                    color: tone,
-                    background:
-                      score >= 70 ? 'var(--good-soft)' : score >= 45 ? 'var(--warn-soft)' : 'var(--bad-soft)',
-                    borderRadius: 'var(--radius-sm)',
-                    padding: '.15rem .3rem',
-                    fontSize: '.85rem',
-                  }}
-                >
-                  {score}
-                </span>
-                <strong style={{ color: 'var(--text)' }}>{m.title}</strong>
-                <span className="muted small">· {m.companyName}</span>
+            <a key={m.id} href={`/jobs/${m.id}`} className="list-row">
+              <span className="list-row-main">
+                <span className={`score ${band}`}>{score}</span>
+                <span className="list-row-title">{m.title}</span>
+                <span className="muted small">{m.companyName}</span>
                 {m.remote && <span className="src">remote</span>}
                 {m.location && <span className="muted small">{m.location}</span>}
                 {m.status === 'SHORTLISTED' && <span className="src">saved</span>}
@@ -267,14 +216,8 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
                     quick score
                   </span>
                 )}
-              </div>
-              <span style={{
-                flex: 'none',
-                padding: '.3rem .6rem',
-                borderRadius: 'var(--radius-sm)',
-                background: 'var(--border)',
-                fontSize: '.85rem',
-              }}>Open</span>
+              </span>
+              <span className="btn small">Open</span>
             </a>
           );
         })}
@@ -301,49 +244,22 @@ function Hero({ ov }: { ov: Overview | null }) {
       </p>
 
       {loading ? (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(9rem, 1fr))',
-            gap: '.75rem',
-            marginTop: '1.1rem',
-          }}
-        >
+        <div className="stats" style={{ marginTop: '1.1rem' }}>
           {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} className="skel" style={{ height: '4.5rem' }} />
           ))}
         </div>
       ) : nothingYet ? (
         <div className="row" style={{ gap: '.6rem', marginTop: '1rem' }}>
-          <a href="/discover" className="primary" style={{
-            display: 'inline-block',
-            padding: '.4rem .8rem',
-            borderRadius: 'var(--radius-sm)',
-            background: 'var(--accent)',
-            color: 'white',
-            textDecoration: 'none',
-          }}>
+          <a href="/discover" className="btn primary">
             Find jobs for me
           </a>
-          <a href="/runs" style={{
-            display: 'inline-block',
-            padding: '.4rem .8rem',
-            borderRadius: 'var(--radius-sm)',
-            background: 'var(--border)',
-            textDecoration: 'none',
-          }}>
+          <a href="/runs" className="btn">
             Or paste a job URL
           </a>
         </div>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(9rem, 1fr))',
-            gap: '.75rem',
-            marginTop: '1.1rem',
-          }}
-        >
+        <div className="stats" style={{ marginTop: '1.1rem' }}>
           {/*
             Ordered by what you can do something about. "Not applied yet" is
             first because it is the only number that is a to-do list; the ones
@@ -392,14 +308,7 @@ function Hero({ ov }: { ov: Overview | null }) {
                   .join(' · ')}
               </div>
             </div>
-            <a href="/runs" className="primary" style={{
-              display: 'inline-block',
-              padding: '.4rem .8rem',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--accent)',
-              color: 'white',
-              textDecoration: 'none',
-            }}>
+            <a href="/runs" className="btn primary">
               Open them
             </a>
           </div>
@@ -433,41 +342,63 @@ function Big({
 }
 
 function SetupPanel({ setup }: { setup: SetupStep[] }) {
-  const remaining = setup.filter((s) => !s.done).length;
+  const todo = setup.filter((s) => !s.done);
+  const done = setup.filter((s) => s.done);
+
+  /*
+   * The unfinished steps are the panel; the finished ones are a receipt.
+   *
+   * Listing all six at equal weight made a tall blue slab in which the two
+   * steps you can actually act on were the hardest to pick out - a checklist
+   * that grows more prominent the more of it you complete has it backwards.
+   */
   return (
-    <div className="panel" style={{ borderColor: 'var(--accent-border)', background: 'var(--accent-soft)' }}>
-      <h2>Finish setting up</h2>
-      <p className="sub">
-        {remaining} step{remaining === 1 ? '' : 's'} left. Each one removes work later.
-      </p>
-      {setup.map((s) => (
-        <div
-          key={s.id}
-          className="spread"
-          style={{ padding: '.45rem 0', borderTop: '1px solid var(--border)' }}
-        >
-          <div>
-            <span style={{ color: s.done ? 'var(--good)' : 'var(--muted)', marginRight: '.5rem' }}>
-              {s.done ? '✓' : '○'}
-            </span>
-            <strong style={{ opacity: s.done ? 0.6 : 1 }}>{s.label}</strong>
-            <div className="muted small" style={{ marginLeft: '1.4rem' }}>
-              {s.detail}
-            </div>
-          </div>
-          {!s.done && s.href && (
-            <a href={s.href} style={{
-              display: 'inline-block',
-              padding: '.3rem .6rem',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--border)',
-              textDecoration: 'none',
-            }}>
-              Fix
-            </a>
-          )}
+    <div className="panel" style={{ borderColor: 'var(--accent-border)' }}>
+      <div className="panel-head">
+        <div>
+          <h2>Finish setting up</h2>
+          <p className="sub">
+            {todo.length} step{todo.length === 1 ? '' : 's'} left. Each one removes work later.
+          </p>
         </div>
-      ))}
+        <span className="muted small nums">
+          {done.length}/{setup.length} done
+        </span>
+      </div>
+
+      <div className="list">
+        {todo.map((s) => (
+          <div key={s.id} className="list-row">
+            <span className="list-row-main" style={{ flexWrap: 'nowrap' }}>
+              <span className="setup-dot" aria-hidden="true" />
+              <span style={{ minWidth: 0 }}>
+                <span className="list-row-title">{s.label}</span>
+                <span className="muted small" style={{ display: 'block' }}>
+                  {s.detail}
+                </span>
+              </span>
+            </span>
+            {s.href && (
+              <a href={s.href} className="btn small primary">
+                {s.label.startsWith('Upload') ? 'Upload' : 'Fill in'}
+              </a>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {done.length > 0 && (
+        <div className="row setup-done">
+          {done.map((s) => (
+            <span key={s.id} className="muted small" title={s.detail}>
+              <span className="setup-tick" aria-hidden="true">
+                ✓
+              </span>
+              {s.label}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -525,13 +456,7 @@ function Feature({
           </p>
         </div>
       </div>
-      <a href={href} style={{ flex: 'none',
-        display: 'inline-block',
-        padding: '.3rem .6rem',
-        borderRadius: 'var(--radius-sm)',
-        background: 'var(--border)',
-        textDecoration: 'none',
-      }}>
+      <a href={href} className="btn small">
         {cta}
       </a>
     </div>
@@ -540,22 +465,24 @@ function Feature({
 
 function Small({ href, title, note }: { href: string; title: string; note: string }) {
   return (
-    <a href={href} style={{ textDecoration: 'none', display: 'block', padding: '.6rem 0' }}>
+    <a href={href} className="stat">
       <strong>{title}</strong>
-      <div className="muted small">{note}</div>
+      <div className="stat-label">{note}</div>
     </a>
   );
 }
 
 function StatusPanel({ health, submitted }: { health: Health; submitted: number }) {
+  /*
+   * One line, not a panel. "0 applications submitted / operational" was
+   * taking a full-width card to say nothing you would act on; it belongs at
+   * the bottom of the page in the size of a footnote.
+   */
   return (
-    <div className="panel">
-      <h2>Status</h2>
-      <div className="row" style={{ gap: '2rem', marginTop: '.4rem', alignItems: 'flex-start' }}>
-        <Stat label="applications submitted" value={submitted} />
-        <Stat label="system" value="operational" />
-      </div>
-    </div>
+    <p className="muted small" style={{ textAlign: 'center', marginTop: '1.5rem' }}>
+      <span className="nums">{submitted}</span> application{submitted === 1 ? '' : 's'} submitted ·
+      server {health.ok ? 'operational' : 'degraded'}
+    </p>
   );
 }
 

@@ -86,13 +86,69 @@ export default function JobPage() {
       <OutcomePanel d={d} />
       {rejecting && d.lead && (
         <RejectDialog
-          lead={d.lead}
+          title={d.job.title}
+          companyName={d.job.company}
           categories={categories}
           onClose={() => setRejecting(false)}
           onDone={handleReject}
         />
       )}
     </>
+  );
+}
+
+function RejectDialog({
+  title,
+  companyName,
+  categories,
+  onClose,
+  onDone,
+}: {
+  title: string;
+  companyName: string;
+  categories: string[];
+  onClose: () => void;
+  onDone: (category?: string, reason?: string) => Promise<void>;
+}) {
+  const [category, setCategory] = useState<string | undefined>();
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    setBusy(true);
+    try {
+      await onDone(category, reason.trim() || undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <h2 style={{ margin: '0 0 .2rem' }}>Not for you</h2>
+        <p className="sub">{title} at {companyName}. A reason is optional and helps improve future ranking.</p>
+        <div className="row" style={{ marginBottom: '.8rem' }}>
+          {categories.map((value) => (
+            <button
+              key={value}
+              onClick={() => setCategory(category === value ? undefined : value)}
+              style={category === value ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-border)', color: 'var(--accent)' } : undefined}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+        <label className="field">
+          <span>Anything else? (optional)</span>
+          <textarea value={reason} onChange={(event) => setReason(event.target.value)} />
+        </label>
+        <div className="row">
+          <button className="primary" disabled={busy} onClick={submit}>{busy ? 'Saving…' : 'Reject'}</button>
+          <button onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
   );
 }
 

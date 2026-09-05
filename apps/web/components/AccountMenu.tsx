@@ -1,13 +1,24 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { api } from '../lib/api';
 
-/** Who you are signed in as, and the way out. */
+/**
+ * Who you are signed in as, and the way out.
+ *
+ * Deliberately just an avatar until you click it. Spelled out in full, an
+ * email address is a couple of hundred pixels of chrome that never changes
+ * and that nobody reads twice - and it was taking those pixels from the nav,
+ * which then had to wrap onto a second line. Identity is a thing you check
+ * occasionally; navigation is a thing you use constantly, so navigation wins
+ * the space and the address moves one click away.
+ */
 export function AccountMenu() {
   const pathname = usePathname();
   const [email, setEmail] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (pathname?.startsWith('/signin')) {
@@ -19,61 +30,69 @@ export function AccountMenu() {
       .catch(() => setEmail(null));
   }, [pathname]);
 
+  // Close on an outside click or Escape, the two things a person tries.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!box.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
   if (!email) return null;
 
   return (
-    <div
-      className="row"
-      style={{
-        gap: '.6rem',
-        flex: 'none',
-        // A divider and its own padding, rather than sitting flush against
-        // the last nav item - the two are unrelated (one is "where", the
-        // other is "who"), and running them together read as cramped.
-        borderLeft: '1px solid var(--border)',
-        paddingLeft: '.85rem',
-        marginLeft: '.15rem',
-      }}
-    >
-      <span
-        aria-hidden="true"
-        style={{
-          flex: 'none',
-          width: '1.6rem',
-          height: '1.6rem',
-          borderRadius: '999px',
-          background: 'var(--accent-soft)',
-          color: 'var(--accent)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: '.72rem',
-          fontWeight: 700,
-        }}
-      >
-        {email[0]?.toUpperCase()}
-      </span>
-      <span
-        className="small muted"
-        title={email}
-        style={{
-          maxWidth: '13rem',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {email}
-      </span>
+    <div ref={box} className="account">
       <button
-        className="ghost small"
-        onClick={async () => {
-          await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
-          window.location.href = '/signin';
-        }}
+        className="account-btn"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={email}
       >
-        Sign out
+        <span className="account-avatar" aria-hidden="true">
+          {email[0]?.toUpperCase()}
+        </span>
+        <span className="account-caret" aria-hidden="true" />
+        <span className="sr-only">Account: {email}</span>
       </button>
+
+      {open && (
+        <div className="account-menu" role="menu">
+          <div className="account-menu-head">
+            <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
+              Signed in as
+            </div>
+            <div className="truncate" title={email}>
+              {email}
+            </div>
+          </div>
+          <a className="account-menu-item" href="/settings" role="menuitem">
+            Keys and settings
+          </a>
+          <a className="account-menu-item" href="/profile" role="menuitem">
+            Your profile
+          </a>
+          <button
+            className="account-menu-item danger"
+            role="menuitem"
+            onClick={async () => {
+              await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
+              window.location.href = '/signin';
+            }}
+          >
+            Sign out
+          </button>
+        </div>
+      )}
     </div>
   );
 }

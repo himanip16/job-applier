@@ -45,6 +45,8 @@ Hard constraints:
 - Every factual claim about the candidate must be traceable to the supplied profile, facts or resume. You may rephrase and emphasise; you may not add.
 - Never invent employers, dates, metrics, technologies, degrees or outcomes.
 - No placeholders. Never emit [Company], [Role], [X years] or similar.
+- Keep the message concise and high-signal: at most 450 characters for a direct message.
+- If a job URL is supplied, include that exact URL so the recipient can identify the opening.
 - Never claim a personal connection that was not supplied: no "I loved your talk", no "we met at", no "I've been following your work", no invented mutual contacts.
 - Address the person by first name only. Do not guess at pronouns, seniority beyond their stated title, or anything about their background.
 - Do not flatter. "Your team is doing incredible work" with nothing behind it is the single most obvious mail-merge tell.
@@ -91,7 +93,7 @@ export async function draftOutreach(input: DraftInput): Promise<OutreachDraft> {
   const channelNote =
     input.channel === 'CONNECTION_NOTE'
       ? `This is a LinkedIn connection request note. HARD LIMIT ${limit} characters including spaces — LinkedIn will not accept one character more. That is about three short sentences. Be ruthless.`
-      : `This is a LinkedIn direct message to an existing connection. Keep it under ${Math.min(900, limit)} characters; short messages get replies.`;
+      : `This is a LinkedIn direct message to an existing connection. HARD LIMIT ${Math.min(450, limit)} characters; short messages get read.`;
 
   const prompt = (feedback?: string) => `${input.candidateContext}
 

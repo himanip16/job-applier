@@ -76,12 +76,21 @@ export default function SettingsPage() {
       </div>
 
       <div className="panel">
+        <h2>Connections</h2>
+        <p className="sub">
+          One row per key. Paste, save, and it is verified against the live API before it counts.
+        </p>
         {settings.map((s) => (
           <SettingRow key={s.key} setting={s} onChange={load} namedKeys={namedKeys} />
         ))}
       </div>
 
       <div className="panel">
+        <h2>Saved keys</h2>
+        <p className="sub">
+          Keep several keys per provider and switch between them — useful when one hits its free
+          tier limit and you want the other without re-pasting it.
+        </p>
         <NamedKeyManager provider="anthropic" state={namedKeys.anthropic} onChange={load} />
         <NamedKeyManager provider="gemini" state={namedKeys.gemini} onChange={load} />
       </div>
@@ -103,7 +112,7 @@ export default function SettingsPage() {
 
 function WhatWorks({ effect }: { effect: Effect }) {
   return (
-    <div className="row" style={{ gap: '1.5rem', marginTop: '.8rem', flexWrap: 'wrap' }}>
+    <div className="stats" style={{ marginTop: '.9rem' }}>
       <Live
         on={effect.modelReady}
         label="Cover letters, fit scoring, resume grounding"
@@ -121,18 +130,9 @@ function WhatWorks({ effect }: { effect: Effect }) {
 
 function Live({ on, label, detail }: { on: boolean; label: string; detail: string }) {
   return (
-    <div>
-      <span
-        className="pill"
-        style={
-          on
-            ? { color: 'var(--good)', background: 'var(--good-soft)', borderColor: 'var(--good-border)' }
-            : undefined
-        }
-      >
-        {on ? '● live' : '○ off'}
-      </span>
-      <div className="small" style={{ marginTop: '.35rem' }}>{label}</div>
+    <div className="card">
+      <span className={on ? 'pill SUBMITTED' : 'pill'}>{on ? '● live' : '○ off'}</span>
+      <div className="small" style={{ marginTop: '.4rem', fontWeight: 600 }}>{label}</div>
       <div className="muted small">{detail}</div>
     </div>
   );
@@ -183,8 +183,8 @@ function SettingRow({
   }
 
   return (
-    <div style={{ borderTop: '1px solid var(--border)', padding: '.9rem 0' }}>
-      <div className="spread">
+    <div className="setting-row">
+      <div className="panel-head" style={{ marginBottom: '.5rem' }}>
         <div style={{ minWidth: 0 }}>
           <strong>{setting.label}</strong>{' '}
           <code className="small muted">{setting.key}</code>
@@ -219,7 +219,7 @@ function SettingRow({
         </div>
       )}
 
-      <div className="row" style={{ marginTop: '.55rem', gap: '.5rem' }}>
+      <div className="row" style={{ marginTop: '.55rem', gap: '.5rem', flexWrap: 'nowrap' }}>
         <input
           type={setting.secret ? 'password' : 'text'}
           placeholder={

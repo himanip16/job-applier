@@ -39,6 +39,9 @@ interface ColdTarget {
   role: string;
   degree: string | null;
   hasConversation: boolean;
+  jobLeadId: string | null;
+  jobTitle: string | null;
+  jobUrl: string | null;
 }
 
 type TabType = 'COLD' | 'REPLY' | 'FOLLOW_UP';
@@ -186,9 +189,10 @@ export default function OutreachPage() {
     try {
       await api(`/api/outreach/items/${itemId}/mark-sent`, { method: 'POST' });
       await loadItems();
+      alert('Message and resume sent on LinkedIn.');
     } catch (err) {
       console.error('Failed to mark as sent:', err);
-      alert('Failed to mark as sent.');
+      alert('LinkedIn did not send the message. Nothing was marked as sent.');
     }
   };
 
@@ -209,9 +213,16 @@ export default function OutreachPage() {
 
   return (
     <div className="panel">
-      <h1>Outreach Queue</h1>
-
-      <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
+      <div className="panel-head">
+        <div>
+          <h2>Outreach</h2>
+          <p className="sub">
+            Messages to people at the companies you are applying to — drafted here, approved by
+            you, never sent on their own.
+          </p>
+        </div>
+        <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
+      </div>
 
       {activeTab === 'COLD' && (
         <div style={{ marginTop: '1rem' }}>
@@ -230,7 +241,7 @@ export default function OutreachPage() {
           </div>
 
           {coldTargets.length > 0 && (
-            <div style={{ marginBottom: '1rem', padding: '1rem', background: '#f5f5f5', borderRadius: '4px' }}>
+            <div style={{ marginBottom: '1rem', padding: '1rem', background: 'var(--panel-2)', borderRadius: '4px' }}>
               <div style={{ marginBottom: '0.5rem' }}>
                 <strong>{coldTargets.length} cold targets available</strong>
               </div>
@@ -260,7 +271,7 @@ export default function OutreachPage() {
                     key={target.id}
                     style={{
                       padding: '0.5rem',
-                      borderBottom: '1px solid #ddd',
+                      borderBottom: '1px solid var(--border)',
                       display: 'flex',
                       alignItems: 'center',
                       gap: '0.5rem',
@@ -279,6 +290,11 @@ export default function OutreachPage() {
                       <div className="small muted">
                         {target.degree ? `${target.degree}-degree connection` : 'Connection'} • {target.hasConversation ? 'has previous conversation' : 'no previous conversation'}
                       </div>
+                      <div className="small muted">
+                        {target.jobTitle
+                          ? `Matched job: ${target.jobTitle}`
+                          : 'No matching job yet; the career page will be checked when generating'}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -291,7 +307,13 @@ export default function OutreachPage() {
       {loading ? (
         <p>Loading...</p>
       ) : items.length === 0 ? (
-        <p className="muted">No {activeTab.toLowerCase()} outreach items.</p>
+        <div className="empty-state">
+          {activeTab === 'COLD'
+            ? 'Nothing to send yet. Sync your connections to find people worth writing to.'
+            : activeTab === 'REPLY'
+              ? 'No replies waiting. Anyone who answers you appears here.'
+              : 'No follow-ups due. One appears when a message has gone unanswered long enough.'}
+        </div>
       ) : (
         <div style={{ marginTop: '1rem' }}>
           {items.map((item) => (
@@ -317,23 +339,25 @@ export default function OutreachPage() {
   );
 }
 
+/** The enum names are how the database spells it, not how a person reads it. */
+const TAB_LABEL: Record<TabType, string> = {
+  COLD: 'First contact',
+  REPLY: 'Replies',
+  FOLLOW_UP: 'Follow-ups',
+};
+
 function Tabs({ activeTab, onTabChange }: { activeTab: TabType; onTabChange: (tab: TabType) => void }) {
   const tabs: TabType[] = ['COLD', 'REPLY', 'FOLLOW_UP'];
   return (
-    <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid #ddd', paddingBottom: '0.5rem' }}>
+    <div className="tabs" role="tablist">
       {tabs.map((tab) => (
         <button
           key={tab}
+          role="tab"
+          aria-selected={activeTab === tab}
           onClick={() => onTabChange(tab)}
-          style={{
-            padding: '0.5rem 1rem',
-            background: activeTab === tab ? '#e0e0e0' : 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            fontWeight: activeTab === tab ? 'bold' : 'normal',
-          }}
         >
-          {tab}
+          {TAB_LABEL[tab]}
         </button>
       ))}
     </div>
@@ -372,12 +396,11 @@ function OutreachItemCard({
 
   return (
     <div
+      className="card"
       style={{
-        border: '1px solid #ddd',
-        borderRadius: '4px',
-        padding: '1rem',
         marginBottom: '1rem',
-        background: isOverLimit ? '#fff5f5' : 'white',
+        background: isOverLimit ? 'var(--bad-soft)' : undefined,
+        borderColor: isOverLimit ? 'var(--bad-border)' : undefined,
       }}
     >
       <div style={{ marginBottom: '0.5rem' }}>
@@ -408,7 +431,7 @@ function OutreachItemCard({
           <div
             style={{
               padding: '0.5rem',
-              background: '#f5f5f5',
+              background: 'var(--panel-2)',
               borderRadius: '4px',
               whiteSpace: 'pre-wrap',
               fontFamily: 'monospace',
@@ -418,7 +441,7 @@ function OutreachItemCard({
           </div>
           <div className="small muted" style={{ marginTop: '0.25rem' }}>
             {currentBody.length} / {item.charLimit} characters
-            {isOverLimit && <span style={{ color: 'red' }}> (OVER LIMIT)</span>}
+            {isOverLimit && <span style={{ color: 'var(--bad)' }}> (OVER LIMIT)</span>}
           </div>
         </div>
       )}
@@ -436,7 +459,7 @@ function OutreachItemCard({
           </>
         )}
         {item.status === 'APPROVED' && (
-          <button onClick={onMarkSent}>Mark as Sent</button>
+          <button onClick={onMarkSent}>Send message + resume</button>
         )}
       </div>
 

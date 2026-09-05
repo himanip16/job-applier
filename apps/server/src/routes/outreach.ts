@@ -6,6 +6,9 @@ import { findColdOutreachTargets, countColdTargetsByRole } from '../outreach/cla
 import { generateColdOutreachBatch } from '../outreach/generate.js';
 import { currentUser } from '../auth/sessions.js';
 import { NOT_YOURS } from '../auth/ownership.js';
+import type { Page } from 'playwright';
+import { linkedInPage } from '../linkedin/session.js';
+import { sendOutreach } from '../linkedin/send.js';
 
 /**
  * Register outreach and LinkedIn sync routes.
@@ -78,7 +81,7 @@ export function registerOutreachRoutes(app: FastifyInstance) {
     if (!user) return reply.code(401).send({ error: 'Sign in required' });
 
     const schema = z.object({
-      contactIds: z.array(z.string()),
+      contactIds: z.array(z.string().min(1)).min(1),
       jobLeadId: z.string().optional(),
     });
 
@@ -90,18 +93,24 @@ export function registerOutreachRoutes(app: FastifyInstance) {
     if (!profile) return reply.code(404).send({ error: 'Profile not found' });
 
     // Verify all contacts belong to this profile
+    const contactIds = [...new Set(body.contactIds)];
     const contacts = await prisma.contact.findMany({
-      where: { id: { in: body.contactIds } },
+      where: { id: { in: contactIds }, profileId: profile.id },
     });
-
-    const invalidContacts = contacts.filter((c) => c.profileId !== profile.id);
-    if (invalidContacts.length > 0) {
+    if (contacts.length !== contactIds.length) {
       return reply.code(403).send({ error: NOT_YOURS });
+    }
+
+    if (body.jobLeadId) {
+      const lead = await prisma.jobLead.findFirst({
+        where: { id: body.jobLeadId, profileId: profile.id },
+      });
+      if (!lead) return reply.code(403).send({ error: NOT_YOURS });
     }
 
     const result = await generateColdOutreachBatch({
       profileId: profile.id,
-      contactIds: body.contactIds,
+      contactIds,
       jobLeadId: body.jobLeadId,
     });
 
@@ -285,10 +294,40 @@ export function registerOutreachRoutes(app: FastifyInstance) {
 
     const item = await prisma.outreachItem.findUnique({
       where: { id },
+      include: { contact: true },
     });
 
     if (!item) return reply.code(404).send({ error: 'Not found' });
     if (item.profileId !== profile.id) return reply.code(403).send({ error: NOT_YOURS });
+    if (item.status !== 'APPROVED') {
+      return reply.code(400).send({ error: 'Approve this message before sending it.' });
+    }
+
+    const resume = await prisma.resumeFile.findFirst({
+      where: { profileId: profile.id },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+    });
+    if (!resume) {
+      return reply.code(400).send({ error: 'Upload a resume before sending LinkedIn outreach.' });
+    }
+
+    let page: Page | null = null;
+    try {
+      page = await linkedInPage();
+      await sendOutreach(page, {
+        profileUrl: item.contact.profileUrl,
+        channel: item.channel,
+        body: item.finalBody || item.draftBody,
+        resumePath: item.channel === 'DIRECT_MESSAGE' ? resume.path : undefined,
+      });
+    } catch (err) {
+      return reply.code(502).send({
+        error: 'LinkedIn did not confirm the send.',
+        details: err instanceof Error ? err.message : 'Unknown LinkedIn error',
+      });
+    } finally {
+      await page?.close().catch(() => {});
+    }
 
     const updated = await prisma.outreachItem.update({
       where: { id },

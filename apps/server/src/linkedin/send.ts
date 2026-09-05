@@ -99,7 +99,7 @@ async function sendConnectionNote(page: Page, body: string): Promise<void> {
 }
 
 /** Message someone already connected to. */
-async function sendDirectMessage(page: Page, body: string): Promise<void> {
+async function sendDirectMessage(page: Page, body: string, resumePath?: string): Promise<void> {
   const message = first(page, [
     'button[aria-label^="Message"]',
     'button:has-text("Message")',
@@ -123,7 +123,32 @@ async function sendDirectMessage(page: Page, body: string): Promise<void> {
   await box.type(body, { delay: 12 });
   await page.waitForTimeout(500);
 
+  if (resumePath) {
+    let upload = page.locator('input[type="file"]').last();
+    if (!(await upload.count())) {
+      const attach = first(page, [
+        'button[aria-label*="Attach" i]',
+        'button[aria-label*="file" i]',
+        'button:has-text("Attach")',
+      ]);
+      if (await attach.count()) {
+        await attach.click({ timeout: 5000 });
+        await page.waitForTimeout(400);
+        upload = page.locator('input[type="file"]').last();
+      }
+    }
+    if (!(await upload.count())) {
+      throw new SendFailed('LinkedIn did not expose a file attachment control. Nothing was sent.');
+    }
+    await upload.setInputFiles(resumePath);
+    await page.waitForTimeout(1000);
+  }
+
   const send = first(page, ['button.msg-form__send-button', 'button:has-text("Send")']);
+  const deadline = Date.now() + (resumePath ? 15_000 : 1_000);
+  while (Date.now() < deadline && await send.isDisabled().catch(() => false)) {
+    await page.waitForTimeout(500);
+  }
   if (await send.isDisabled().catch(() => false)) {
     throw new SendFailed('LinkedIn left the Send button disabled, so the message box never took the text.');
   }
@@ -168,6 +193,8 @@ export interface SendRequest {
   channel: OutreachChannel;
   /** Exactly what the human approved. Never generated here. */
   body: string;
+  /** Absolute path to the candidate's approved/default resume. */
+  resumePath?: string;
 }
 
 /**
@@ -199,7 +226,7 @@ export async function sendOutreach(page: Page, req: SendRequest): Promise<void> 
   await page.waitForTimeout(config.linkedinDelayMs);
 
   if (req.channel === 'CONNECTION_NOTE') await sendConnectionNote(page, body);
-  else await sendDirectMessage(page, body);
+  else await sendDirectMessage(page, body, req.resumePath);
 
   await verifySent(page, req.channel);
 }

@@ -54,19 +54,22 @@ export default function RunsPage() {
   return (
     <>
       {health && !health.llmConfigured && (
-        <div className="panel">
-          <div className="notice bad">
-            ANTHROPIC_API_KEY is not set. Field matching and the answer bank still work, but cover
-            letters and inference will fail.
+        <div className="notice warn" style={{ marginBottom: '1rem' }}>
+          <div className="spread" style={{ width: '100%' }}>
+            <span>
+              <strong>No model key set.</strong> Field matching and the answer bank still work, but
+              cover letters and inference will fail.
+            </span>
+            <a href="/settings" className="btn small">
+              Add a key
+            </a>
           </div>
         </div>
       )}
       {health?.headless && (
-        <div className="panel">
-          <div className="notice">
-            Running headless. Set <code>HEADLESS=false</code> so you can see the form, take over on a
-            captcha, and give the browser profile a real interaction history.
-          </div>
+        <div className="notice" style={{ marginBottom: '1rem' }}>
+          Running headless. Set <code>HEADLESS=false</code> so you can see the form, take over on a
+          captcha, and give the browser profile a real interaction history.
         </div>
       )}
 

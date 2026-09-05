@@ -430,21 +430,18 @@ export default function DiscoverPage() {
       )}
 
       <div className="panel">
-        <div className="spread">
+        <div className="panel-head">
           <h2>{grouped && strong.length > 0 ? 'Everything else' : 'Jobs'}</h2>
-          <div className="row">
+          <div className="tabs" role="tablist">
             {['NEW', 'SHORTLISTED', 'APPLIED', 'REJECTED', 'ALL'].map((s) => (
               <button
                 key={s}
-                className={view.status === s ? undefined : 'ghost'}
+                role="tab"
+                aria-selected={view.status === s}
                 onClick={() => change({ status: s })}
-                style={
-                  view.status === s
-                    ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-border)', color: 'var(--accent)' }
-                    : undefined
-                }
               >
-                {s.toLowerCase()} {counts[s] !== undefined ? `(${counts[s]})` : ''}
+                {s.toLowerCase()}
+                {counts[s] !== undefined && <span className="muted nums"> {counts[s]}</span>}
               </button>
             ))}
           </div>
@@ -517,15 +514,17 @@ export default function DiscoverPage() {
         />
       </div>
 
-      <details className="panel">
-        <summary style={{ cursor: 'pointer' }}>
-          <strong>Sources</strong>{' '}
+      <details className="panel disclosure">
+        <summary>
+          <strong>Sources</strong>
           <span className="muted small">
-            — {companies.length} board{companies.length === 1 ? '' : 's'} watched
+            {companies.length} board{companies.length === 1 ? '' : 's'} watched
             {failing > 0 && `, ${failing} failing`}
           </span>
         </summary>
-        <CompanyManager companies={companies} sources={sources} onChange={load} />
+        <div className="disclosure-body">
+          <CompanyManager companies={companies} sources={sources} onChange={load} />
+        </div>
       </details>
 
       {rejecting && (
@@ -568,47 +567,51 @@ function Controls({
     view.q !== '' || view.minScore !== '' || view.remote !== 'any' || view.depth !== 'any';
 
   return (
-    <div
-      className="row"
-      style={{
-        marginTop: '.8rem',
-        gap: '.6rem',
-        alignItems: 'center',
-        background: 'var(--panel-2)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)',
-        padding: '.6rem .7rem',
-      }}
-    >
-      <input
-        type="search"
-        value={typed}
-        placeholder="Search title, company or location"
-        onChange={(e) => onTyped(e.target.value)}
-        style={{ flex: '1 1 14rem', minWidth: '10rem' }}
-      />
+    <div className="toolbar" style={{ marginTop: '.8rem' }}>
+      <div className="field grow">
+        <span className="cap">search</span>
+        <input
+          type="search"
+          value={typed}
+          placeholder="Title, company or location"
+          onChange={(e) => onTyped(e.target.value)}
+        />
+      </div>
 
-      <label className="row small muted" style={{ gap: '.35rem' }}>
-        sort
-        <select
-          value={view.sort}
-          onChange={(e) => onChange({ sort: e.target.value as View['sort'] })}
-        >
-          <option value="score">score</option>
-          <option value="discovered">when found</option>
-          <option value="company">company</option>
-          <option value="title">title</option>
-        </select>
-        <button
-          onClick={() => onChange({ dir: view.dir === 'desc' ? 'asc' : 'desc' })}
-          title={view.dir === 'desc' ? 'Highest first — click for lowest first' : 'Lowest first — click for highest first'}
-        >
-          {view.dir === 'desc' ? '↓' : '↑'}
-        </button>
-      </label>
+      {/*
+        Sort and its direction are one control, not two - the arrow is
+        meaningless without the field it applies to, and on its own it used to
+        wrap onto a line of its own below the select.
+      */}
+      <div className="field">
+        <span className="cap">sort by</span>
+        <div className="row" style={{ gap: '.35rem', flexWrap: 'nowrap' }}>
+          <select
+            value={view.sort}
+            onChange={(e) => onChange({ sort: e.target.value as View['sort'] })}
+          >
+            <option value="score">score</option>
+            <option value="discovered">when found</option>
+            <option value="company">company</option>
+            <option value="title">title</option>
+          </select>
+          <button
+            className="small"
+            onClick={() => onChange({ dir: view.dir === 'desc' ? 'asc' : 'desc' })}
+            aria-label={view.dir === 'desc' ? 'Highest first' : 'Lowest first'}
+            title={
+              view.dir === 'desc'
+                ? 'Highest first — click for lowest first'
+                : 'Lowest first — click for highest first'
+            }
+          >
+            {view.dir === 'desc' ? '↓' : '↑'}
+          </button>
+        </div>
+      </div>
 
-      <label className="row small muted" style={{ gap: '.35rem' }}>
-        remote
+      <div className="field">
+        <span className="cap">remote</span>
         <select
           value={view.remote}
           onChange={(e) => onChange({ remote: e.target.value as View['remote'] })}
@@ -617,10 +620,10 @@ function Controls({
           <option value="yes">remote only</option>
           <option value="no">on site</option>
         </select>
-      </label>
+      </div>
 
-      <label className="row small muted" style={{ gap: '.35rem' }}>
-        score ≥
+      <div className="field">
+        <span className="cap">score ≥</span>
         <input
           type="number"
           min={0}
@@ -628,12 +631,12 @@ function Controls({
           value={view.minScore}
           placeholder="0"
           onChange={(e) => onChange({ minScore: e.target.value })}
-          style={{ width: '4.5rem' }}
+          style={{ width: '5rem' }}
         />
-      </label>
+      </div>
 
-      <label className="row small muted" style={{ gap: '.35rem' }}>
-        scored
+      <div className="field">
+        <span className="cap">scored</span>
         <select
           value={view.depth}
           onChange={(e) => onChange({ depth: e.target.value as View['depth'] })}
@@ -642,10 +645,10 @@ function Controls({
           <option value="deep">read in full</option>
           <option value="quick">keywords only</option>
         </select>
-      </label>
+      </div>
 
-      <label className="row small muted" style={{ gap: '.35rem' }}>
-        per page
+      <div className="field">
+        <span className="cap">per page</span>
         <select value={view.limit} onChange={(e) => onChange({ limit: Number(e.target.value) })}>
           {[10, 25, 50, 100].map((n) => (
             <option key={n} value={n}>
@@ -653,14 +656,15 @@ function Controls({
             </option>
           ))}
         </select>
-      </label>
+      </div>
 
-      <span className="muted small">{total} matching</span>
+      <span className="toolbar-sep" />
+
+      <span className="toolbar-note nums">{total} matching</span>
       {filtered && (
         <button
-          onClick={() =>
-            onChange({ q: '', minScore: '', remote: 'any', depth: 'any' })
-          }
+          className="small"
+          onClick={() => onChange({ q: '', minScore: '', remote: 'any', depth: 'any' })}
           title="Clear the filters, keep the sort"
         >
           clear filters
@@ -1161,8 +1165,8 @@ function SearchReportPanel({ report }: { report: SearchReport }) {
         </span>
       )}
 
-      <details open={dryRun} style={{ marginTop: '.6rem' }}>
-        <summary className="small" style={{ cursor: 'pointer' }}>
+      <details className="disclosure inline" open={dryRun} style={{ marginTop: '.6rem' }}>
+        <summary className="small">
           {dryRun ? 'The searches it would run' : 'What it searched for'}
           {report.planSource === 'profile' && ' (derived from your profile, no model used)'}
         </summary>
@@ -1184,8 +1188,8 @@ function SearchReportPanel({ report }: { report: SearchReport }) {
       </details>
 
       {boards.length > 0 && (
-        <details style={{ marginTop: '.35rem' }}>
-          <summary className="small" style={{ cursor: 'pointer' }}>
+        <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
+          <summary className="small">
             Companies it found
           </summary>
           <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
