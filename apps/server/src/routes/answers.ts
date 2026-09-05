@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/db.js';
 import { NOT_YOURS } from '../auth/ownership.js';
-import type { RequireProfile } from './discovery.js';
+import type { RequireProfile } from './types.js';
 
 export function registerAnswerRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   app.get('/api/answers', async (req, reply) => {

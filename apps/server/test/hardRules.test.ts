@@ -22,7 +22,7 @@ import { blendScores, type FitAssessment, type LexicalScore } from '../src/disco
  * door. Both are rules, not judgement calls.
  */
 
-const ME = { candidateYears: 4.5, needsSponsorship: true, salaryExpectations: { min: null, max: null } };
+const ME = { candidateYears: 4.5, needsSponsorship: true, salaryExpectations: { min: null, max: null }, currentCTC: null };
 
 describe('reading years out of prose', () => {
   it('keeps the decimal', () => {
@@ -153,6 +153,7 @@ describe('what the rules do to a score', () => {
     forIt: ['Strong domain overlap'],
     againstIt: [],
     seniorityFit: 'MATCH',
+    compensationFit: 'UNCLEAR',
     dealbreaker: '',
   });
   const noOpinion: LexicalScore = {
@@ -241,7 +242,7 @@ describe('salary parsing and matching', () => {
       location: 'Remote',
       descriptionText: '$100,000 - $120,000 per year',
     };
-    const v = salaryVerdict({ min: 150000, max: null }, job);
+    const v = salaryVerdict({ min: 150000, max: null }, null, job);
     expect(v?.dealbreaker).toMatch(/below your minimum/);
   });
 
@@ -251,7 +252,7 @@ describe('salary parsing and matching', () => {
       location: 'Remote',
       descriptionText: '$160,000 - $180,000 per year',
     };
-    const v = salaryVerdict({ min: 150000, max: 200000 }, job);
+    const v = salaryVerdict({ min: 150000, max: 200000 }, null, job);
     expect(v?.dealbreaker).toBeUndefined();
     expect(v?.for).toMatch(/matches your expectations/);
   });
@@ -262,7 +263,7 @@ describe('salary parsing and matching', () => {
       location: 'Remote',
       descriptionText: '$250,000 - $300,000 per year',
     };
-    const v = salaryVerdict({ min: null, max: 200000 }, job);
+    const v = salaryVerdict({ min: null, max: 200000 }, null, job);
     expect(v?.dealbreaker).toBeUndefined();
     expect(v?.against).toMatch(/above your maximum/);
   });
@@ -273,6 +274,6 @@ describe('salary parsing and matching', () => {
       location: 'Remote',
       descriptionText: '$150,000 per year',
     };
-    expect(salaryVerdict({ min: null, max: null }, job)).toBeNull();
+    expect(salaryVerdict({ min: null, max: null }, null, job)).toBeNull();
   });
 });

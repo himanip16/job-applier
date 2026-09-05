@@ -14,7 +14,10 @@ import { currentUser } from './auth/sessions.js';
 import { loadSettings } from './lib/secrets.js';
 import { isFirecrawlConfigured } from './discovery/firecrawl.js';
 import { registerAuthRoutes } from './routes/auth.js';
+import { registerCompanyRoutes } from './routes/companies.js';
 import { registerDiscoveryRoutes } from './routes/discovery.js';
+import { registerLeadRoutes } from './routes/leads.js';
+import { registerPreferenceRoutes } from './routes/preferences.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerJobDetailRoutes } from './routes/jobDetail.js';
 import { registerTrackerRoutes } from './routes/tracker.js';
@@ -188,7 +191,10 @@ export type RequireUser = (
 ) => Promise<{ id: string } | null>;
 
 registerAuthRoutes(app);
+registerCompanyRoutes(app, requireProfile);
 registerDiscoveryRoutes(app, requireProfile);
+registerLeadRoutes(app, requireProfile);
+registerPreferenceRoutes(app, requireProfile);
 registerResumeRoutes(app, requireProfile);
 registerTrackerRoutes(app, requireProfile);
 registerSettingsRoutes(app);

@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import path from 'node:path';
 import { NOT_YOURS, ownedResumeFile } from '../auth/ownership.js';
 import { uploadResume, setDefaultResume } from '../services/resumeService.js';
-import type { RequireProfile } from './discovery.js';
+import type { RequireProfile } from './types.js';
 
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',

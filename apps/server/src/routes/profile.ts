@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/db.js';
 import { currentUser } from '../auth/sessions.js';
-import type { RequireProfile } from './discovery.js';
+import type { RequireProfile } from './types.js';
 
 const ProfileInput = z.object({
   email: z.string().email(),

@@ -1,30 +1,23 @@
 import { prisma, type Prisma } from '../lib/db.js';
 import { bus } from '../lib/events.js';
 import { newPage } from '../browser/session.js';
-import { renderCandidateContext } from '../llm/candidateContext.js';
+import { type DiscoveredJob } from './sources.js';
 import {
-  API_SOURCES,
-  crawlCareersPage,
-  sourceById,
-  type DiscoveredJob,
-} from './sources.js';
-import {
-  assessFit,
-  blendScores,
-  buildPreferences,
-  buildRejectionHistory,
   loadScoringContext,
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
-import { applyHardRules, candidateConstraints } from './hardRules.js';
 import { rescoreLeads, rescoreLexically } from './rescoreLeads.js';
+import { isSeniorLevel, requiresMoreThan5YearsExperience } from './jobFilters.js';
+import { crawlCompany } from './crawlCompany.js';
+import { deepScoreLeads } from './deepScore.js';
 
 export interface CrawlReport {
   companiesCrawled: number;
   jobsSeen: number;
   newLeads: number;
   skippedAlreadyDecided: number;
+  skippedTooSenior: number;
   deepScored: number;
   /** Leads already in the queue whose cheap score was recomputed afterwards. */
   rerankedExisting: number;
@@ -53,6 +46,7 @@ export async function crawlAll(
     jobsSeen: 0,
     newLeads: 0,
     skippedAlreadyDecided: 0,
+    skippedTooSenior: 0,
     deepScored: 0,
     rerankedExisting: 0,
     errors: [],
@@ -67,29 +61,14 @@ export async function crawlAll(
 
   try {
     for (const company of companies) {
-      let jobs: DiscoveredJob[] = [];
-      try {
-        if (company.source === 'careers-page') {
-          page ??= await newPage();
-          jobs = await crawlCareersPage(page, company.handle);
-        } else {
-          const source = sourceById(company.source);
-          if (!source) throw new Error(`Unknown source "${company.source}"`);
-          jobs = await source.fetchJobs(company.handle);
-        }
-        // The board APIs return the slug, not the display name.
-        jobs = jobs.map((j) => ({ ...j, companyName: company.name || j.companyName }));
+      const { jobs, page: updatedPage, error } = await crawlCompany(company, page);
+      page = updatedPage;
 
+      if (error) {
+        report.errors.push({ company: company.name, error });
         await prisma.company.update({
           where: { id: company.id },
-          data: { lastCrawledAt: new Date(), lastCrawlNote: `${jobs.length} postings` },
-        });
-      } catch (err) {
-        const message = (err as Error).message;
-        report.errors.push({ company: company.name, error: message });
-        await prisma.company.update({
-          where: { id: company.id },
-          data: { lastCrawledAt: new Date(), lastCrawlNote: `failed: ${message}` },
+          data: { lastCrawledAt: new Date(), lastCrawlNote: `failed: ${error}` },
         });
         continue;
       }
@@ -97,7 +76,24 @@ export async function crawlAll(
       report.companiesCrawled++;
       report.jobsSeen += jobs.length;
 
+      await prisma.company.update({
+        where: { id: company.id },
+        data: { lastCrawledAt: new Date(), lastCrawlNote: `${jobs.length} postings` },
+      });
+
       for (const job of jobs) {
+        // Filter out senior-level positions
+        if (isSeniorLevel(job.title)) {
+          report.skippedTooSenior++;
+          continue;
+        }
+
+        // Filter out jobs requiring more than 5 years of experience
+        if (requiresMoreThan5YearsExperience(job.descriptionText)) {
+          report.skippedTooSenior++;
+          continue;
+        }
+
         const existing = await prisma.jobLead.findUnique({
           where: { profileId_url: { profileId, url: job.url } },
         });
@@ -137,55 +133,9 @@ export async function crawlAll(
   }
 
   // ---- model pass over the most promising ---------------------------------
-  if (fresh.length && deepScoreTop > 0) {
-    const profile = await prisma.profile.findUnique({
-      where: { id: profileId },
-      include: { facts: true },
-    });
-    if (profile) {
-      const candidateContext = renderCandidateContext(profile, profile.resumeText);
-      const constraints = candidateConstraints(profile);
-      const preferences = await buildPreferences(profileId);
-      const rejectionHistory = await buildRejectionHistory(profileId);
-
-      const shortlist = fresh.sort((a, b) => b.lexScore - a.lexScore).slice(0, deepScoreTop);
-      for (const entry of shortlist) {
-        try {
-          const raw = await assessFit({
-            candidateContext,
-            preferences,
-            rejectionHistory,
-            job: entry.job,
-          });
-          if (!raw) continue;
-          const fit = applyHardRules(raw, { 
-            candidateYears: constraints.candidateYears, 
-            needsSponsorship: constraints.needsSponsorship,
-            salaryExpectations: constraints.salaryExpectations,
-            job: entry.job 
-          });
-          const lex = scoreLexically(entry.job, scoring);
-          // Blend, weighted toward the model - it read the description, the
-          // lexical prior only saw word counts. A hard blocker overrides both.
-          const blended = blendScores(fit, lex);
-          await prisma.jobLead.update({
-            where: { id: entry.id },
-            data: {
-              score: blended,
-              scoreReasons: serialiseReasons(lex, fit) as Prisma.InputJsonValue,
-              deepScored: true,
-              scoredAt: new Date(),
-            },
-          });
-          report.deepScored++;
-        } catch (err) {
-          // A scoring failure must not lose the lead; it keeps its lexical
-          // score and can be re-scored later.
-          report.errors.push({ company: entry.job.companyName, error: (err as Error).message });
-        }
-      }
-    }
-  }
+  const deepScoreResult = await deepScoreLeads(profileId, fresh, deepScoreTop);
+  report.deepScored = deepScoreResult.deepScored;
+  report.errors.push(...deepScoreResult.errors);
 
   // Leave the whole queue correctly ranked, not just the rows this crawl
   // added. Leads stored before the resume was uploaded - or before the scorer

@@ -8,7 +8,7 @@ import { adapterFor } from '../ats/registry.js';
 import { matchCanonical, normalizeLabel } from '@ja/shared';
 import { NOT_YOURS, ownedApplication } from '../auth/ownership.js';
 import { config } from '../lib/config.js';
-import type { RequireProfile } from './discovery.js';
+import type { RequireProfile } from './types.js';
 
 export function registerApplicationRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   app.post<{ Body: unknown }>('/api/applications', async (req, reply) => {

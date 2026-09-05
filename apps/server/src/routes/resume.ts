@@ -4,7 +4,7 @@ import { prisma, type Prisma } from '../lib/db.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
 import { tailorResume } from '../resume/tailor.js';
 import { renderResume } from '../resume/render.js';
-import type { RequireProfile } from './discovery.js';
+import type { RequireProfile } from './types.js';
 import { NOT_YOURS, ownedApplication, ownedTailoredResume } from '../auth/ownership.js';
 
 export function registerResumeRoutes(app: FastifyInstance, requireProfile: RequireProfile) {

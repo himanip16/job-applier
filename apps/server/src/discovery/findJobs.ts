@@ -1,6 +1,5 @@
 import { prisma, type Prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
-import { renderCandidateContext } from '../llm/candidateContext.js';
 import { sourceById, type DiscoveredJob } from './sources.js';
 import {
   ATS_SEARCH_DOMAINS,
@@ -12,17 +11,20 @@ import {
 import { firecrawlSearch, isFirecrawlConfigured, type SearchHit } from './firecrawl.js';
 import { buildSearchPlan, titleMatchesPlan, type SearchPlan } from './searchQueries.js';
 import { rescoreLexically } from './rescoreLeads.js';
-import { applyHardRules, candidateConstraints } from './hardRules.js';
 import {
-  assessFit,
-  blendScores,
-  buildPreferences,
-  buildRejectionHistory,
   loadScoringContext,
   type ScoringContext,
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
+import { deepScoreLeads, type DeepScoreEntry } from './deepScore.js';
+import { registerCompany } from './companyRegistration.js';
+import {
+  canonicalUrl,
+  isSeniorLevel,
+  requiresMoreThan5YearsExperience,
+  fallbackJobsFromHits,
+} from './jobSearchUtils.js';
 
 /**
  * Finding openings without being told where to look.
@@ -72,6 +74,7 @@ export interface JobSearchReport {
   jobsSeen: number;
   newLeads: number;
   skippedAlreadySeen: number;
+  skippedTooSenior: number;
   deepScored: number;
   companiesRegistered: number;
   /** Leads already in the queue whose cheap score was recomputed afterwards. */
@@ -134,6 +137,7 @@ export async function findJobs(
     jobsSeen: 0,
     newLeads: 0,
     skippedAlreadySeen: 0,
+    skippedTooSenior: 0,
     deepScored: 0,
     companiesRegistered: 0,
     notes: [],
@@ -224,7 +228,7 @@ export async function findJobs(
   );
 
   const scoring = await loadScoringContext(profileId);
-  const fresh: { id: string; job: DiscoveredJob; lexScore: number }[] = [];
+  const fresh: DeepScoreEntry[] = [];
 
   // ---- 3. hydrate ----------------------------------------------------------
   const selected = [...boards.values()].slice(0, maxBoards);
@@ -273,6 +277,18 @@ export async function findJobs(
     if (company.created) report.companiesRegistered++;
 
     for (const job of jobs) {
+      // Filter out senior-level positions
+      if (isSeniorLevel(job.title)) {
+        report.skippedTooSenior++;
+        continue;
+      }
+
+      // Filter out jobs requiring more than 5 years of experience
+      if (requiresMoreThan5YearsExperience(job.descriptionText)) {
+        report.skippedTooSenior++;
+        continue;
+      }
+
       const canonical = canonicalUrl(job.url);
       // Keep what the search actually matched; keep a sibling only if it looks
       // like a role the plan asked for.
@@ -320,7 +336,9 @@ export async function findJobs(
 
   // ---- 4. read the most promising in full ----------------------------------
   if (fresh.length && deepScoreTop > 0) {
-    report.deepScored = await deepScore(profileId, fresh, deepScoreTop, scoring, report);
+    const deepScoreResult = await deepScoreLeads(profileId, fresh, deepScoreTop);
+    report.deepScored = deepScoreResult.deepScored;
+    report.errors.push(...deepScoreResult.errors.map(e => ({ where: `scoring ${e.company}`, error: e.error })));
   }
 
   // Re-rank what was already in the queue too. Leads stored before the resume
@@ -329,163 +347,6 @@ export async function findJobs(
   report.rerankedExisting = await rescoreLexically(profileId);
 
   return report;
-}
-
-/**
- * Register the company so the per-company crawler picks it up from now on.
- *
- * This is what stops search from being a parallel universe. Search finds Acme
- * once; after that Acme is a board like any other you added by hand, its
- * future postings arrive through the ordinary crawl, and no credits are spent
- * re-finding it.
- */
-async function registerCompany(
-  ref: BoardRef,
-  name: string,
-): Promise<{ id: string; created: boolean }> {
-  const found = await prisma.company.findUnique({
-    where: { source_handle: { source: ref.ats, handle: ref.slug } },
-  });
-  if (found) return { id: found.id, created: false };
-  const created = await prisma.company.create({
-    data: { name, source: ref.ats, handle: ref.slug, enabled: true, lastCrawledAt: new Date() },
-  });
-  return { id: created.id, created: true };
-}
-
-async function deepScore(
-  profileId: string,
-  fresh: { id: string; job: DiscoveredJob; lexScore: number }[],
-  top: number,
-  scoring: ScoringContext,
-  report: JobSearchReport,
-): Promise<number> {
-  const profile = await prisma.profile.findUnique({
-    where: { id: profileId },
-    include: { facts: true },
-  });
-  if (!profile) return 0;
-
-  const candidateContext = renderCandidateContext(profile, profile.resumeText);
-  const constraints = candidateConstraints(profile);
-  const preferences = await buildPreferences(profileId);
-  const rejectionHistory = await buildRejectionHistory(profileId);
-
-  let done = 0;
-  const shortlist = [...fresh].sort((a, b) => b.lexScore - a.lexScore).slice(0, top);
-  for (const entry of shortlist) {
-    try {
-      const fit = await assessFit({
-        candidateContext,
-        preferences,
-        rejectionHistory,
-        job: entry.job,
-      });
-      if (!fit) continue;
-
-      // Both hard rules, on the same path every other scorer uses. This used
-      // to be the only place the experience check ran, and it subtracted from
-      // the score rather than blocking - so a model's 90 became a 33 and still
-      // outranked jobs that were genuinely open.
-      const adjustedFit = applyHardRules(fit, { 
-        candidateYears: constraints.candidateYears, 
-        needsSponsorship: constraints.needsSponsorship,
-        salaryExpectations: constraints.salaryExpectations,
-        job: entry.job 
-      });
-
-      const lex = scoreLexically(entry.job, scoring);
-      const blended = blendScores(adjustedFit, lex);
-      await prisma.jobLead.update({
-        where: { id: entry.id },
-        data: {
-          score: blended,
-          scoreReasons: serialiseReasons(lex, adjustedFit) as Prisma.InputJsonValue,
-          deepScored: true,
-          scoredAt: new Date(),
-        },
-      });
-      done++;
-    } catch (err) {
-      // The lead keeps its lexical score and can be re-scored later; losing it
-      // over a scoring hiccup would be much worse.
-      report.errors.push({ where: `scoring ${entry.job.title}`, error: (err as Error).message });
-    }
-  }
-  return done;
-}
-
-/** Leads built from the search result alone, when a board API will not answer. */
-function fallbackJobsFromHits(
-  ref: BoardRef,
-  matchedUrls: Set<string>,
-  hitsByUrl: Map<string, SearchHit>,
-  companyName?: string,
-): DiscoveredJob[] {
-  const out: DiscoveredJob[] = [];
-  for (const url of matchedUrls) {
-    const hit = hitsByUrl.get(url);
-    if (!hit) continue;
-    const hitRef = parseBoardUrl(hit.url);
-    if (!hitRef || boardKey(hitRef) !== boardKey(ref)) continue;
-    out.push({
-      // Upgraded, but not canonicalised: this URL is what the browser will
-      // actually open, and stripping the query would break a Greenhouse embed
-      // link, which carries the board and the job in `?for=` and `?token=`.
-      url: preferHttps(hit.url),
-      ats: ref.ats,
-      title: cleanHitTitle(hit.title) || hit.url,
-      companyName: companyName ?? ref.slug,
-      remote: /\bremote\b/i.test(`${hit.title} ${hit.description}`),
-      // Search descriptions are a couple of sentences, so this lead gets a
-      // weaker score than a hydrated one. Better than losing it.
-      descriptionText: hit.description,
-    });
-  }
-  return out;
-}
-
-/** ATS page titles are wrapped in boilerplate that would end up in the queue. */
-function cleanHitTitle(title: string): string {
-  return title
-    .replace(/^job application for\s+/i, '')
-    .replace(/\s+at\s+[^|@]+$/i, '')
-    .replace(/\s*[@|·]\s*.*$/, '')
-    .replace(/\s*-\s*careers?\s*$/i, '')
-    .trim();
-}
-
-/**
- * One URL, one lead.
- *
- * Search hands back `http://job-boards.greenhouse.io/fal/jobs/4009193009`
- * while the board API returns the same posting over https, often with a
- * tracking parameter and sometimes a trailing slash. Compared raw, those are
- * four different jobs, and the queue fills up with the same posting.
- */
-export function canonicalUrl(raw: string): string {
-  try {
-    const url = new URL(raw);
-    url.protocol = 'https:';
-    url.hostname = url.hostname.toLowerCase().replace(/^www\./, '');
-    url.hash = '';
-    url.search = '';
-    url.pathname = url.pathname.replace(/\/+$/, '');
-    return url.toString();
-  } catch {
-    return raw.trim();
-  }
-}
-
-/** Search hands back http:// for pages that are served over https. */
-function preferHttps(raw: string): string {
-  try {
-    const url = new URL(raw);
-    if (url.protocol === 'http:') url.protocol = 'https:';
-    return url.toString();
-  } catch {
-    return raw;
-  }
 }
 
 const isTransient = (err: unknown): boolean =>
@@ -502,4 +363,4 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 const log = (message: string) => process.stdout.write(`[find] ${message}\n`);
 
-export { isFirecrawlConfigured };
+export { isFirecrawlConfigured, canonicalUrl };

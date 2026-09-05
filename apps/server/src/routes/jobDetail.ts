@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/db.js';
-import type { RequireProfile } from './discovery.js';
+import type { RequireProfile } from './types.js';
 import { canonicalUrl } from '../discovery/findJobs.js';
 
 /**

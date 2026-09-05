@@ -94,18 +94,45 @@ export function parseSalaryExpectation(profile: {
 }
 
 /**
- * Check if job salary matches candidate's expectations.
+ * Parse current CTC from profile.
+ * Checks both the currentCTC field and facts.
+ */
+export function parseCurrentCTC(profile: {
+  currentCTC?: string | null;
+  facts?: { key: string; value: string }[];
+}): number | null {
+  // Check facts first
+  const currentFact = profile.facts?.find((f) => 
+    /current.*salary|current.*ctc|current.*compensation|existing.*salary|existing.*ctc/i.test(f.key)
+  );
+  const currentSalary = currentFact ? parseSalary(currentFact.value) : null;
+  const currentCTC = profile.currentCTC ? parseSalary(profile.currentCTC) : null;
+
+  return currentSalary ?? currentCTC;
+}
+
+/**
+ * Check if job salary matches candidate's expectations and current CTC.
  */
 export function salaryVerdict(
   expectations: { min: number | null; max: number | null },
+  currentCTC: number | null,
   job: ScorableJob,
 ): HardRuleVerdict | null {
-  if (!expectations.min && !expectations.max) return null;
+  if (!expectations.min && !expectations.max && !currentCTC) return null;
 
   const text = `${job.title}\n${job.descriptionText ?? ''}`;
   const jobSalary = parseSalary(text);
   
   if (!jobSalary) return null; // Can't determine job salary
+
+  // First check against current CTC - this is a hard requirement
+  if (currentCTC && jobSalary < currentCTC) {
+    return {
+      dealbreaker: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) is below your current CTC ($${(currentCTC / 1000).toFixed(0)}k).`,
+      against: `Salary offered is lower than your current compensation.`,
+    };
+  }
 
   // If we have both min and max expectations
   if (expectations.min && expectations.max) {
@@ -136,6 +163,12 @@ export function salaryVerdict(
     return {
       against: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) is significantly above your maximum expectation ($${(expectations.max / 1000).toFixed(0)}k).`,
     };
+  }
+
+  // If we only have current CTC and job is above it
+  if (currentCTC && jobSalary >= currentCTC) {
+    const premium = ((jobSalary - currentCTC) / currentCTC * 100).toFixed(0);
+    return { for: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) is ${premium}% above your current CTC ($${(currentCTC / 1000).toFixed(0)}k).` };
   }
 
   return { for: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) aligns with your expectations.` };
@@ -273,13 +306,13 @@ export function sponsorshipVerdict(
  */
 export function applyHardRules(
   fit: FitAssessment,
-  args: { candidateYears: number | null; needsSponsorship: boolean; salaryExpectations: { min: number | null; max: number | null }; job: ScorableJob },
+  args: { candidateYears: number | null; needsSponsorship: boolean; salaryExpectations: { min: number | null; max: number | null }; currentCTC: number | null; job: ScorableJob },
 ): FitAssessment {
   const text = `${args.job.title}\n${args.job.descriptionText ?? ''}`;
   const verdicts = [
     experienceVerdict(args.candidateYears, text),
     sponsorshipVerdict(args.needsSponsorship, args.job),
-    salaryVerdict(args.salaryExpectations, args.job),
+    salaryVerdict(args.salaryExpectations, args.currentCTC, args.job),
   ].filter(Boolean) as HardRuleVerdict[];
   if (!verdicts.length) return fit;
 
@@ -306,11 +339,12 @@ export function candidateConstraints(profile: {
   country?: string | null;
   countryCode?: string | null;
   citizenship?: string | null;
+  currentCTC?: string | null;
   expectedCTC?: string | null;
   summary?: string | null;
   resumeText?: string | null;
   facts?: { key: string; value: string }[];
-}): { candidateYears: number | null; needsSponsorship: boolean; salaryExpectations: { min: number | null; max: number | null } } {
+}): { candidateYears: number | null; needsSponsorship: boolean; salaryExpectations: { min: number | null; max: number | null }; currentCTC: number | null } {
   const stated = profile.facts?.find((f) => /experience.*years|years.*experience|yoe/i.test(f.key));
   // A stated fact is usually just the number - "4.5", not "4.5 years" - so it
   // is read as one before falling back to the prose patterns.
@@ -336,8 +370,9 @@ export function candidateConstraints(profile: {
   const inUS = countryCode === 'US' || /^(united states|usa|us)$/.test(country);
   
   const salaryExpectations = parseSalaryExpectation(profile);
+  const currentCTC = parseCurrentCTC(profile);
   
-  return { candidateYears, needsSponsorship: !isUSCitizen, salaryExpectations };
+  return { candidateYears, needsSponsorship: !isUSCitizen, salaryExpectations, currentCTC };
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;

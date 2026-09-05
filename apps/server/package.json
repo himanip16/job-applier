@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "test": "DATABASE_URL=\"${TEST_DATABASE_URL:-$DATABASE_URL}\" vitest run",
-    "predev": "cd ../.. && prisma generate",
+    "predev": "cd ../.. && prisma generate && (lsof -ti:8787 | xargs kill -9 2>/dev/null || true)",
     "prestart": "cd ../.. && prisma generate"
   },
   "dependencies": {

@@ -112,6 +112,7 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
         candidateYears: constraints.candidateYears, 
         needsSponsorship: constraints.needsSponsorship,
         salaryExpectations: constraints.salaryExpectations,
+        currentCTC: constraints.currentCTC,
         job 
       });
       const lex = scoreLexically(job, scoring);

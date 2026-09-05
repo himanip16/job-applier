@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/db.js';
 import { bus } from '../lib/events.js';
 import { NOT_YOURS, ownedApplication } from '../auth/ownership.js';
-import type { RequireProfile } from './discovery.js';
+import type { RequireProfile } from './types.js';
 import type { RunEvent } from '@ja/shared';
 
 const allowedOrigins = (process.env.WEB_ORIGIN ?? '')
