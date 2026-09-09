@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/db.js';
 import { syncConnections, getSyncStatus } from '../linkedin/sync.js';
+import { syncMessages } from '../linkedin/messageSync.js';
 import { findColdOutreachTargets, countColdTargetsByRole } from '../outreach/classify.js';
 import { generateColdOutreachBatch } from '../outreach/generate.js';
 import { currentUser } from '../auth/sessions.js';
@@ -26,6 +27,20 @@ export function registerOutreachRoutes(app: FastifyInstance) {
 
     const result = await syncConnections(profile.id);
     return reply.send(result);
+  });
+
+  /**
+   * Import the message history, which is what makes "have I spoken to this
+   * person" answerable at all. See ../linkedin/messageSync.ts.
+   */
+  app.post('/api/linkedin/sync/messages', async (req, reply) => {
+    const user = await currentUser(req);
+    if (!user) return reply.code(401).send({ error: 'Sign in required' });
+
+    const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
+    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
+
+    return reply.send(await syncMessages(profile.id));
   });
 
   app.get('/api/linkedin/sync/status', async (req, reply) => {

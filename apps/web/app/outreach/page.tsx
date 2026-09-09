@@ -56,6 +56,7 @@ export default function OutreachPage() {
   const [syncStatus, setSyncStatus] = useState<{ connections: any } | null>(null);
   const [hasProfile, setHasProfile] = useState<boolean | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [syncingMessages, setSyncingMessages] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [connectionsRefresh, setConnectionsRefresh] = useState(0);
   const [editingItem, setEditingItem] = useState<string | null>(null);
@@ -123,6 +124,36 @@ export default function OutreachPage() {
     } finally {
       setSyncing(false);
       setConnectionsRefresh((value) => value + 1);
+    }
+  };
+
+  /**
+   * Import the message history.
+   *
+   * Separate from the connection sync because it is much slower - it opens
+   * every thread - and because the two answer different questions. Connections
+   * says who you know; this says who you have actually spoken to, which is what
+   * puts someone under "Your turn" instead of "Not contacted".
+   */
+  const handleSyncMessages = async () => {
+    if (!hasProfile || syncingMessages) return;
+    setSyncingMessages(true);
+    setSyncMessage(null);
+    try {
+      const result = await api<{ threads: number; messages: number; unmatched: number; errors: string[] }>(
+        '/api/linkedin/sync/messages', { method: 'POST' },
+      );
+      setSyncMessage(
+        `Read ${result.messages} messages across ${result.threads} conversations.` +
+        (result.unmatched ? ` ${result.unmatched} threads were with people who are not connections, so they were skipped.` : '') +
+        (result.errors.length ? ` ${result.errors.length} could not be saved.` : ''),
+      );
+      await loadSyncStatus();
+      setConnectionsRefresh((value) => value + 1);
+    } catch (err) {
+      setSyncMessage(err instanceof Error ? err.message : 'Failed to sync messages.');
+    } finally {
+      setSyncingMessages(false);
     }
   };
 
@@ -256,6 +287,9 @@ export default function OutreachPage() {
             <button onClick={handleSyncConnections} disabled={!hasProfile || syncing}>
               {syncing ? 'Syncing connections…' : 'Sync Connections'}
             </button>
+            <button onClick={handleSyncMessages} disabled={!hasProfile || syncingMessages}>
+              {syncingMessages ? 'Reading conversations…' : 'Sync Messages'}
+            </button>
             {syncStatus?.connections && (
               <span className="small muted">
                 Last synced: {syncStatus.connections.lastSyncAt 
@@ -266,7 +300,12 @@ export default function OutreachPage() {
             )}
           </div>
 
-          {hasProfile && <ConnectionsList refreshKey={connectionsRefresh} />}
+          {hasProfile && (
+            <ConnectionsList
+              refreshKey={connectionsRefresh}
+              onDrafted={() => { setActiveTab('COLD'); loadItems(); }}
+            />
+          )}
 
           {coldTargets.length > 0 && (
             <div style={{ marginBottom: '1rem', padding: '1rem', background: 'var(--panel-2)', borderRadius: '4px' }}>

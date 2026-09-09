@@ -643,6 +643,15 @@ model Contact {
   isConnection      Boolean @default(false)
   lastSyncedAt      DateTime?
 
+  /// When you decided this conversation is finished.
+  ///
+  /// Nothing infers this. A thread that has gone quiet is not the same as one
+  /// that ended - being ghosted by a recruiter looks identical in the message
+  /// history to a polite "we'll keep you in mind", and only you know which it
+  /// was. So it is set by an explicit action and never by a timer, which also
+  /// makes it reversible: reopening is just clearing the date.
+  conversationClosedAt DateTime?
+
   messages OutreachMessage[]
   conversations LinkedInConversation[]
   outreachItems OutreachItem[]
