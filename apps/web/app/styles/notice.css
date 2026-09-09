@@ -1,0 +1,11 @@
+/* ------------------------------------------------------------------- notices */
+
+.notice {
+  display: flex; gap: 0.55rem; align-items: flex-start;
+  border: 1px solid var(--accent-border);
+  padding: 0.65rem 0.85rem; background: var(--accent-soft);
+  border-radius: var(--radius); font-size: var(--fs-md); line-height: 1.5;
+}
+.notice.bad { border-color: var(--bad-border); background: var(--bad-soft); }
+.notice.good { border-color: var(--good-border); background: var(--good-soft); }
+.notice.warn { border-color: var(--warn-border); background: var(--warn-soft); }
