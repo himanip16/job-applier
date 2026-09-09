@@ -6,6 +6,8 @@
   padding: 0.65rem 0.85rem; background: var(--accent-soft);
   border-radius: var(--radius); font-size: var(--fs-md); line-height: 1.5;
 }
+/* The message takes the space; a trailing Dismiss or action keeps its size. */
+.notice > :first-child { flex: 1 1 auto; min-width: 0; }
 .notice.bad { border-color: var(--bad-border); background: var(--bad-soft); }
 .notice.good { border-color: var(--good-border); background: var(--good-soft); }
 .notice.warn { border-color: var(--warn-border); background: var(--warn-soft); }

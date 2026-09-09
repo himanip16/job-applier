@@ -15,9 +15,28 @@ export async function syncMessages(profileId: string): Promise<{
   threads: number;
   messages: number;
   unmatched: number;
+  /** One entry per thread that could not be saved. The sync itself still ran. */
   errors: string[];
+  /**
+   * Set when the sync never got going at all - not signed in, LinkedIn
+   * challenged the session, the inbox would not load.
+   *
+   * Kept separate from `errors` because the two mean opposite things to the
+   * person reading them. A thread-level error is "39 of 40 worked"; this is
+   * "nothing happened and here is why". Folding the second into the first is
+   * how a failed sync came to render as "Read 0 messages across 0
+   * conversations. 1 could not be saved." - technically true, and it told you
+   * nothing about the sign-in you actually needed to do.
+   */
+  fatalError: string | null;
 }> {
-  const result = { threads: 0, messages: 0, unmatched: 0, errors: [] as string[] };
+  const result = {
+    threads: 0,
+    messages: 0,
+    unmatched: 0,
+    errors: [] as string[],
+    fatalError: null as string | null,
+  };
 
   await prisma.linkedInSync.upsert({
     where: { profileId_syncType: { profileId, syncType: 'MESSAGES' } },
@@ -49,7 +68,7 @@ export async function syncMessages(profileId: string): Promise<{
     });
   } catch (err) {
     const error = (err as Error).message;
-    result.errors.push(error);
+    result.fatalError = error;
     await prisma.linkedInSync.upsert({
       where: { profileId_syncType: { profileId, syncType: 'MESSAGES' } },
       update: { status: 'FAILED', error },

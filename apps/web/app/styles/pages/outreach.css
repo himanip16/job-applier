@@ -1,0 +1,208 @@
+/*
+ * Outreach page.
+ *
+ * Layout and color tweaks specific to the Outreach route - not reusable
+ * design-system components, so they live apart from ../*.css instead of
+ * inside it. See ../../globals.css for how this file gets assembled; see
+ * ./discover.css for the same treatment of the Discover route.
+ */
+
+/* ------------------------------------------------------------------ people */
+
+/*
+ * A list of people, and where each conversation with them stands.
+ *
+ * Built as its own component rather than on `.list-row` because a person is
+ * two lines and a row of metadata, not a title and an action - `.list-row`
+ * centres its contents vertically, which puts the checkbox against the
+ * headline instead of the name.
+ */
+/* Usually a <ul>, so it carries the list reset rather than each page doing it.
+   Flex already suppresses the markers; the browser's 40px indent it does not,
+   which left every row sitting inboard of its own section heading. */
+.people { display: flex; flex-direction: column; list-style: none; margin: 0; padding: 0; }
+.person {
+  display: flex; align-items: flex-start; gap: 0.75rem;
+  padding: 0.75rem 0.6rem; border-radius: var(--radius-sm);
+  transition: background var(--fast) var(--ease);
+}
+.person + .person { border-top: 1px solid var(--border); }
+.person:hover { background: var(--panel-2); }
+/* A ticked row has to stay obvious once the composer has scrolled away. */
+.person.is-selected { background: var(--accent-soft); }
+.person > input[type='checkbox'] { margin-top: 0.5rem; }
+.person-main { min-width: 0; flex: 1 1 16rem; }
+.person-name { font-weight: 620; color: var(--text); font-size: var(--fs-base); }
+.person-headline {
+  color: var(--text-dim); font-size: var(--fs-md);
+  margin: 0.1rem 0 0.25rem; line-height: 1.45; overflow-wrap: anywhere;
+}
+.person-meta {
+  display: flex; align-items: center; gap: 0.3rem 0.6rem; flex-wrap: wrap;
+  font-size: var(--fs-sm); color: var(--muted);
+}
+.person-side {
+  display: flex; flex-direction: column; align-items: flex-end;
+  gap: 0.3rem; flex: none;
+}
+/*
+ * The row's own action stays quiet until you go for it.
+ *
+ * "Mark as done" on ninety rows at full text colour competed with the names
+ * for attention, and the names are what you scan. Muted rather than
+ * hidden-until-hover: a control that only exists on hover is a control a
+ * touch screen cannot find.
+ */
+.person-side button { color: var(--muted); }
+.person:hover .person-side button, .person-side button:hover:not(:disabled) { color: var(--text); }
+
+/* Initials, so a list of names has something to scan down other than text. */
+.avatar {
+  flex: none; width: 2.15rem; height: 2.15rem; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text-dim);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: var(--fs-sm); font-weight: 700; letter-spacing: -0.02em;
+  margin-top: 0.1rem; text-transform: uppercase;
+}
+
+/*
+ * Status colors for outreach-specific .pill values.
+ *
+ * Same shared --status-color/--status-bg/--status-border role that
+ * ../status.css defines for .pill/.src/.score - these just add the outreach
+ * enum values (YOUR_TURN, DRAFTED, ... ) to the same system, so the base
+ * .pill rule in status.css themes them without change.
+ */
+
+/* Conversation state. The colour is the point: what needs you is warm. */
+.pill.YOUR_TURN { --status-color: var(--warn); --status-bg: var(--warn-soft); --status-border: var(--warn-border); }
+.pill.DRAFTED { --status-color: var(--accent); --status-bg: var(--accent-soft); --status-border: var(--accent-border); }
+.pill.CLOSED { --status-color: var(--good); --status-bg: var(--good-soft); --status-border: var(--good-border); }
+/* AWAITING_REPLY and NOT_CONTACTED keep the neutral default on purpose:
+   nothing is being asked of you, so nothing should catch the eye. */
+
+/* Where a drafted message has got to. DRAFT and SKIPPED stay neutral. */
+.pill.APPROVED, .pill.SENDING { --status-color: var(--accent); --status-bg: var(--accent-soft); --status-border: var(--accent-border); }
+.pill.SENT { --status-color: var(--good); --status-bg: var(--good-soft); --status-border: var(--good-border); }
+
+/* ------------------------------------------------------------------ groups */
+
+/*
+ * One section of a grouped list.
+ *
+ * The heading carries a 2px rule in the section's own colour, which is what
+ * makes five stacked sections read as five things rather than one long list.
+ */
+.group { margin-top: 1.5rem; }
+.group-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 0.75rem 1rem; flex-wrap: wrap;
+  padding-bottom: 0.45rem;
+  border-bottom: 2px solid var(--group-colour, var(--border));
+}
+.group-title { display: flex; align-items: center; gap: 0.5rem; margin: 0; font-size: var(--fs-base); }
+.group-count { font-weight: 400; color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.group-note { color: var(--muted); font-size: var(--fs-sm); margin: 0.45rem 0 0; }
+
+/* --------------------------------------------------------------- composer */
+
+/*
+ * The bar that appears once people are ticked.
+ *
+ * Sticky, because the selection is built by scrolling and a composer that
+ * scrolls away leaves you picking people with no visible way to act on them.
+ * It sits below the site header, hence the offset rather than 0.
+ */
+.composer {
+  position: sticky; top: 3.1rem; z-index: 15;
+  margin: 1rem 0; padding: 1rem 1.1rem;
+  border-color: var(--accent-border); background: var(--panel);
+  box-shadow: var(--shadow-md);
+}
+.composer-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+.composer-count { font-size: var(--fs-base); font-weight: 650; }
+.composer-names {
+  font-size: var(--fs-sm); color: var(--muted);
+  margin: 0.25rem 0 0.85rem; overflow-wrap: anywhere;
+}
+.composer-go { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+/* A message being written for several people needs more room than a stray note. */
+.composer textarea { min-height: 7rem; }
+
+/* Two ways to write, each looking like a choice rather than a bare radio. */
+.choices {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.5rem; margin-bottom: 0.9rem;
+}
+.choice {
+  display: flex; align-items: flex-start; gap: 0.55rem;
+  padding: 0.7rem 0.8rem; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius);
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.choice:hover { border-color: var(--border-strong); }
+.choice:has(input:checked) { border-color: var(--accent-border); background: var(--accent-soft); }
+.choice input { margin-top: 0.2rem; }
+.choice-title { display: block; font-weight: 600; color: var(--text); font-size: var(--fs-md); }
+.choice-note { display: block; color: var(--muted); font-size: var(--fs-sm); margin-top: 0.1rem; }
+
+/* Placeholder buttons. Monospace so `{firstName}` reads as something literal. */
+.tokens { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.5rem; }
+.tokens > button { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* ---------------------------------------------------------------- messages */
+
+/*
+ * A drafted message.
+ *
+ * Not monospace. This is prose a person will send under their own name, and
+ * setting it in a code face made every draft look like output to inspect
+ * rather than writing to read.
+ */
+.msg {
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  padding: 0.8rem 0.9rem; margin: 0;
+  background: var(--bg-subtle); border: 1px solid var(--border);
+  border-radius: var(--radius); font-size: var(--fs-base); line-height: 1.6;
+}
+.msg.over { border-color: var(--bad-border); background: var(--bad-soft); }
+.msg-count { font-size: var(--fs-sm); color: var(--muted); margin: 0.35rem 0 0; font-variant-numeric: tabular-nums; }
+.msg-count.over { color: var(--bad); font-weight: 600; }
+.msg-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.8rem; }
+.msg-actions .danger { margin-left: auto; }
+
+@media (max-width: 640px) {
+  .composer { position: static; }
+  .person-side { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
+  .msg-actions .danger { margin-left: 0; }
+}
+
+/*
+ * Outreach item state.
+ *
+ * Same convention as the conversation pills above: what is waiting on you is
+ * warm, what is finished is green, what you set aside stays neutral. DRAFT and
+ * APPROVED both need you, so they are separated by *which* action is next —
+ * blue to read it, amber to send it, because only one of those is irreversible.
+ */
+.pill.DRAFT { --status-color: var(--accent); --status-bg: var(--accent-soft); --status-border: var(--accent-border); }
+.pill.APPROVED { --status-color: var(--warn); --status-bg: var(--warn-soft); --status-border: var(--warn-border); }
+.pill.SENT { --status-color: var(--good); --status-bg: var(--good-soft); --status-border: var(--good-border); }
+/* SKIPPED keeps the neutral default: nothing is being asked of you. */
+
+/* The sync controls, above the connections list. */
+.sync-bar {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  padding: 0.85rem 0; margin-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.sync-bar .sync-meta { margin-left: auto; text-align: right; }
+
+/* The confirm step on an irreversible send. */
+.confirm {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  margin-top: 0.8rem; padding: 0.7rem 0.8rem;
+  border: 1px solid var(--warn-border); background: var(--warn-soft);
+  border-radius: var(--radius); font-size: var(--fs-sm);
+}
+.confirm p { margin: 0; flex: 1 1 14rem; }

@@ -43,49 +43,54 @@ const roleLabels: Record<string, string> = {
 };
 
 const sortLabels: Record<Sort, string> = {
-  status: 'Where the conversation is', role: 'What they do', name: 'Name', company: 'Company',
+  status: 'Conversation', role: 'What they do', name: 'Name', company: 'Company',
 };
 
 /**
  * The five states, in the order the server ranks them.
  *
- * `blurb` is on the section, not the row: saying "they replied and you have
- * not answered" once above eleven people reads better than eleven times, and
- * the state is the whole reason the section exists.
+ * `blurb` sits on the section rather than the row: saying "they replied and
+ * you have not answered" once above eleven people reads better than eleven
+ * times, and the state is the whole reason the section exists.
  */
-const statusLabels: Record<Status, { heading: string; blurb: string }> = {
+const statusLabels: Record<Status, { heading: string; pill: string; blurb: string; colour: string }> = {
   YOUR_TURN: {
     heading: 'Your turn',
+    pill: 'Your turn',
     blurb: 'They wrote back and you have not answered yet.',
+    colour: 'var(--warn)',
   },
   DRAFTED: {
     heading: 'Draft waiting on you',
-    blurb: 'A message is written but not sent. Approve it in First contact.',
+    pill: 'Drafted',
+    blurb: 'A message is written but not sent. Approve it under First contact.',
+    colour: 'var(--accent)',
   },
   AWAITING_REPLY: {
     heading: 'Waiting on them',
+    pill: 'Sent',
     blurb: 'You sent the last message. Nothing to do until they answer.',
+    colour: 'var(--border-strong)',
   },
   NOT_CONTACTED: {
     heading: 'Not contacted',
+    pill: 'New',
     blurb: 'No message either way on record.',
+    colour: 'var(--border-strong)',
   },
   CLOSED: {
     heading: 'Done',
-    blurb: 'You marked these conversations finished. Reopen one to pick it back up.',
+    pill: 'Done',
+    blurb: 'You marked these finished. Reopen one to pick it back up.',
+    colour: 'var(--good)',
   },
-};
-
-const statusColour: Record<Status, string> = {
-  YOUR_TURN: 'var(--bad)',
-  DRAFTED: 'var(--accent)',
-  AWAITING_REPLY: 'var(--muted)',
-  NOT_CONTACTED: 'var(--muted)',
-  CLOSED: 'var(--good)',
 };
 
 /** The most people one request will draft for, matching the server's cap. */
 const MAX_SELECTION = 50;
+
+const initialsOf = (name: string) =>
+  name.trim().split(/\s+/).slice(0, 2).map((part) => part.charAt(0)).join('') || '?';
 
 interface Section {
   key: string;
@@ -101,7 +106,7 @@ interface Section {
  * Cut the page into sections along whatever it was sorted by.
  *
  * The server orders by the same key, so a section is contiguous across the
- * list and this only ever has to break the run where the key changes. A
+ * whole list and this only ever has to break the run where the key changes. A
  * section split by a page boundary reappears under the same heading on the
  * next page, which is the honest way to show it.
  */
@@ -120,14 +125,10 @@ function sectionsOf(data: ConnectionsPage): Section[] {
     if (open && open.key === key) { open.rows.push(connection); continue; }
 
     if (data.sort === 'status') {
-      const status = key as Status;
+      const label = statusLabels[key as Status];
       sections.push({
-        key,
-        heading: statusLabels[status].heading,
-        blurb: statusLabels[status].blurb,
-        colour: statusColour[status],
-        total: data.statusTotals[status],
-        rows: [connection],
+        key, heading: label.heading, blurb: label.blurb, colour: label.colour,
+        total: data.statusTotals[key as Status], rows: [connection],
       });
     } else if (data.sort === 'role') {
       sections.push({ key, heading: roleLabels[key] ?? key, total: data.roleTotals[key], rows: [connection] });
@@ -153,8 +154,8 @@ export default function ConnectionsList({ refreshKey, onDrafted }: {
   const [retry, setRetry] = useState(0);
   /**
    * Names live alongside the ids because the selection outlives the page it
-   * was made on: picking three people under Recruiting and two on page 4 has
-   * to produce a panel that can still name all five.
+   * was made on: picking three people under Your turn and two on page 4 has to
+   * produce a composer that can still name all five.
    */
   const [selected, setSelected] = useState<Map<string, string>>(new Map());
 
@@ -186,9 +187,9 @@ export default function ConnectionsList({ refreshKey, onDrafted }: {
   });
 
   /**
-   * Closing is written straight through and the row patched locally.
-   * Refetching would re-sort the list under the cursor and jump the person you
-   * just closed into another section mid-click.
+   * Closing writes through and patches the row in place. Refetching would
+   * re-sort the list under the cursor and jump the person you just closed into
+   * another section mid-click.
    */
   const setClosed = async (connection: Connection, closed: boolean) => {
     await api(`/api/linkedin/connections/${connection.id}/close`, {
@@ -204,30 +205,42 @@ export default function ConnectionsList({ refreshKey, onDrafted }: {
   };
 
   const sections = data ? sectionsOf(data) : [];
+  const first = data ? (data.page - 1) * data.pageSize + 1 : 0;
+  const last = data ? Math.min(data.page * data.pageSize, data.total) : 0;
 
   return (
-    <section aria-labelledby="connections-heading" style={{ margin: '1.5rem 0' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+    <section aria-labelledby="connections-heading">
+      <div className="panel-head">
         <div>
-          <h3 id="connections-heading">All connections{data ? ` (${data.total.toLocaleString()})` : ''}</h3>
-          <p className="small muted">Everyone synced from LinkedIn. Tick anyone you want to write to.</p>
+          <h3 id="connections-heading">
+            All connections{' '}
+            {data && <span className="muted nums">({data.total.toLocaleString()})</span>}
+          </h3>
+          <p className="sub">Everyone synced from LinkedIn, grouped by where the conversation stands. Tick anyone you want to write to.</p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <label className="field" style={{ marginBottom: 0 }}>
-            <span>Group by</span>
-            <select value={sort} onChange={(event) => { setSort(event.target.value as Sort); setPage(1); }}>
-              {(Object.keys(sortLabels) as Sort[]).map((option) => (
-                <option key={option} value={option}>{sortLabels[option]}</option>
-              ))}
-            </select>
-          </label>
-          <label className="field" style={{ marginBottom: 0 }}>
-            <span>Per page</span>
-            <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}>
-              {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
-            </select>
-          </label>
-        </div>
+      </div>
+
+      <div className="toolbar">
+        <label className="field">
+          <span className="cap">Group by</span>
+          <select value={sort} onChange={(event) => { setSort(event.target.value as Sort); setPage(1); }}>
+            {(Object.keys(sortLabels) as Sort[]).map((option) => (
+              <option key={option} value={option}>{sortLabels[option]}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span className="cap">Per page</span>
+          <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}>
+            {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+          </select>
+        </label>
+        <span className="toolbar-sep" />
+        {data && data.total > 0 && (
+          <span className="toolbar-note nums" role="status">
+            {first}–{last} of {data.total.toLocaleString()}
+          </span>
+        )}
       </div>
 
       {selected.size > 0 && (
@@ -243,10 +256,28 @@ export default function ConnectionsList({ refreshKey, onDrafted }: {
         />
       )}
 
-      {loading ? <p role="status">Loading connections…</p> : error ? (
-        <div role="alert"><p>{error}</p><button onClick={() => setRetry((value) => value + 1)}>Try again</button></div>
+      {loading ? (
+        <div className="people" aria-busy="true">
+          {[0, 1, 2, 3].map((row) => (
+            <div className="person" key={row}>
+              <span className="skel avatar" aria-hidden="true" />
+              <span className="person-main stack">
+                <span className="skel" style={{ height: '0.9rem', width: '30%' }} />
+                <span className="skel" style={{ height: '0.8rem', width: '65%' }} />
+              </span>
+            </div>
+          ))}
+          <p className="sr-only" role="status">Loading connections…</p>
+        </div>
+      ) : error ? (
+        <div className="notice bad" role="alert">
+          <span>{error}</span>
+          <button className="small" onClick={() => setRetry((value) => value + 1)}>Try again</button>
+        </div>
       ) : data && data.total === 0 ? (
-        <p role="status">No connections have been synced yet. Use Sync Connections above to import your LinkedIn connections.</p>
+        <div className="empty-state">
+          No connections synced yet. Use <strong>Sync connections</strong> above to import them from LinkedIn.
+        </div>
       ) : data && (
         <>
           {sections.map((section) => (
@@ -259,15 +290,12 @@ export default function ConnectionsList({ refreshKey, onDrafted }: {
               onSetClosed={setClosed}
             />
           ))}
-          <nav aria-label="Connections pagination" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginTop: '1rem' }}>
-            <span className="small muted" role="status">
-              {(data.page - 1) * data.pageSize + 1}–{Math.min(data.page * data.pageSize, data.total)} of {data.total.toLocaleString()} connections
+          <nav className="spread" aria-label="Connections pagination">
+            <span className="small muted nums">Page {data.page} of {data.totalPages}</span>
+            <span className="row">
+              <button className="small" disabled={data.page <= 1} onClick={() => setPage(data.page - 1)}>Previous</button>
+              <button className="small" disabled={data.page >= data.totalPages} onClick={() => setPage(data.page + 1)}>Next</button>
             </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <button disabled={data.page <= 1} onClick={() => setPage(data.page - 1)}>Previous</button>
-              <span>Page {data.page} of {data.totalPages}</span>
-              <button disabled={data.page >= data.totalPages} onClick={() => setPage(data.page + 1)}>Next</button>
-            </div>
           </nav>
         </>
       )}
@@ -287,60 +315,70 @@ function ConnectionSection({ section, selected, onToggle, onToggleSection, onSet
   const headingId = `connections-section-${section.key.replace(/\W+/g, '-')}`;
 
   return (
-    <section aria-labelledby={headingId} style={{ marginTop: '1.5rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '1rem', flexWrap: 'wrap', borderBottom: `2px solid ${section.colour ?? 'var(--border)'}`, paddingBottom: '0.4rem' }}>
-        <h4 id={headingId} style={{ margin: 0 }}>
-          {section.heading}{' '}
-          <span className="small muted" style={{ fontWeight: 400 }}>
+    <section
+      className="group"
+      aria-labelledby={headingId}
+      style={section.colour ? ({ '--group-colour': section.colour } as React.CSSProperties) : undefined}
+    >
+      <div className="group-head">
+        <h4 className="group-title" id={headingId}>
+          {section.heading}
+          <span className="group-count">
             {section.total !== undefined && section.total !== section.rows.length
-              ? `${section.rows.length} of ${section.total.toLocaleString()} here`
+              ? `${section.rows.length} of ${section.total.toLocaleString()}`
               : section.rows.length.toLocaleString()}
           </span>
         </h4>
-        <label className="check">
+        <label className="check small">
           <input
             type="checkbox"
             checked={allHere}
             ref={(node) => { if (node) node.indeterminate = here > 0 && !allHere; }}
             onChange={() => onToggleSection(!allHere)}
           />
-          <span className="small">Select these {section.rows.length}</span>
+          <span>Select these {section.rows.length}</span>
         </label>
       </div>
-      {section.blurb && <p className="small muted" style={{ margin: '0.4rem 0 0' }}>{section.blurb}</p>}
-      <ul aria-label={section.heading} style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-        {section.rows.map((connection) => (
-          <li key={connection.id} style={{ padding: '0.85rem 0', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', gap: '0.65rem', minWidth: 0, flex: '1 1 240px' }}>
+      {section.blurb && <p className="group-note">{section.blurb}</p>}
+
+      <ul className="people" aria-label={section.heading}>
+        {section.rows.map((connection) => {
+          const label = statusLabels[connection.status];
+          return (
+            <li className={`person${selected.has(connection.id) ? ' is-selected' : ''}`} key={connection.id}>
               <input
                 type="checkbox"
                 checked={selected.has(connection.id)}
                 onChange={() => onToggle(connection)}
                 aria-label={`Select ${connection.fullName}`}
-                style={{ marginTop: '0.3rem' }}
               />
-              <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-                <a href={connection.profileUrl} target="_blank" rel="noreferrer"><strong>{connection.fullName}</strong></a>
-                {connection.headline && <p style={{ margin: '0.35rem 0' }}>{connection.headline}</p>}
-                <span className="small muted">{[connection.companyName === 'Unknown' ? null : connection.companyName, connection.location].filter(Boolean).join(' · ')}</span>
+              <span className="avatar" aria-hidden="true">{initialsOf(connection.fullName)}</span>
+              <div className="person-main">
+                <a className="person-name" href={connection.profileUrl} target="_blank" rel="noreferrer">
+                  {connection.fullName}
+                </a>
+                {connection.headline && <p className="person-headline">{connection.headline}</p>}
+                <div className="person-meta">
+                  <span className={`pill ${connection.status}`}>{label.pill}</span>
+                  {connection.companyName !== 'Unknown' && <span>{connection.companyName}</span>}
+                  {connection.location && <span>{connection.location}</span>}
+                  <span>{roleLabels[connection.role] ?? connection.role}</span>
+                  {connection.lastMessageAt && (
+                    <span>Last message {new Date(connection.lastMessageAt).toLocaleDateString()}</span>
+                  )}
+                </div>
               </div>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.3rem' }}>
-              <span className="small muted">{roleLabels[connection.role] ?? connection.role}</span>
-              {connection.lastMessageAt && (
-                <span className="small muted">
-                  Last message {new Date(connection.lastMessageAt).toLocaleDateString()}
-                </span>
-              )}
-              <button
-                className="small ghost"
-                onClick={() => onSetClosed(connection, !connection.conversationClosedAt)}
-              >
-                {connection.conversationClosedAt ? 'Reopen' : 'Mark as done'}
-              </button>
-            </div>
-          </li>
-        ))}
+              <div className="person-side">
+                <button
+                  className="small ghost"
+                  onClick={() => onSetClosed(connection, !connection.conversationClosedAt)}
+                >
+                  {connection.conversationClosedAt ? 'Reopen' : 'Mark as done'}
+                </button>
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
@@ -349,10 +387,10 @@ function ConnectionSection({ section, selected, onToggle, onToggleSection, onSet
 /**
  * Choose how the selected people get written to.
  *
- * Both routes end at the same place: a DRAFT in the First contact tab, which
- * you read before anything is approved or sent. The AI route writes one
- * message per person from their headline; the written route takes your words
- * and only fills in the placeholders you used.
+ * Both routes end at the same place: a DRAFT under First contact, which you
+ * read before anything is approved or sent. The AI route writes one message
+ * per person from their headline; the written route takes your words and only
+ * fills in the placeholders you used.
  */
 function Composer({ selected, onClear, onDeselect, onDrafted }: {
   selected: Map<string, string>;
@@ -411,24 +449,30 @@ function Composer({ selected, onClear, onDeselect, onDrafted }: {
   };
 
   return (
-    <div className="card" style={{ margin: '1rem 0' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', alignItems: 'baseline' }}>
-        <strong>{selected.size} selected</strong>
-        <button className="ghost small" onClick={onClear}>Clear selection</button>
+    <div className="card composer">
+      <div className="composer-head">
+        <span className="composer-count nums">{selected.size} selected</span>
+        <button className="ghost small" onClick={onClear}>Clear</button>
       </div>
-      <p className="small muted" style={{ margin: '0.35rem 0 0.75rem', overflowWrap: 'anywhere' }}>
+      <p className="composer-names">
         {[...selected.values()].slice(0, 6).join(', ')}
         {selected.size > 6 && ` and ${selected.size - 6} more`}
       </p>
 
-      <div role="radiogroup" aria-label="How to write the message" style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-        <label className="check">
+      <div className="choices" role="radiogroup" aria-label="How to write the message">
+        <label className="choice">
           <input type="radio" name="compose-mode" checked={mode === 'AI'} onChange={() => setMode('AI')} />
-          <span>Write each one with AI, from their profile</span>
+          <span>
+            <span className="choice-title">Write each one with AI</span>
+            <span className="choice-note">One message per person, from their headline and your profile.</span>
+          </span>
         </label>
-        <label className="check">
+        <label className="choice">
           <input type="radio" name="compose-mode" checked={mode === 'TEMPLATE'} onChange={() => setMode('TEMPLATE')} />
-          <span>Use a message I write</span>
+          <span>
+            <span className="choice-title">Use a message I write</span>
+            <span className="choice-note">Your exact words, with placeholders filled in per person.</span>
+          </span>
         </label>
       </div>
 
@@ -441,68 +485,58 @@ function Composer({ selected, onClear, onDeselect, onDrafted }: {
             onChange={(event) => setEmphasis(event.target.value)}
             placeholder="e.g. the payments work, or that I am open to contract roles"
           />
-          <span className="small muted">
-            Each message is written from that person&apos;s headline and your profile. Nothing about them is invented.
-          </span>
         </label>
       ) : (
-        <label className="field">
+        <div className="field">
           <span>Your message</span>
           <textarea
             ref={bodyRef}
             value={body}
             onChange={(event) => setBody(event.target.value)}
             placeholder={'Hi {firstName}, I am looking for my next backend role and thought I would ask around my network. Do you know of anything open?'}
-            style={{ minHeight: '7rem' }}
           />
-          <span className="small muted" style={{ display: 'block', marginTop: '0.4rem' }}>
-            {body.trim().length} characters. Everyone gets these exact words, with the placeholders filled in.
-          </span>
-          <span style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
+          <p className="msg-count">{body.trim().length} characters</p>
+          <div className="tokens">
             {['{firstName}', '{fullName}', '{company}', '{headline}'].map((token) => (
               <button key={token} type="button" className="small ghost" onClick={() => insert(token)}>{token}</button>
             ))}
-          </span>
-        </label>
+          </div>
+        </div>
       )}
 
-      <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="composer-go">
         <button
           className="primary"
           onClick={submit}
           disabled={busy || overCap || (mode === 'TEMPLATE' && !body.trim())}
         >
+          {busy && <span className="spinner" aria-hidden="true" />}
           {busy
-            ? mode === 'AI' ? `Writing ${ids.length} messages…` : 'Creating drafts…'
+            ? mode === 'AI' ? `Writing ${ids.length}…` : 'Creating drafts…'
             : `Create ${ids.length} draft${ids.length === 1 ? '' : 's'}`}
         </button>
-        <span className="small muted">
-          Drafts land in First contact. Nothing is sent until you approve it there.
-        </span>
+        <span className="small muted">Drafts go to First contact. Nothing sends until you approve it there.</span>
       </div>
 
       {overCap && (
-        <p className="small" role="alert" style={{ color: 'var(--bad)', marginTop: '0.6rem' }}>
-          {ids.length} people selected, and one batch takes at most {MAX_SELECTION}. Untick some before creating drafts.
+        <p className="notice bad small" role="alert">
+          {ids.length} selected, and one batch takes at most {MAX_SELECTION}. Untick some first.
         </p>
       )}
-      {failed && <p className="small" role="alert" style={{ color: 'var(--bad)', marginTop: '0.6rem' }}>{failed}</p>}
-      {result && (
-        <div role="status" style={{ marginTop: '0.75rem' }}>
+      {failed && <p className="notice bad small" role="alert">{failed}</p>}
+      {result && (result.created.length > 0 || result.errors.length > 0) && (
+        <div role="status">
           {result.created.length > 0 && (
-            <p className="small">
-              Drafted {result.created.length} message{result.created.length === 1 ? '' : 's'}. Read {result.created.length === 1 ? 'it' : 'them'} in First contact before approving.
-              {result.created.some((made) => made.overLimit) &&
-                ' Some are over LinkedIn’s character limit and are marked red there; they cannot be sent until they are shortened.'}
+            <p className="notice good small">
+              Drafted {result.created.length} message{result.created.length === 1 ? '' : 's'}.
+              {result.created.some((made) => made.overLimit) && ' Some are over LinkedIn’s limit and are flagged red; they cannot send until shortened.'}
             </p>
           )}
-          {result.errors.length > 0 && (
-            <ul className="small" style={{ margin: '0.4rem 0 0', paddingLeft: '1.1rem', color: 'var(--bad)' }}>
-              {result.errors.map((problem) => (
-                <li key={problem.contactId}>{problem.fullName}: {problem.error}</li>
-              ))}
-            </ul>
-          )}
+          {result.errors.map((problem) => (
+            <p className="notice bad small" key={problem.contactId}>
+              <strong>{problem.fullName}</strong> {problem.error}
+            </p>
+          ))}
         </div>
       )}
     </div>
