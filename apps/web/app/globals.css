@@ -722,3 +722,49 @@ tbody tr:hover { background: var(--panel-2); }
   .disclosure > summary { padding: 0.8rem 1.05rem; }
   .disclosure > .disclosure-body { padding: 0 1.05rem 1rem; }
 }
+.discover-page { --discover-gap: 1.4rem; }
+.discover-heading { padding: .5rem 0 1.8rem; }
+.discover-heading > .spread { align-items: flex-start; gap: 2rem; }
+.discover-heading h1 { font-size: clamp(2rem, 4vw, 2.7rem); letter-spacing: -.045em; margin: .35rem 0 .55rem; }
+.discover-heading .section-title { color: var(--accent); }
+.discover-heading > .spread > .row { align-items: flex-start; }
+.discover-options { position: relative; font-size: var(--fs-sm); }
+.discover-options summary, .discover-filters summary { cursor: pointer; padding: .55rem .7rem; color: var(--text-dim); }
+.discover-options[open] { padding-bottom: .5rem; }
+.discover-options button { display: block; margin-top: .4rem; width: 100%; font-size: var(--fs-sm); }
+.discover-page .discover-results { padding: 1.4rem; box-shadow: none; }
+.discover-results > .panel-head { align-items: center; }
+.discover-results .tabs { background: transparent; border: 0; padding: 0; }
+.discover-results .tabs button { padding: .55rem .8rem; }
+.discover-results .tabs button[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
+.discover-page .discover-toolbar { margin: 1rem 0 .65rem; background: transparent; padding: 1rem 0; border: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); border-radius: 0; }
+.discover-toolbar .grow { flex-basis: 15rem; }
+.discover-filter-fields { display: flex; gap: .8rem; flex-wrap: wrap; padding: .75rem; background: var(--panel-2); border-radius: var(--radius); }
+.discover-preferences { font-size: var(--fs-sm); color: var(--muted); margin: .8rem 0; }
+.discover-preferences summary { cursor: pointer; }
+.discover-selection { padding: .65rem 0 !important; margin-bottom: .6rem; }
+.discover-job-list { display: grid; gap: 1rem; }
+.discover-job.lead-row { border: 1px solid var(--border); padding: 1.3rem; margin: 0; border-radius: var(--radius); background: var(--panel); }
+.discover-job.lead-row:hover { border-color: var(--border-strong); background: var(--panel); }
+.discover-job.is-selected { border-color: var(--accent-border); background: var(--accent-soft); }
+.discover-job-layout { display: grid; gap: 1rem; }
+.discover-job-title > a:first-of-type { font-size: 1.15rem; color: var(--text); flex: 1 1 65%; order: -2; }
+.discover-job-title > input { order: -3; }
+.discover-job-title > span:first-of-type { order: -1; }
+.discover-job-title .discover-company { flex-basis: 100%; font-weight: 600; color: var(--text-dim); }
+.discover-job-actions { padding-top: .85rem; border-top: 1px solid var(--border); gap: .4rem; }
+.discover-job-actions .primary { order: -1; }
+.discover-job-actions .danger { margin-left: auto; }
+.discover-empty { text-align: center; padding: 3.5rem 1rem; max-width: 36rem; margin: auto; }
+.discover-empty-icon { display: grid; place-items: center; width: 3.5rem; height: 3.5rem; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 2rem; margin: 0 auto 1rem; }
+.discover-empty h2 { margin-bottom: .5rem; font-size: 1.3rem; }
+.discover-empty p { margin-bottom: 1rem; }
+@media (max-width: 760px) {
+  .discover-heading > .spread { flex-direction: column; gap: 1rem; }
+  .discover-page .discover-results { padding: 1rem; }
+  .discover-results > .panel-head { align-items: flex-start; }
+  .discover-toolbar .grow { flex-basis: 100%; }
+  .discover-job.lead-row { padding: 1rem; }
+  .discover-job-title > a:first-of-type { flex-basis: 70%; }
+  .discover-job-actions .danger { margin-left: 0; }
+}

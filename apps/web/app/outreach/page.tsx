@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/api';
+import ConnectionsList from './ConnectionsList';
 
 interface Contact {
   id: string;
@@ -56,6 +57,7 @@ export default function OutreachPage() {
   const [hasProfile, setHasProfile] = useState<boolean | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [connectionsRefresh, setConnectionsRefresh] = useState(0);
   const [editingItem, setEditingItem] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
 
@@ -120,6 +122,7 @@ export default function OutreachPage() {
       setSyncMessage(err instanceof Error ? err.message : 'Failed to sync connections.');
     } finally {
       setSyncing(false);
+      setConnectionsRefresh((value) => value + 1);
     }
   };
 
@@ -262,6 +265,8 @@ export default function OutreachPage() {
               </span>
             )}
           </div>
+
+          {hasProfile && <ConnectionsList refreshKey={connectionsRefresh} />}
 
           {coldTargets.length > 0 && (
             <div style={{ marginBottom: '1rem', padding: '1rem', background: 'var(--panel-2)', borderRadius: '4px' }}>

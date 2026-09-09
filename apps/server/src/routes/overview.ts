@@ -8,7 +8,7 @@ import { cachedSchemaProblem } from '../lib/schemaCheck.js';
 import { config } from '../lib/config.js';
 import { estimateActivityCosts } from '../llm/models.js';
 import { activeRuns } from '../engine/queue.js';
-import type { RequireUser } from '../index.js';
+import type { RequireUser } from '../auth/requireProfile.js';
 
 async function safeCount(fn: () => Promise<number>): Promise<number> {
   try {

@@ -121,6 +121,7 @@ export default function DiscoverPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [rejecting, setRejecting] = useState<Lead | null>(null);
   // Keyed by lead. An error from a card has to appear on that card: the shared
   // banner at the top of the page is often a screen away from the button that
@@ -167,6 +168,8 @@ export default function DiscoverPage() {
   }, [typed, view.q]);
 
   const load = useCallback(async () => {
+    setLoading(true);
+    try {
     const [l, c] = await Promise.all([
       api<LeadPage>(`/api/leads?${queryString(view, page)}`),
       api<{ companies: Company[] }>('/api/companies'),
@@ -183,10 +186,14 @@ export default function DiscoverPage() {
     // The server clamps a page past the end, so follow it rather than sitting
     // on a number that no longer exists.
     if (l.page !== page) setPage(l.page);
+    } finally {
+      setLoading(false);
+    }
   }, [view, page]);
 
   /** Any change to what is being shown starts again at page one. */
   function change(patch: Partial<View>) {
+    if (patch.q !== undefined) setTyped(patch.q);
     setView((v) => ({ ...v, ...patch }));
     setPage(1);
   }
@@ -326,16 +333,6 @@ export default function DiscoverPage() {
     }
   }
 
-  // The split that makes the page useful: the jobs worth opening, then the
-  // rest. 70 is the same threshold the score turns green at, so the section
-  // heading and the number beside each job never disagree.
-  //
-  // Only when the page is actually ordered by score, though. Grouping a
-  // title-sorted page under "Strong matches" would scatter the two headings
-  // through an alphabetical list and say nothing true about either.
-  const grouped = view.status === 'NEW' && view.sort === 'score' && view.dir === 'desc';
-  const strong = grouped ? leads.filter((l) => l.score >= 70) : [];
-  const rest = grouped ? leads.filter((l) => l.score < 70) : leads;
   const failing = companies.filter((c) => c.lastCrawlNote?.startsWith('failed')).length;
   const pageIds = leads.map((l) => l.id);
   const allPicked = pageIds.length > 0 && pageIds.every((id) => picked.includes(id));
@@ -353,15 +350,14 @@ export default function DiscoverPage() {
   });
 
   return (
-    <>
-      <div className="panel">
+    <div className="discover-page">
+      <div className="discover-heading">
         <div className="spread">
           <div style={{ minWidth: 0 }}>
-            <h2>Find work</h2>
+            <span className="section-title">Your next opportunity</span>
+            <h1>Find work</h1>
             <p className="sub" style={{ margin: 0, maxWidth: '46rem' }}>
-              Reads your resume, works out what to search for, and goes looking — you do not have
-              to name companies. Every posting it finds is on a board it can actually submit an
-              application to, scored against your profile and your past decisions.
+              Discover roles that fit you. Review the match, save your favorites, and apply.
             </p>
           </div>
           <div className="row" style={{ flex: 'none', gap: '.5rem' }}>
@@ -377,14 +373,16 @@ export default function DiscoverPage() {
               onClick={() => find(false)}
               title="Search the web for openings that match your profile"
             >
-              {busy === 'find' ? 'Searching…' : 'Find jobs for me'}
+              {busy === 'find' ? 'Searching…' : 'Find new jobs'}
             </button>
+            <details className="discover-options">
+              <summary>Search options</summary>
             <button
               disabled={busy !== null}
               onClick={() => find(true)}
               title="Show the searches it would run. Costs nothing and needs no key."
             >
-              {busy === 'preview' ? 'Working…' : 'Preview'}
+              {busy === 'preview' ? 'Working…' : 'Preview search'}
             </button>
             <button
               disabled={busy !== null}
@@ -393,6 +391,7 @@ export default function DiscoverPage() {
             >
               {busy === 'crawl' ? 'Re-checking…' : 'Re-check known boards'}
             </button>
+            </details>
           </div>
         </div>
 
@@ -410,37 +409,23 @@ export default function DiscoverPage() {
             You can also add boards by hand below, or paste a job URL on the Runs page.
           </div>
         )}
-        <Tally counts={counts} strong={pageInfo.strong} />
 
         {flash && <div className="notice good" style={{ marginTop: '.9rem' }}>{flash}</div>}
         {error && <div className="notice bad" style={{ marginTop: '.9rem' }}>{error}</div>}
         {report && <SearchReportPanel report={report} />}
       </div>
 
-      {grouped && strong.length > 0 && (
-        <div className="panel">
-          <h2>Strong matches</h2>
-          <p className="sub">
-            Scored 70 or above against your profile and your past decisions. Start here.
-          </p>
-          {strong.map((lead) => (
-            <LeadCard key={lead.id} {...cardProps(lead)} />
-          ))}
-        </div>
-      )}
-
-      <div className="panel">
+      <div className="panel discover-results">
         <div className="panel-head">
-          <h2>{grouped && strong.length > 0 ? 'Everything else' : 'Jobs'}</h2>
-          <div className="tabs" role="tablist">
+          <h2>Your opportunities</h2>
+          <div className="tabs" aria-label="Job status">
             {['NEW', 'SHORTLISTED', 'APPLIED', 'REJECTED', 'ALL'].map((s) => (
               <button
                 key={s}
-                role="tab"
-                aria-selected={view.status === s}
+                aria-pressed={view.status === s}
                 onClick={() => change({ status: s })}
               >
-                {s.toLowerCase()}
+                {{ NEW: 'For you', SHORTLISTED: 'Saved', APPLIED: 'Applied', REJECTED: 'Dismissed', ALL: 'All jobs' }[s]}
                 {counts[s] !== undefined && <span className="muted nums"> {counts[s]}</span>}
               </button>
             ))}
@@ -455,6 +440,8 @@ export default function DiscoverPage() {
           total={pageInfo.total}
         />
 
+        <details className="discover-preferences">
+        <summary>Application preferences</summary>
         <label
           className="row small muted"
           style={{ gap: '.4rem', marginTop: '.6rem', alignItems: 'center' }}
@@ -476,6 +463,7 @@ export default function DiscoverPage() {
             — off by default. A form that requires one gets one either way.
           </span>
         </label>
+        </details>
 
         <SelectionBar
           picked={picked}
@@ -492,16 +480,23 @@ export default function DiscoverPage() {
           onRescore={rescorePicked}
         />
 
-        {rest.length === 0 ? (
-          <p className="muted small" style={{ marginTop: '.8rem' }}>
-            {pageInfo.total === 0
+        {loading ? <div className="discover-empty" role="status"><span className="spinner" /> Loading opportunities…</div> : leads.length === 0 ? (
+          <div className="discover-empty" role="status">
+            <span className="discover-empty-icon" aria-hidden="true">⌕</span>
+            <h2>{error ? 'Jobs couldn’t load' : 'Make room for your next move'}</h2>
+          <p className="muted small">
+            {error ? 'Your job list is unavailable. Try again in a moment.' :
+            pageInfo.total === 0
               ? view.q || view.minScore || view.remote !== 'any' || view.depth !== 'any'
                 ? 'Nothing matches those filters. Widen them, or clear them.'
-                : 'No jobs here yet. Press “Find jobs for me” above.'
-              : 'Everything on this page is in strong matches.'}
+                : view.status === 'SHORTLISTED' ? 'Save a job to keep it here for later.' : 'No jobs here yet. Find new jobs to get started.'
+              : 'No jobs in this view.'}
           </p>
+          {error ? <button onClick={() => { setError(null); load().catch((e) => setError(e.message)); }}>Try again</button> :
+            <button onClick={() => change({ ...DEFAULT_VIEW })}>Reset filters</button>}
+          </div>
         ) : (
-          rest.map((lead) => <LeadCard key={lead.id} {...cardProps(lead)} />)
+          <div className="discover-job-list">{leads.map((lead) => <LeadCard key={lead.id} {...cardProps(lead)} />)}</div>
         )}
 
         <Pager
@@ -539,7 +534,7 @@ export default function DiscoverPage() {
           }}
         />
       )}
-    </>
+    </div>
   );
 }
 
@@ -567,11 +562,12 @@ function Controls({
     view.q !== '' || view.minScore !== '' || view.remote !== 'any' || view.depth !== 'any';
 
   return (
-    <div className="toolbar" style={{ marginTop: '.8rem' }}>
+    <div className="toolbar discover-toolbar">
       <div className="field grow">
         <span className="cap">search</span>
         <input
           type="search"
+          aria-label="Search jobs"
           value={typed}
           placeholder="Title, company or location"
           onChange={(e) => onTyped(e.target.value)}
@@ -587,6 +583,7 @@ function Controls({
         <span className="cap">sort by</span>
         <div className="row" style={{ gap: '.35rem', flexWrap: 'nowrap' }}>
           <select
+            aria-label="Sort jobs"
             value={view.sort}
             onChange={(e) => onChange({ sort: e.target.value as View['sort'] })}
           >
@@ -613,6 +610,7 @@ function Controls({
       <div className="field">
         <span className="cap">remote</span>
         <select
+          aria-label="Work location"
           value={view.remote}
           onChange={(e) => onChange({ remote: e.target.value as View['remote'] })}
         >
@@ -622,10 +620,14 @@ function Controls({
         </select>
       </div>
 
+      <details className="discover-filters">
+      <summary>More filters{view.minScore || view.depth !== 'any' ? ' •' : ''}</summary>
+      <div className="discover-filter-fields">
       <div className="field">
-        <span className="cap">score ≥</span>
+        <span className="cap">Minimum match</span>
         <input
           type="number"
+          aria-label="Minimum match score"
           min={0}
           max={100}
           value={view.minScore}
@@ -638,6 +640,7 @@ function Controls({
       <div className="field">
         <span className="cap">scored</span>
         <select
+          aria-label="Match assessment"
           value={view.depth}
           onChange={(e) => onChange({ depth: e.target.value as View['depth'] })}
         >
@@ -649,7 +652,7 @@ function Controls({
 
       <div className="field">
         <span className="cap">per page</span>
-        <select value={view.limit} onChange={(e) => onChange({ limit: Number(e.target.value) })}>
+        <select aria-label="Jobs per page" value={view.limit} onChange={(e) => onChange({ limit: Number(e.target.value) })}>
           {[10, 25, 50, 100].map((n) => (
             <option key={n} value={n}>
               {n}
@@ -657,6 +660,8 @@ function Controls({
           ))}
         </select>
       </div>
+      </div>
+      </details>
 
       <span className="toolbar-sep" />
 
@@ -701,9 +706,10 @@ function SelectionBar({
   onRescore: () => void;
 }) {
   const over = picked.length > max;
+  if (pageCount === 0 && picked.length === 0) return null;
   return (
     <div
-      className="row"
+      className="row discover-selection"
       style={{
         gap: '.6rem',
         alignItems: 'center',
@@ -722,7 +728,7 @@ function SelectionBar({
         select this page
       </label>
 
-      <button
+      {picked.length > 0 && <button
         className="primary"
         disabled={picked.length === 0 || busy}
         onClick={onRescore}
@@ -731,7 +737,7 @@ function SelectionBar({
         {busy
           ? 'Reading…'
           : `Rescore selected${picked.length ? ` (${Math.min(picked.length, max)})` : ''}`}
-      </button>
+      </button>}
 
       {picked.length > 0 && (
         <button onClick={onClear} disabled={busy}>
@@ -741,7 +747,7 @@ function SelectionBar({
 
       <span className="muted small">
         {picked.length === 0
-          ? 'Tick the jobs you want read in full — a real read costs a model call each, so it only reads what you pick.'
+          ? 'Select jobs for a deeper match assessment.'
           : over
             ? `${picked.length} ticked; the first ${max} will be read. Run it again for the rest.`
             : `${picked.length} ticked, here and on other pages.`}
@@ -827,11 +833,11 @@ function LeadCard({
         borderRadius: 'var(--radius-sm)',
         transition: 'background var(--fast) var(--ease)',
       }}
-      className="lead-row"
+      className={`lead-row discover-job${picked ? ' is-selected' : ''}`}
     >
-      <div className="spread">
+      <div className="discover-job-layout">
         <div style={{ minWidth: 0 }}>
-          <div className="row" style={{ gap: '.55rem' }}>
+          <div className="row discover-job-title" style={{ gap: '.55rem' }}>
             <input
               type="checkbox"
               checked={picked}
@@ -852,18 +858,19 @@ function LeadCard({
                 textAlign: 'center',
               }}
             >
-              {score}
+              {score}% match
             </span>
             <a href={`/jobs/${lead.id}`}>
               <strong>{lead.title}</strong>
             </a>
-            <span className="muted small">· {lead.companyName}</span>
+            <span className="muted small discover-company">{lead.companyName}</span>
             <a
               href={lead.url}
               target="_blank"
               rel="noreferrer"
               className="small muted"
               title="Open the original posting"
+              aria-label={`Original posting for ${lead.title}`}
             >
               ↗
             </a>
@@ -897,27 +904,25 @@ function LeadCard({
           still one click away, but visibly the supporting cast rather than
           five things all shouting at once.
         */}
-        <div className="row" style={{ flexWrap: 'nowrap', flex: 'none' }}>
-          <a href={`/jobs/${lead.id}`}>
-            <button className="ghost" title="Everything about this job on one page">
-              View job
-            </button>
+        <div className="row discover-job-actions">
+          <a href={`/jobs/${lead.id}`} className="btn" title="Everything about this job on one page">
+            View details
           </a>
-          {lead.status === 'NEW' ? (
+          {lead.status === 'NEW' || lead.status === 'SHORTLISTED' ? (
             <>
               <button className="primary" disabled={busy} onClick={onApply}>
                 Apply
               </button>
-              <button className="ghost" disabled={busy} onClick={onShortlist}>
+              {lead.status === 'NEW' && <button className="ghost" disabled={busy} onClick={onShortlist}>
                 Save
-              </button>
+              </button>}
               <button
                 className="ghost"
                 disabled={busy}
                 onClick={onApplied}
                 title="You applied to this one yourself — record it and take it out of the queue"
               >
-                Applied
+                Already applied
               </button>
               <button className="danger ghost" disabled={busy} onClick={onReject}>
                 Not for me
@@ -937,6 +942,7 @@ function LeadCard({
 
       <button
         className="small"
+        aria-expanded={open}
         style={{ marginTop: '.4rem', border: 0, background: 'none', padding: 0, color: 'var(--muted)' }}
         onClick={() => setOpen((o) => !o)}
       >

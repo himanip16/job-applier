@@ -1,107 +1,9 @@
-import type { Page } from 'playwright';
 import type { ContactRole, SyncType } from '../lib/db.js';
 import { prisma } from '../lib/db.js';
-import { openLinkedIn, linkedInPage, scrollToLoad } from './session.js';
-import { canonicalProfileUrl, headlineMatchesCompany } from './normalize.js';
+import { openLinkedIn, linkedInPage } from './session.js';
+import { readConnections } from './connectionReader.js';
+export { readConnections } from './connectionReader.js';
 import { classifyRole, isOutreachTarget } from './roles.js';
-import { dedupeRepeat } from './jobs.js';
-
-const DEGREE = /\b(1st|2nd|3rd\+?)\b/;
-
-/**
- * Chrome LinkedIn wraps around a name in the accessible label.
- */
-const stripProfileChrome = (s: string): string =>
-  s
-    .replace(/^view\s+/i, '')
-    .replace(/[’']s\s+profile$/i, '')
-    .replace(/\s*[-–—]\s*\d+(st|nd|rd|th)\s*$/i, '')
-    .replace(/\bstatus is (offline|online|reachable)\b/i, '')
-    .trim();
-
-/**
- * Read connections from LinkedIn's network page.
- */
-async function readConnections(page: Page): Promise<{
-  fullName: string;
-  headline: string;
-  profileUrl: string;
-  location?: string;
-  degree?: string;
-  companyName?: string;
-}[]> {
-  await scrollToLoad(page, 'a[href*="/in/"]');
-
-  const raw = await page.evaluate(() => {
-    const clean = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
-    const out: { href: string; name: string; lines: string[]; cardText: string }[] = [];
-    const seen = new Set<string>();
-
-    for (const a of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/in/"]'))) {
-      const href = a.href;
-      if (seen.has(href)) continue;
-      seen.add(href);
-
-      const card =
-        a.closest('li.reusable-search__result-container, li[class*="result"], div[data-view-name], li') ??
-        a.parentElement;
-      if (!card) continue;
-
-      out.push({
-        href,
-        name: clean(a.getAttribute('aria-label')) || clean(a.textContent),
-        lines: Array.from(card.querySelectorAll<HTMLElement>('span, div, p'))
-          .map((el) => clean(el.textContent))
-          .filter((t) => t.length > 0 && t.length < 200),
-        cardText: clean(card.textContent).slice(0, 400),
-      });
-    }
-    return out;
-  });
-
-  const connections: {
-    fullName: string;
-    headline: string;
-    profileUrl: string;
-    location?: string;
-    degree?: string;
-    companyName?: string;
-  }[] = [];
-  const seenUrls = new Set<string>();
-
-  for (const entry of raw) {
-    const profileUrl = canonicalProfileUrl(entry.href);
-    if (!profileUrl || seenUrls.has(profileUrl)) continue;
-
-    const fullName = stripProfileChrome(dedupeRepeat(entry.name));
-    if (!fullName || /^linkedin member$/i.test(fullName)) continue;
-
-    const lines = [...new Set(entry.lines.map(dedupeRepeat))].filter(
-      (l) => l !== fullName && !DEGREE.test(l) && !/^(connect|message|follow|view profile)$/i.test(l),
-    );
-
-    seenUrls.add(profileUrl);
-    
-    // Extract company from headline if present
-    const headline = lines[0] ?? '';
-    let companyName: string | undefined;
-    const companyMatch = headline.match(/at\s+([^.]+)/i);
-    if (companyMatch && companyMatch[1]) {
-      companyName = companyMatch[1].trim();
-    }
-
-    connections.push({
-      fullName,
-      headline,
-      location: lines[1],
-      degree: DEGREE.exec(entry.cardText)?.[1],
-      profileUrl,
-      companyName,
-    });
-  }
-
-  return connections;
-}
 
 /**
  * Sync LinkedIn connections into the database.
@@ -126,11 +28,7 @@ export async function syncConnections(profileId: string): Promise<{
     // Navigate to connections page
     await openLinkedIn(page, 'https://www.linkedin.com/mynetwork/invite-connect/connections/');
     
-    // Read all connections
-    const connections = await readConnections(page);
-    
-    // Upsert each connection
-    for (const conn of connections) {
+    const connections = await readConnections(page, { onConnection: async (conn) => {
       try {
         // Classify role
         const roleVerdict = classifyRole(conn.headline);
@@ -175,7 +73,15 @@ export async function syncConnections(profileId: string): Promise<{
       } catch (err) {
         errors.push(`Failed to sync ${conn.fullName}: ${(err as Error).message}`);
       }
+    } });
+
+    if (connections.length === 0) {
+      throw new Error(
+        'No LinkedIn connections could be read. Check the connections page in the browser ' +
+        'opened by Job Applier. If your connections are visible, the page reader needs updating.',
+      );
     }
+    if (errors.length) throw new Error(`Saved ${synced} connections, but some connections could not be saved. Retry sync to complete the import.`);
 
     await page.close();
 
