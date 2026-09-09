@@ -8,18 +8,6 @@
         "dev"
       ],
       "port": 3000
-    },
-    {
-      "name": "ui-preview-temp",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": [
-        "-m",
-        "http.server",
-        "4321",
-        "--directory",
-        "/private/tmp/claude-501/-Users-himani-Documents-projects-job-applier/4ea61cc7-02c2-4e12-a31e-a9214b705181/scratchpad"
-      ],
-      "port": 4321
     }
   ]
 }

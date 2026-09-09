@@ -79,8 +79,11 @@ describe('the connections list', () => {
 describe('marking a conversation done', () => {
   afterEach(() => vi.resetAllMocks());
 
-  const close = (body: unknown, profile: { id: string } | null = { id: 'my-profile' }) =>
-    app(profile).inject({ method: 'POST', url: '/api/linkedin/connections/c1/close', payload: body });
+  const close = async (body: object, profile: { id: string } | null = { id: 'my-profile' }) => {
+    const instance = app(profile);
+    try { return await instance.inject({ method: 'POST', url: '/api/linkedin/connections/c1/close', payload: body }); }
+    finally { await instance.close(); }
+  };
 
   it('stamps a date when closed and clears it when reopened', async () => {
     updateMany.mockResolvedValue({ count: 1 });
@@ -114,8 +117,11 @@ describe('marking a conversation done', () => {
 describe('drafting from a selection', () => {
   afterEach(() => vi.resetAllMocks());
 
-  const post = (payload: unknown, profile: { id: string } | null = { id: 'my-profile' }) =>
-    app(profile).inject({ method: 'POST', url: '/api/linkedin/connections/messages', payload });
+  const post = async (payload: object, profile: { id: string } | null = { id: 'my-profile' }) => {
+    const instance = app(profile);
+    try { return await instance.inject({ method: 'POST', url: '/api/linkedin/connections/messages', payload }); }
+    finally { await instance.close(); }
+  };
 
   it('passes the selection through with the signed-in profile', async () => {
     composeConnectionMessages.mockResolvedValue({ created: [{ id: 'i1', contactId: 'c1' }], errors: [] });
