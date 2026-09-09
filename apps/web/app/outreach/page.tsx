@@ -47,6 +47,38 @@ interface ColdTarget {
 
 type TabType = 'COLD' | 'REPLY' | 'FOLLOW_UP';
 
+/** A banner, replacing the alert() calls this page used to interrupt you with. */
+type Notice = { kind: 'info' | 'good' | 'bad' | 'warn'; text: string } | null;
+
+/** The enum names are how the database spells it, not how a person reads it. */
+const TAB_LABEL: Record<TabType, string> = {
+  COLD: 'First contact',
+  REPLY: 'Replies',
+  FOLLOW_UP: 'Follow-ups',
+};
+
+const EMPTY_COPY: Record<TabType, string> = {
+  COLD: 'Nothing drafted yet. Pick people from your connections below and write to them.',
+  REPLY: 'No replies waiting. Anyone who answers you appears here.',
+  FOLLOW_UP: 'No follow-ups due. One appears when a message has gone unanswered long enough.',
+};
+
+const STATUS_LABEL: Record<OutreachItem['status'], string> = {
+  DRAFT: 'Draft',
+  APPROVED: 'Approved',
+  SENT: 'Sent',
+  SKIPPED: 'Skipped',
+};
+
+const ROLE_LABEL: Record<string, string> = {
+  TALENT: 'Recruiting',
+  ENGINEERING: 'Engineering leadership',
+  OTHER: 'Other',
+};
+
+const initialsOf = (name: string) =>
+  name.trim().split(/\s+/).slice(0, 2).map((part) => part.charAt(0)).join('') || '?';
+
 export default function OutreachPage() {
   const [activeTab, setActiveTab] = useState<TabType>('COLD');
   const [items, setItems] = useState<OutreachItem[]>([]);
@@ -57,7 +89,8 @@ export default function OutreachPage() {
   const [hasProfile, setHasProfile] = useState<boolean | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncingMessages, setSyncingMessages] = useState(false);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
   const [connectionsRefresh, setConnectionsRefresh] = useState(0);
   const [editingItem, setEditingItem] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
@@ -65,62 +98,61 @@ export default function OutreachPage() {
   const loadItems = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api<OutreachItem[]>(`/api/outreach/items?type=${activeTab}`);
-      setItems(data);
+      setItems(await api<OutreachItem[]>(`/api/outreach/items?type=${activeTab}`));
     } catch (err) {
-      console.error('Failed to load items:', err);
+      setNotice({ kind: 'bad', text: err instanceof Error ? err.message : 'Could not load messages.' });
     }
     setLoading(false);
   }, [activeTab]);
 
   const loadColdTargets = useCallback(async () => {
     try {
-      const data = await api<ColdTarget[]>('/api/outreach/cold/targets');
-      setColdTargets(data);
-    } catch (err) {
-      console.error('Failed to load cold targets:', err);
+      setColdTargets(await api<ColdTarget[]>('/api/outreach/cold/targets'));
+    } catch {
+      // A shortlist that will not load is not worth a banner: the connections
+      // list below is the primary way in and still works.
     }
   }, []);
 
   const loadSyncStatus = useCallback(async () => {
     try {
-      const data = await api<{ connections: any }>('/api/linkedin/sync/status');
-      setSyncStatus(data);
-    } catch (err) {
-      console.error('Failed to load sync status:', err);
+      setSyncStatus(await api<{ connections: any }>('/api/linkedin/sync/status'));
+    } catch {
+      /* The "last synced" line simply does not render. */
     }
   }, []);
 
   useEffect(() => {
     loadItems();
-    if (activeTab === 'COLD') {
-      loadColdTargets();
-    }
+    if (activeTab === 'COLD') loadColdTargets();
   }, [loadItems, loadColdTargets, activeTab]);
 
-  useEffect(() => {
-    loadSyncStatus();
-  }, [loadSyncStatus]);
+  useEffect(() => { loadSyncStatus(); }, [loadSyncStatus]);
 
   useEffect(() => {
     api<{ profile: { id: string } | null }>('/api/profile')
       .then(({ profile }) => setHasProfile(Boolean(profile)))
-      .catch((err) => setSyncMessage(err instanceof Error ? err.message : 'Could not load your profile.'));
+      .catch((err) => {
+        setHasProfile(false);
+        setNotice({ kind: 'bad', text: err instanceof Error ? err.message : 'Could not load your profile.' });
+      });
   }, []);
 
   const handleSyncConnections = async () => {
     if (!hasProfile || syncing) return;
     setSyncing(true);
-    setSyncMessage(null);
+    setNotice(null);
     try {
-      const result = await api<{ synced: number; errors: string[] }>('/api/linkedin/sync/connections', { method: 'POST' });
-      setSyncMessage(result.errors.length
-        ? `Synced ${result.synced} connections. ${result.errors.join(' ')}`
-        : `Synced and categorized ${result.synced} connections.`);
+      const result = await api<{ synced: number; errors: string[] }>(
+        '/api/linkedin/sync/connections', { method: 'POST' },
+      );
+      setNotice(result.errors.length
+        ? { kind: 'warn', text: `Synced ${result.synced} connections. ${result.errors.join(' ')}` }
+        : { kind: 'good', text: `Synced and categorised ${result.synced} connections.` });
       await loadSyncStatus();
       await loadColdTargets();
     } catch (err) {
-      setSyncMessage(err instanceof Error ? err.message : 'Failed to sync connections.');
+      setNotice({ kind: 'bad', text: err instanceof Error ? err.message : 'Failed to sync connections.' });
     } finally {
       setSyncing(false);
       setConnectionsRefresh((value) => value + 1);
@@ -134,54 +166,66 @@ export default function OutreachPage() {
    * every thread - and because the two answer different questions. Connections
    * says who you know; this says who you have actually spoken to, which is what
    * puts someone under "Your turn" instead of "Not contacted".
+   *
+   * `fatalError` is reported on its own. The server distinguishes "the sync
+   * never ran" from "one thread of forty failed", and collapsing the two is how
+   * a sign-in problem used to surface as "Read 0 messages across 0
+   * conversations. 1 could not be saved."
    */
   const handleSyncMessages = async () => {
     if (!hasProfile || syncingMessages) return;
     setSyncingMessages(true);
-    setSyncMessage(null);
+    setNotice(null);
     try {
-      const result = await api<{ threads: number; messages: number; unmatched: number; errors: string[] }>(
-        '/api/linkedin/sync/messages', { method: 'POST' },
-      );
-      setSyncMessage(
-        `Read ${result.messages} messages across ${result.threads} conversations.` +
-        (result.unmatched ? ` ${result.unmatched} threads were with people who are not connections, so they were skipped.` : '') +
-        (result.errors.length ? ` ${result.errors.length} could not be saved.` : ''),
-      );
+      const result = await api<{
+        threads: number; messages: number; unmatched: number;
+        errors: string[]; fatalError: string | null;
+      }>('/api/linkedin/sync/messages', { method: 'POST' });
+
+      if (result.fatalError) {
+        setNotice({ kind: 'bad', text: `Could not read your messages. ${result.fatalError}` });
+      } else {
+        setNotice({
+          kind: result.errors.length ? 'warn' : 'good',
+          text: `Read ${result.messages} messages across ${result.threads} conversations.`
+            + (result.unmatched ? ` ${result.unmatched} threads were with people who are not connections, so they were skipped.` : '')
+            + (result.errors.length ? ` ${result.errors.length} could not be saved: ${result.errors[0]}` : ''),
+        });
+      }
       await loadSyncStatus();
       setConnectionsRefresh((value) => value + 1);
     } catch (err) {
-      setSyncMessage(err instanceof Error ? err.message : 'Failed to sync messages.');
+      setNotice({ kind: 'bad', text: err instanceof Error ? err.message : 'Failed to sync messages.' });
     } finally {
       setSyncingMessages(false);
     }
   };
 
   const handleGenerateCold = async () => {
-    if (selectedTargets.size === 0) {
-      alert('Select at least one contact to generate outreach for.');
-      return;
-    }
+    if (selectedTargets.size === 0 || generating) return;
+    setGenerating(true);
+    setNotice(null);
     try {
-      const result = await api<{ created: Array<{ id: string; contactId: string }>; errors: Array<{ contactId: string; error: string }> }>('/api/outreach/cold/generate', {
+      const result = await api<{
+        created: { id: string; contactId: string }[];
+        errors: { contactId: string; error: string }[];
+      }>('/api/outreach/cold/generate', {
         method: 'POST',
         body: JSON.stringify({ contactIds: Array.from(selectedTargets) }),
       });
       setSelectedTargets(new Set());
       await loadItems();
       await loadColdTargets();
-      if (result.errors.length > 0) {
-        alert(`Generated ${result.created.length} items. ${result.errors.length} failed.`);
-      }
+      setNotice({
+        kind: result.errors.length ? 'warn' : 'good',
+        text: `Drafted ${result.created.length} message${result.created.length === 1 ? '' : 's'}. Read ${result.created.length === 1 ? 'it' : 'them'} below before approving.`
+          + (result.errors.length ? ` ${result.errors.length} could not be written: ${result.errors[0]!.error}` : ''),
+      });
     } catch (err) {
-      console.error('Failed to generate outreach:', err);
-      alert('Failed to generate outreach. Check console for details.');
+      setNotice({ kind: 'bad', text: err instanceof Error ? err.message : 'Failed to draft the messages.' });
+    } finally {
+      setGenerating(false);
     }
-  };
-
-  const handleEdit = (item: OutreachItem) => {
-    setEditingItem(item.id);
-    setEditText(item.finalBody || item.draftBody);
   };
 
   const handleSaveEdit = async (itemId: string) => {
@@ -193,22 +237,8 @@ export default function OutreachPage() {
       setEditingItem(null);
       await loadItems();
     } catch (err) {
-      console.error('Failed to save edit:', err);
-      alert('Failed to save edit.');
+      setNotice({ kind: 'bad', text: err instanceof Error ? err.message : 'Could not save your edit.' });
     }
-  };
-
-  const handleCancelEdit = () => {
-    setEditingItem(null);
-    setEditText('');
-  };
-
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-  };
-
-  const handleOpenLinkedIn = (profileUrl: string) => {
-    window.open(profileUrl, '_blank');
   };
 
   const handleApprove = async (itemId: string) => {
@@ -216,22 +246,19 @@ export default function OutreachPage() {
       await api(`/api/outreach/items/${itemId}/approve`, { method: 'POST' });
       await loadItems();
     } catch (err) {
-      console.error('Failed to approve:', err);
-      alert('Failed to approve item.');
+      setNotice({ kind: 'bad', text: err instanceof Error ? err.message : 'Could not approve that message.' });
     }
   };
 
-  const handleSkip = async (itemId: string) => {
-    const reason = prompt('Reason for skipping (optional):');
+  const handleSkip = async (itemId: string, reason: string) => {
     try {
       await api(`/api/outreach/items/${itemId}/skip`, {
         method: 'POST',
-        body: JSON.stringify({ reason }),
+        body: JSON.stringify({ reason: reason.trim() || undefined }),
       });
       await loadItems();
     } catch (err) {
-      console.error('Failed to skip:', err);
-      alert('Failed to skip item.');
+      setNotice({ kind: 'bad', text: err instanceof Error ? err.message : 'Could not skip that message.' });
     }
   };
 
@@ -239,27 +266,26 @@ export default function OutreachPage() {
     try {
       await api(`/api/outreach/items/${itemId}/mark-sent`, { method: 'POST' });
       await loadItems();
-      alert('Message and resume sent on LinkedIn.');
+      setNotice({ kind: 'good', text: 'Sent on LinkedIn.' });
     } catch (err) {
-      console.error('Failed to mark as sent:', err);
-      alert('LinkedIn did not send the message. Nothing was marked as sent.');
+      setNotice({
+        kind: 'bad',
+        text: (err instanceof Error ? err.message : 'LinkedIn did not send the message.')
+          + ' Nothing was marked as sent.',
+      });
     }
   };
 
-  const toggleTargetSelection = (targetId: string) => {
-    setSelectedTargets((prev) => {
-      const next = new Set(prev);
-      if (next.has(targetId)) {
-        next.delete(targetId);
-      } else {
-        next.add(targetId);
-      }
-      return next;
-    });
-  };
+  const toggleTarget = (targetId: string) => setSelectedTargets((previous) => {
+    const next = new Set(previous);
+    if (next.has(targetId)) next.delete(targetId);
+    else next.add(targetId);
+    return next;
+  });
 
-  const currentBody = (item: OutreachItem) => item.finalBody || item.draftBody;
-  const isOverLimit = (item: OutreachItem) => currentBody(item).length > item.charLimit;
+  const lastSynced = syncStatus?.connections?.lastSyncAt
+    ? new Date(syncStatus.connections.lastSyncAt).toLocaleString()
+    : null;
 
   return (
     <div className="panel">
@@ -274,154 +300,118 @@ export default function OutreachPage() {
         <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
       </div>
 
-      {activeTab === 'COLD' && (
-        <div style={{ marginTop: '1rem' }}>
-          {hasProfile === false && (
-            <p role="status">
-              Create your Job Applier profile before syncing LinkedIn connections.{' '}
-              <a href="/profile">Set up your profile</a>, or sign in to the account with your existing profile.
-            </p>
-          )}
-          {syncMessage && <p role="status">{syncMessage}</p>}
-          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-            <button onClick={handleSyncConnections} disabled={!hasProfile || syncing}>
-              {syncing ? 'Syncing connections…' : 'Sync Connections'}
-            </button>
-            <button onClick={handleSyncMessages} disabled={!hasProfile || syncingMessages}>
-              {syncingMessages ? 'Reading conversations…' : 'Sync Messages'}
-            </button>
-            {syncStatus?.connections && (
-              <span className="small muted">
-                Last synced: {syncStatus.connections.lastSyncAt 
-                  ? new Date(syncStatus.connections.lastSyncAt).toLocaleString()
-                  : 'Never'}
-                {' '}({syncStatus.connections.status})
+      {notice && (
+        <div
+          className={`notice ${notice.kind === 'info' ? '' : notice.kind}`}
+          role={notice.kind === 'bad' ? 'alert' : 'status'}
+          style={{ marginTop: '1rem' }}
+        >
+          <span>{notice.text}</span>
+          <button className="ghost small" onClick={() => setNotice(null)} aria-label="Dismiss">
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      <div
+        role="tabpanel"
+        id="outreach-panel"
+        aria-labelledby={`outreach-tab-${activeTab}`}
+      >
+        {activeTab === 'COLD' && (
+          <>
+            <div className="sync-bar">
+              <button onClick={handleSyncConnections} disabled={!hasProfile || syncing}>
+                {syncing ? 'Syncing connections…' : 'Sync connections'}
+              </button>
+              <button onClick={handleSyncMessages} disabled={!hasProfile || syncingMessages}>
+                {syncingMessages ? 'Reading conversations…' : 'Sync messages'}
+              </button>
+              <span className="small muted sync-meta">
+                {hasProfile === null
+                  ? 'Checking your profile…'
+                  : hasProfile === false
+                    ? <>Syncing needs a profile. <a href="/profile">Set one up</a>.</>
+                    : lastSynced
+                      ? `Connections last synced ${lastSynced}`
+                      : 'Connections have never been synced'}
               </span>
+            </div>
+
+            {hasProfile && (
+              <ConnectionsList
+                refreshKey={connectionsRefresh}
+                onDrafted={() => { setActiveTab('COLD'); loadItems(); }}
+              />
             )}
+
+            {coldTargets.length > 0 && (
+              <ColdTargets
+                targets={coldTargets}
+                selected={selectedTargets}
+                busy={generating}
+                onToggle={toggleTarget}
+                onSelectAll={() => setSelectedTargets(new Set(coldTargets.map((t) => t.id)))}
+                onClear={() => setSelectedTargets(new Set())}
+                onGenerate={handleGenerateCold}
+              />
+            )}
+          </>
+        )}
+
+        <div className="group">
+          <div className="group-head">
+            <h3 className="group-title">
+              {TAB_LABEL[activeTab]}
+              {!loading && items.length > 0 && <span className="group-count">{items.length}</span>}
+            </h3>
           </div>
 
-          {hasProfile && (
-            <ConnectionsList
-              refreshKey={connectionsRefresh}
-              onDrafted={() => { setActiveTab('COLD'); loadItems(); }}
-            />
-          )}
-
-          {coldTargets.length > 0 && (
-            <div style={{ marginBottom: '1rem', padding: '1rem', background: 'var(--panel-2)', borderRadius: '4px' }}>
-              <div style={{ marginBottom: '0.5rem' }}>
-                <strong>{coldTargets.length} cold targets available</strong>
-              </div>
-              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                <button 
-                  onClick={() => setSelectedTargets(new Set(coldTargets.map(t => t.id)))}
-                  disabled={selectedTargets.size === coldTargets.length}
-                >
-                  Select All
-                </button>
-                <button 
-                  onClick={() => setSelectedTargets(new Set())}
-                  disabled={selectedTargets.size === 0}
-                >
-                  Clear Selection
-                </button>
-                <button 
-                  onClick={handleGenerateCold}
-                  disabled={selectedTargets.size === 0}
-                >
-                  Generate ({selectedTargets.size})
-                </button>
-              </div>
-              <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-                {coldTargets.map((target) => (
-                  <div
-                    key={target.id}
-                    style={{
-                      padding: '0.5rem',
-                      borderBottom: '1px solid var(--border)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedTargets.has(target.id)}
-                      onChange={() => toggleTargetSelection(target.id)}
-                    />
-                    <div style={{ flex: 1 }}>
-                      <strong>{target.fullName}</strong>
-                      <div className="small muted">
-                        {target.role === 'TALENT' ? 'Recruiter' : target.role === 'ENGINEERING' ? 'Engineering Manager' : target.role} at {target.companyName}
-                      </div>
-                      <div className="small muted">
-                        {target.degree ? `${target.degree}-degree connection` : 'Connection'} • {target.hasConversation ? 'has previous conversation' : 'no previous conversation'}
-                      </div>
-                      <div className="small muted">
-                        {target.jobTitle
-                          ? `Matched job: ${target.jobTitle}`
-                          : 'No matching job yet; the career page will be checked when generating'}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+          {loading ? (
+            <p className="small muted" role="status" style={{ marginTop: '1rem' }}>
+              Loading messages…
+            </p>
+          ) : items.length === 0 ? (
+            <div className="empty-state">{EMPTY_COPY[activeTab]}</div>
+          ) : (
+            <div style={{ marginTop: '1rem' }}>
+              {items.map((item) => (
+                <OutreachItemCard
+                  key={item.id}
+                  item={item}
+                  isEditing={editingItem === item.id}
+                  editText={editText}
+                  onEditChange={setEditText}
+                  onEditStart={() => {
+                    setEditingItem(item.id);
+                    setEditText(item.finalBody || item.draftBody);
+                  }}
+                  onEditSave={() => handleSaveEdit(item.id)}
+                  onEditCancel={() => { setEditingItem(null); setEditText(''); }}
+                  onApprove={() => handleApprove(item.id)}
+                  onSkip={(reason) => handleSkip(item.id, reason)}
+                  onMarkSent={() => handleMarkSent(item.id)}
+                />
+              ))}
             </div>
           )}
         </div>
-      )}
-
-      {loading ? (
-        <p>Loading...</p>
-      ) : items.length === 0 ? (
-        <div className="empty-state">
-          {activeTab === 'COLD'
-            ? 'Nothing to send yet. Sync your connections to find people worth writing to.'
-            : activeTab === 'REPLY'
-              ? 'No replies waiting. Anyone who answers you appears here.'
-              : 'No follow-ups due. One appears when a message has gone unanswered long enough.'}
-        </div>
-      ) : (
-        <div style={{ marginTop: '1rem' }}>
-          {items.map((item) => (
-            <OutreachItemCard
-              key={item.id}
-              item={item}
-              isEditing={editingItem === item.id}
-              editText={editText}
-              onEditChange={setEditText}
-              onEditStart={() => handleEdit(item)}
-              onEditSave={() => handleSaveEdit(item.id)}
-              onEditCancel={handleCancelEdit}
-              onCopy={() => handleCopy(currentBody(item))}
-              onOpenLinkedIn={() => handleOpenLinkedIn(item.contact.profileUrl)}
-              onApprove={() => handleApprove(item.id)}
-              onSkip={() => handleSkip(item.id)}
-              onMarkSent={() => handleMarkSent(item.id)}
-            />
-          ))}
-        </div>
-      )}
+      </div>
     </div>
   );
 }
 
-/** The enum names are how the database spells it, not how a person reads it. */
-const TAB_LABEL: Record<TabType, string> = {
-  COLD: 'First contact',
-  REPLY: 'Replies',
-  FOLLOW_UP: 'Follow-ups',
-};
-
 function Tabs({ activeTab, onTabChange }: { activeTab: TabType; onTabChange: (tab: TabType) => void }) {
   const tabs: TabType[] = ['COLD', 'REPLY', 'FOLLOW_UP'];
   return (
-    <div className="tabs" role="tablist">
+    <div className="tabs" role="tablist" aria-label="Outreach stage">
       {tabs.map((tab) => (
         <button
           key={tab}
           role="tab"
+          id={`outreach-tab-${tab}`}
           aria-selected={activeTab === tab}
+          aria-controls="outreach-panel"
           onClick={() => onTabChange(tab)}
         >
           {TAB_LABEL[tab]}
@@ -431,19 +421,109 @@ function Tabs({ activeTab, onTabChange }: { activeTab: TabType; onTabChange: (ta
   );
 }
 
+/**
+ * The never-contacted shortlist.
+ *
+ * Narrower than the connections list below it: only people with no message
+ * either way and no draft already waiting. It earns its place by naming the
+ * job each person is matched to, which the full list does not know about.
+ */
+function ColdTargets({ targets, selected, busy, onToggle, onSelectAll, onClear, onGenerate }: {
+  targets: ColdTarget[];
+  selected: Set<string>;
+  busy: boolean;
+  onToggle: (id: string) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+  onGenerate: () => void;
+}) {
+  return (
+    <section className="group" aria-labelledby="cold-targets-heading">
+      <div className="group-head">
+        <h3 className="group-title" id="cold-targets-heading">
+          Never contacted
+          <span className="group-count">{targets.length}</span>
+        </h3>
+        <div className="row" style={{ gap: '0.4rem' }}>
+          <button
+            className="small ghost"
+            onClick={onSelectAll}
+            disabled={selected.size === targets.length}
+          >
+            Select all
+          </button>
+          <button className="small ghost" onClick={onClear} disabled={selected.size === 0}>
+            Clear
+          </button>
+        </div>
+      </div>
+      <p className="group-note">
+        No message either way, and nothing drafted yet. Tick anyone you want written to.
+      </p>
+
+      {selected.size > 0 && (
+        <div className="card composer">
+          <div className="composer-head">
+            <span className="composer-count">{selected.size} selected</span>
+            <button className="ghost small" onClick={onClear}>Clear selection</button>
+          </div>
+          <div className="composer-go">
+            <button className="primary" onClick={onGenerate} disabled={busy}>
+              {busy
+                ? `Writing ${selected.size} message${selected.size === 1 ? '' : 's'}…`
+                : `Draft ${selected.size} message${selected.size === 1 ? '' : 's'}`}
+            </button>
+            <span className="small muted">
+              Drafts appear below. Nothing is sent until you approve it.
+            </span>
+          </div>
+        </div>
+      )}
+
+      <ul className="people">
+        {targets.map((target) => (
+          <li
+            key={target.id}
+            className={`person${selected.has(target.id) ? ' is-selected' : ''}`}
+          >
+            <input
+              type="checkbox"
+              checked={selected.has(target.id)}
+              onChange={() => onToggle(target.id)}
+              aria-label={`Select ${target.fullName}`}
+            />
+            <span className="avatar" aria-hidden="true">{initialsOf(target.fullName)}</span>
+            <div className="person-main">
+              <a href={target.profileUrl} target="_blank" rel="noreferrer" className="person-name">
+                {target.fullName}
+              </a>
+              {target.headline && <p className="person-headline">{target.headline}</p>}
+              <div className="person-meta">
+                <span>{ROLE_LABEL[target.role] ?? target.role}</span>
+                {target.companyName && target.companyName !== 'Unknown' && (
+                  <>· <span>{target.companyName}</span></>
+                )}
+                {target.jobTitle && <>· <span>Matched to {target.jobTitle}</span></>}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * One drafted message.
+ *
+ * Two things here are deliberate. The character count is live while you edit,
+ * because LinkedIn's connection-note cap is 300 and finding out you are over it
+ * only after saving is the whole reason a draft gets rewritten twice. And
+ * sending asks twice: it is the one action on this page that cannot be undone.
+ */
 function OutreachItemCard({
-  item,
-  isEditing,
-  editText,
-  onEditChange,
-  onEditStart,
-  onEditSave,
-  onEditCancel,
-  onCopy,
-  onOpenLinkedIn,
-  onApprove,
-  onSkip,
-  onMarkSent,
+  item, isEditing, editText, onEditChange, onEditStart, onEditSave, onEditCancel,
+  onApprove, onSkip, onMarkSent,
 }: {
   item: OutreachItem;
   isEditing: boolean;
@@ -452,88 +532,124 @@ function OutreachItemCard({
   onEditStart: () => void;
   onEditSave: () => void;
   onEditCancel: () => void;
-  onCopy: () => void;
-  onOpenLinkedIn: () => void;
   onApprove: () => void;
-  onSkip: () => void;
+  onSkip: (reason: string) => void;
   onMarkSent: () => void;
 }) {
-  const currentBody = item.finalBody || item.draftBody;
-  const isOverLimit = currentBody.length > item.charLimit;
+  const [copied, setCopied] = useState(false);
+  const [confirmingSend, setConfirmingSend] = useState(false);
+  const [skipping, setSkipping] = useState(false);
+  const [skipReason, setSkipReason] = useState('');
+
+  const body = isEditing ? editText : (item.finalBody || item.draftBody);
+  const over = body.length - item.charLimit;
+  const isOver = over > 0;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(body);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  };
 
   return (
-    <div
-      className="card"
-      style={{
-        marginBottom: '1rem',
-        background: isOverLimit ? 'var(--bad-soft)' : undefined,
-        borderColor: isOverLimit ? 'var(--bad-border)' : undefined,
-      }}
-    >
-      <div style={{ marginBottom: '0.5rem' }}>
-        <strong>{item.contact.fullName}</strong>
-        <div className="small muted">
-          {item.contact.headline} • {item.contact.companyName}
-          {item.jobTitle && ` • ${item.jobTitle} at ${item.companyName}`}
+    <div className="card" style={{ marginBottom: '1rem' }}>
+      <div className="person" style={{ padding: 0, marginBottom: '0.75rem' }}>
+        <span className="avatar" aria-hidden="true">{initialsOf(item.contact.fullName)}</span>
+        <div className="person-main">
+          <a href={item.contact.profileUrl} target="_blank" rel="noreferrer" className="person-name">
+            {item.contact.fullName}
+          </a>
+          {item.contact.headline && <p className="person-headline">{item.contact.headline}</p>}
+          <div className="person-meta">
+            <span>{ROLE_LABEL[item.contact.role] ?? item.contact.role}</span>
+            {item.contact.companyName && item.contact.companyName !== 'Unknown' && (
+              <>· <span>{item.contact.companyName}</span></>
+            )}
+            {item.jobTitle && <>· <span>About {item.jobTitle}</span></>}
+          </div>
         </div>
-        <div className="small muted">
-          {item.type} • {item.status} • {item.contact.degree}
+        <div className="person-side">
+          <span className={`pill ${item.status}`}>{STATUS_LABEL[item.status]}</span>
+          {item.status === 'SENT' && item.sentAt && (
+            <span className="small muted">{new Date(item.sentAt).toLocaleDateString()}</span>
+          )}
         </div>
       </div>
 
       {isEditing ? (
-        <div style={{ marginBottom: '0.5rem' }}>
+        <>
           <textarea
             value={editText}
-            onChange={(e) => onEditChange(e.target.value)}
-            style={{ width: '100%', minHeight: '100px', fontFamily: 'monospace' }}
+            onChange={(event) => onEditChange(event.target.value)}
+            aria-label={`Message to ${item.contact.fullName}`}
           />
-          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-            <button onClick={onEditSave}>Save</button>
-            <button onClick={onEditCancel}>Cancel</button>
+          <p className={`msg-count${isOver ? ' over' : ''}`}>
+            {body.length} / {item.charLimit} characters
+            {isOver && ` — ${over} over LinkedIn's limit`}
+          </p>
+          <div className="msg-actions">
+            <button className="primary" onClick={onEditSave} disabled={!body.trim()}>Save</button>
+            <button className="ghost" onClick={onEditCancel}>Cancel</button>
           </div>
-        </div>
+        </>
       ) : (
-        <div style={{ marginBottom: '0.5rem' }}>
-          <div
-            style={{
-              padding: '0.5rem',
-              background: 'var(--panel-2)',
-              borderRadius: '4px',
-              whiteSpace: 'pre-wrap',
-              fontFamily: 'monospace',
-            }}
-          >
-            {currentBody}
-          </div>
-          <div className="small muted" style={{ marginTop: '0.25rem' }}>
-            {currentBody.length} / {item.charLimit} characters
-            {isOverLimit && <span style={{ color: 'var(--bad)' }}> (OVER LIMIT)</span>}
-          </div>
-        </div>
-      )}
+        <>
+          <p className={`msg${isOver ? ' over' : ''}`}>{body}</p>
+          <p className={`msg-count${isOver ? ' over' : ''}`}>
+            {body.length} / {item.charLimit} characters
+            {isOver && ` — ${over} over LinkedIn's limit, so this cannot be sent until it is shortened`}
+          </p>
 
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-        {!isEditing && item.status === 'DRAFT' && (
-          <button onClick={onEditStart}>Edit</button>
-        )}
-        <button onClick={onCopy}>Copy</button>
-        <button onClick={onOpenLinkedIn}>Open LinkedIn</button>
-        {item.status === 'DRAFT' && (
-          <>
-            <button onClick={onApprove}>Approve</button>
-            <button onClick={onSkip}>Skip</button>
-          </>
-        )}
-        {item.status === 'APPROVED' && (
-          <button onClick={onMarkSent}>Send message + resume</button>
-        )}
-      </div>
-
-      {item.status === 'SENT' && (
-        <div className="small muted" style={{ marginTop: '0.5rem' }}>
-          Sent at {item.sentAt ? new Date(item.sentAt).toLocaleString() : 'Unknown'}
-        </div>
+          {confirmingSend ? (
+            <div className="confirm" role="alertdialog" aria-label="Confirm send">
+              <p>
+                This sends the message to {item.contact.fullName} on LinkedIn now. It cannot be
+                unsent.
+              </p>
+              <button className="primary" onClick={() => { setConfirmingSend(false); onMarkSent(); }}>
+                Send it
+              </button>
+              <button className="ghost" onClick={() => setConfirmingSend(false)}>Cancel</button>
+            </div>
+          ) : skipping ? (
+            <div className="confirm" role="group" aria-label="Skip this message">
+              <input
+                type="text"
+                value={skipReason}
+                onChange={(event) => setSkipReason(event.target.value)}
+                placeholder="Why are you skipping this? (optional)"
+                aria-label="Reason for skipping"
+                style={{ flex: '1 1 14rem' }}
+              />
+              <button onClick={() => { setSkipping(false); onSkip(skipReason); }}>Skip it</button>
+              <button className="ghost" onClick={() => { setSkipping(false); setSkipReason(''); }}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="msg-actions">
+              {item.status === 'DRAFT' && (
+                <button className="primary" onClick={onApprove} disabled={isOver}>Approve</button>
+              )}
+              {item.status === 'APPROVED' && (
+                <button className="primary" onClick={() => setConfirmingSend(true)} disabled={isOver}>
+                  Send on LinkedIn
+                </button>
+              )}
+              {(item.status === 'DRAFT' || item.status === 'APPROVED') && (
+                <button onClick={onEditStart}>Edit</button>
+              )}
+              <button onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
+              {item.status === 'DRAFT' && (
+                <button className="danger ghost" onClick={() => setSkipping(true)}>Skip</button>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

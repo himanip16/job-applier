@@ -11,7 +11,14 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body>
+      {/*
+        * Browser extensions stamp attributes on <body> - a theme switcher adds
+        * data-rm-theme - between the server HTML arriving and React hydrating,
+        * which React reports as a hydration mismatch the app cannot fix. This
+        * suppresses the warning for this element's own attributes only;
+        * mismatches in anything rendered inside still surface normally.
+        */}
+      <body suppressHydrationWarning>
         <LayoutContent>{children}</LayoutContent>
       </body>
     </html>
