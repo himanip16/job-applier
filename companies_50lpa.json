@@ -1,0 +1,1002 @@
+[
+  {
+    "company": "IMC Trading",
+    "domain": "imc.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "imc",
+    "tier": "quant",
+    "sde2_ctc_lpa": "55-110",
+    "india_locations": "Mumbai"
+  },
+  {
+    "company": "Squarepoint Capital",
+    "domain": "squarepoint-capital.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "squarepointcapital",
+    "tier": "quant",
+    "sde2_ctc_lpa": "50-100",
+    "india_locations": "Mumbai, Bangalore"
+  },
+  {
+    "company": "Tower Research Capital",
+    "domain": "tower-research.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "towerresearchcapital",
+    "tier": "quant",
+    "sde2_ctc_lpa": "70-150",
+    "india_locations": "Gurgaon"
+  },
+  {
+    "company": "Graviton Research Capital",
+    "domain": "gravitontrading.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "gravitonresearchcapital",
+    "tier": "quant",
+    "sde2_ctc_lpa": "60-140",
+    "india_locations": "Gurgaon"
+  },
+  {
+    "company": "AlphaGrep Securities",
+    "domain": "alpha-grep.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "alphagrepsecurities",
+    "tier": "quant",
+    "sde2_ctc_lpa": "50-110",
+    "india_locations": "Bangalore, Mumbai, Gurgaon"
+  },
+  {
+    "company": "WorldQuant",
+    "domain": "worldquant.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "worldquant",
+    "tier": "quant",
+    "sde2_ctc_lpa": "40-85",
+    "india_locations": "Mumbai, Bangalore"
+  },
+  {
+    "company": "NK Securities Research",
+    "domain": "nksecurities.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "nksecuritiesresearch",
+    "tier": "quant",
+    "sde2_ctc_lpa": "50-100",
+    "india_locations": "Gurgaon"
+  },
+  {
+    "company": "Quadeye Securities",
+    "domain": "quadeye.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "quadeye.com",
+    "tier": "quant",
+    "sde2_ctc_lpa": "55-120",
+    "india_locations": "Gurgaon"
+  },
+  {
+    "company": "D. E. Shaw India",
+    "domain": "deshawindia.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "deshawindia.com",
+    "tier": "quant",
+    "sde2_ctc_lpa": "45-90",
+    "india_locations": "Hyderabad, Gurgaon, Bangalore"
+  },
+  {
+    "company": "Millennium Management",
+    "domain": "mlp.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "mlp.com",
+    "tier": "quant",
+    "sde2_ctc_lpa": "50-95",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Jane Street",
+    "domain": "janestreet.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "janestreet",
+    "tier": "quant",
+    "sde2_ctc_lpa": "150+ (offshore)",
+    "india_locations": "No India office - hires into HK/London/NYC/Amsterdam"
+  },
+  {
+    "company": "Meta",
+    "domain": "meta.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "meta.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "80-130",
+    "india_locations": "Bangalore, Gurgaon"
+  },
+  {
+    "company": "Google",
+    "domain": "google.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "google.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "65-95",
+    "india_locations": "Bangalore, Hyderabad, Gurgaon, Pune"
+  },
+  {
+    "company": "Mudraksh & McShaw",
+    "domain": "mudrakshmcshaw.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "mudrakshmcshaw.com",
+    "tier": "quant",
+    "sde2_ctc_lpa": "40-80",
+    "india_locations": "Gurgaon, Jaipur"
+  },
+  {
+    "company": "Quantbox Research",
+    "domain": "quantboxresearch.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "quantboxresearch.com",
+    "tier": "quant",
+    "sde2_ctc_lpa": "45-90",
+    "india_locations": "Mumbai, Gurgaon"
+  },
+  {
+    "company": "XTX Markets",
+    "domain": "xtxmarkets.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "xtxmarkets.com",
+    "tier": "quant",
+    "sde2_ctc_lpa": "60-130",
+    "india_locations": "Mumbai/Bangalore - VERIFY India eng presence"
+  },
+  {
+    "company": "Amazon",
+    "domain": "amazon.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "amazon.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "50-75",
+    "india_locations": "Bangalore, Hyderabad, Chennai, Delhi"
+  },
+  {
+    "company": "Microsoft",
+    "domain": "microsoft.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "microsoft.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Hyderabad, Bangalore, Noida"
+  },
+  {
+    "company": "LinkedIn",
+    "domain": "linkedin.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "linkedin.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "65-95",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Uber",
+    "domain": "uber.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "uber.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "65-95",
+    "india_locations": "Bangalore, Hyderabad"
+  },
+  {
+    "company": "Apple",
+    "domain": "apple.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "apple.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "55-90",
+    "india_locations": "Hyderabad, Bangalore"
+  },
+  {
+    "company": "NVIDIA",
+    "domain": "nvidia.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "nvidia.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "50-85",
+    "india_locations": "Bangalore, Pune, Hyderabad"
+  },
+  {
+    "company": "Salesforce",
+    "domain": "salesforce.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "salesforce.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "50-75",
+    "india_locations": "Hyderabad, Bangalore"
+  },
+  {
+    "company": "Stripe",
+    "domain": "stripe.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "stripe",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "70-110",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Adobe",
+    "domain": "adobe.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "adobe.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Noida, Bangalore"
+  },
+  {
+    "company": "Databricks",
+    "domain": "databricks.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "databricks",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "70-110",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Atlassian",
+    "domain": "atlassian.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "atlassian.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "60-95",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Netflix",
+    "domain": "netflix.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "netflix.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "90-150",
+    "india_locations": "Mumbai - small eng footprint, VERIFY"
+  },
+  {
+    "company": "Oracle",
+    "domain": "oracle.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "oracle.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore, Hyderabad, Noida"
+  },
+  {
+    "company": "MongoDB",
+    "domain": "mongodb.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "mongodb",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "50-75",
+    "india_locations": "Gurgaon, Bangalore"
+  },
+  {
+    "company": "Coinbase",
+    "domain": "coinbase.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "coinbase",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "60-95",
+    "india_locations": "Hyderabad, Bangalore"
+  },
+  {
+    "company": "Dolat Capital",
+    "domain": "dolatcapital.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "dolatcapital.com",
+    "tier": "quant",
+    "sde2_ctc_lpa": "40-80",
+    "india_locations": "Mumbai"
+  },
+  {
+    "company": "Airbnb",
+    "domain": "airbnb.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "airbnb",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "70-110",
+    "india_locations": "Bangalore - VERIFY current eng hiring"
+  },
+  {
+    "company": "Rippling",
+    "domain": "rippling.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "rippling.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "60-95",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Intuit",
+    "domain": "intuit.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "intuit.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "55-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Confluent",
+    "domain": "confluent.io",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "confluent",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "55-85",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Rubrik",
+    "domain": "rubrik.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "rubrik",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "55-85",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Anthropic",
+    "domain": "anthropic.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "anthropic",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "100+",
+    "india_locations": "Bangalore - VERIFY, early"
+  },
+  {
+    "company": "Snowflake",
+    "domain": "snowflake.com",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "snowflake",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "60-95",
+    "india_locations": "Pune, Bangalore"
+  },
+  {
+    "company": "Figma",
+    "domain": "figma.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "figma",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "70-110",
+    "india_locations": "Bangalore - VERIFY, new/small"
+  },
+  {
+    "company": "Netskope",
+    "domain": "netskope.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "netskope",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "ServiceNow",
+    "domain": "servicenow.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "servicenow.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Hyderabad, Bangalore, Pune"
+  },
+  {
+    "company": "Cohesity",
+    "domain": "cohesity.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "cohesity.com",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore, Pune"
+  },
+  {
+    "company": "Nutanix",
+    "domain": "nutanix.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "nutanix.com",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore, Pune"
+  },
+  {
+    "company": "CrowdStrike",
+    "domain": "crowdstrike.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "crowdstrike.com",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Pune, Bangalore"
+  },
+  {
+    "company": "Okta",
+    "domain": "okta.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "okta",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Zscaler",
+    "domain": "zscaler.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "zscaler",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Mohali, Bangalore, Hyderabad"
+  },
+  {
+    "company": "SentinelOne",
+    "domain": "sentinelone.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "sentinelone.com",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Cisco",
+    "domain": "cisco.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "cisco.com",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore, Chennai"
+  },
+  {
+    "company": "Splunk",
+    "domain": "splunk.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "splunk.com",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Hyderabad (now Cisco)"
+  },
+  {
+    "company": "Akamai",
+    "domain": "akamai.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "akamai.com",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore, Chennai"
+  },
+  {
+    "company": "Arista Networks",
+    "domain": "arista.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "arista.com",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "55-85",
+    "india_locations": "Bangalore, Pune"
+  },
+  {
+    "company": "Yugabyte",
+    "domain": "yugabyte.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "yugabyte",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "SingleStore",
+    "domain": "singlestore.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "singlestore",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Pune, Hyderabad"
+  },
+  {
+    "company": "Postman",
+    "domain": "postman.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "postman",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore, Hyderabad"
+  },
+  {
+    "company": "F5",
+    "domain": "f5.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "f5.com",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Hyderabad, Bangalore"
+  },
+  {
+    "company": "Couchbase",
+    "domain": "couchbase.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "couchbase.com",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Harness",
+    "domain": "harness.io",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "harness.io",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "PhonePe",
+    "domain": "phonepe.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "phonepe.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-85",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Flipkart",
+    "domain": "flipkart.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "flipkart.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Meesho",
+    "domain": "meesho.com",
+    "job_links": [],
+    "source": "lever",
+    "handle": "meesho",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Swiggy",
+    "domain": "swiggy.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "swiggy.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Eternal (Zomato/Blinkit)",
+    "domain": "eternal.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "eternal.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Gurgaon, Bangalore"
+  },
+  {
+    "company": "Dream11",
+    "domain": "dream11.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "dream11.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-85",
+    "india_locations": "Mumbai"
+  },
+  {
+    "company": "CRED",
+    "domain": "cred.club",
+    "job_links": [],
+    "source": "lever",
+    "handle": "cred",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-85",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Zepto",
+    "domain": "zeptonow.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "zeptonow.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore, Mumbai"
+  },
+  {
+    "company": "Groww",
+    "domain": "groww.in",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "groww",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Games24x7",
+    "domain": "games24x7.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "games24x7.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore, Mumbai"
+  },
+  {
+    "company": "Navi",
+    "domain": "navi.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "navi.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-85",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Zerodha",
+    "domain": "zerodha.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "zerodha.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "40-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Razorpay",
+    "domain": "razorpay.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "razorpay.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Juspay",
+    "domain": "juspay.in",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "juspay.in",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "OpenAI",
+    "domain": "openai.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "openai.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "100+",
+    "india_locations": "New Delhi/Bangalore - VERIFY eng roles"
+  },
+  {
+    "company": "Fi Money",
+    "domain": "fi.money",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "fi.money",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "slice",
+    "domain": "sliceit.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "sliceit.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "ShareChat",
+    "domain": "sharechat.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "sharechat.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "BrowserStack",
+    "domain": "browserstack.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "browserstack.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Mumbai, Bangalore"
+  },
+  {
+    "company": "Zeta",
+    "domain": "zeta.tech",
+    "job_links": [],
+    "source": "lever",
+    "handle": "zeta",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore, Hyderabad"
+  },
+  {
+    "company": "Sprinklr",
+    "domain": "sprinklr.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "sprinklr.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Gurgaon, Bangalore"
+  },
+  {
+    "company": "Media.net",
+    "domain": "media.net",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "media.net",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Mumbai, Bangalore"
+  },
+  {
+    "company": "InMobi / Glance",
+    "domain": "inmobi.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "inmobi",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Jupiter Money",
+    "domain": "jupiter.money",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "jupiter.money",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "ThoughtSpot",
+    "domain": "thoughtspot.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "thoughtspot.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-75",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Palo Alto Networks",
+    "domain": "paloaltonetworks.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "paloaltonetworks.com",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Mobile Premier League",
+    "domain": "mpl.live",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "mpl.live",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "BlackRock",
+    "domain": "blackrock.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "blackrock.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Gurgaon, Mumbai"
+  },
+  {
+    "company": "Nomura",
+    "domain": "nomura.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "nomura.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Mumbai (Powai)"
+  },
+  {
+    "company": "Visa",
+    "domain": "visa.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "visa.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Goldman Sachs",
+    "domain": "goldmansachs.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "goldmansachs.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore, Hyderabad"
+  },
+  {
+    "company": "Morgan Stanley",
+    "domain": "morganstanley.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "morganstanley.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Mumbai, Bangalore"
+  },
+  {
+    "company": "Mastercard",
+    "domain": "mastercard.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "mastercard.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Pune, Gurgaon"
+  },
+  {
+    "company": "Agoda",
+    "domain": "agoda.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "agoda",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "50-85",
+    "india_locations": "Gurgaon (also relocates to Bangkok)"
+  },
+  {
+    "company": "Walmart Global Tech",
+    "domain": "walmart.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "walmart.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore, Chennai"
+  },
+  {
+    "company": "PayPal",
+    "domain": "paypal.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "paypal.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Chennai, Bangalore, Hyderabad"
+  },
+  {
+    "company": "Grab",
+    "domain": "grab.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "grab.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Target India",
+    "domain": "target.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "target.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "American Express",
+    "domain": "americanexpress.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "americanexpress.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Gurgaon, Bangalore"
+  },
+  {
+    "company": "Booking.com",
+    "domain": "booking.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "booking.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "55-85",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Deutsche Bank",
+    "domain": "db.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "db.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-60",
+    "india_locations": "Pune, Bangalore, Mumbai"
+  },
+  {
+    "company": "Expedia Group",
+    "domain": "expediagroup.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "expediagroup.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Gurgaon"
+  }
+]
