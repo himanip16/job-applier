@@ -60,11 +60,11 @@ export default function ProfilePage() {
         body: JSON.stringify({
           email: profile.email, fullName: profile.fullName,
           firstName: profile.firstName, lastName: profile.lastName,
-          phone: profile.phone ?? undefined, city: profile.city ?? undefined,
-          region: profile.region ?? undefined, country: profile.country ?? undefined,
-          citizenship: profile.citizenship ?? undefined, expectedCTC: profile.expectedCTC ?? undefined,
-          linkedin: profile.linkedin ?? undefined, github: profile.github ?? undefined,
-          website: profile.website ?? undefined, summary: profile.summary ?? undefined,
+          phone: profile.phone?.trim() || undefined, city: profile.city?.trim() || undefined,
+          region: profile.region?.trim() || undefined, country: profile.country?.trim() || undefined,
+          citizenship: profile.citizenship?.trim() || undefined, expectedCTC: profile.expectedCTC?.trim() || undefined,
+          linkedin: profile.linkedin?.trim() || undefined, github: profile.github?.trim() || undefined,
+          website: profile.website?.trim() || undefined, summary: profile.summary?.trim() || undefined,
         }),
       });
       setSaved('Saved.');

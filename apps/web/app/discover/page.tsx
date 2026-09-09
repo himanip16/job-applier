@@ -765,7 +765,7 @@ function Pager({
   shown: number;
   onPage: (p: number) => void;
 }) {
-  if (total === 0) return null;
+  if (total === 0 || pages <= 1) return null;
   const first = (page - 1) * limit + 1;
   return (
     <div
@@ -1230,8 +1230,15 @@ function CompanyManager({
   const [source, setSource] = useState('greenhouse');
   const [handle, setHandle] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const hint = sources.find((s) => s.id === source)?.handleHint ?? '';
+
+  const filteredCompanies = companies.filter((c) =>
+    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    c.source.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    c.handle.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
@@ -1290,9 +1297,19 @@ function CompanyManager({
       {error && <div className="notice bad" style={{ marginTop: '.7rem' }}>{error}</div>}
 
       {companies.length > 0 && (
-        <table style={{ marginTop: '.9rem' }}>
-          <tbody>
-            {companies.map((c) => (
+        <>
+          <div style={{ marginTop: '.9rem', marginBottom: '.5rem' }}>
+            <input
+              type="text"
+              placeholder="Search companies..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ width: '100%', padding: '0.5rem' }}
+            />
+          </div>
+          <table style={{ marginTop: '.9rem' }}>
+            <tbody>
+              {filteredCompanies.map((c) => (
               <tr key={c.id}>
                 <td>{c.name}</td>
                 <td className="muted small">
@@ -1316,6 +1333,12 @@ function CompanyManager({
             ))}
           </tbody>
         </table>
+        {filteredCompanies.length === 0 && searchQuery && (
+          <div className="muted small" style={{ marginTop: '.5rem' }}>
+            No companies match "{searchQuery}"
+          </div>
+        )}
+        </>
       )}
     </div>
   );

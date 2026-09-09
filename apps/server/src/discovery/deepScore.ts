@@ -99,6 +99,9 @@ export async function deepScoreLeads(
       // lexical prior only saw word counts. A hard blocker overrides both.
       const blended = blendScores(fit, lex);
       
+      // Auto-reject leads with deep score below 55
+      const shouldAutoReject = blended < 55;
+      
       await prisma.jobLead.update({
         where: { id: entry.id },
         data: {
@@ -106,6 +109,11 @@ export async function deepScoreLeads(
           scoreReasons: serialiseReasons(lex, fit) as Prisma.InputJsonValue,
           deepScored: true,
           scoredAt: new Date(),
+          ...(shouldAutoReject && {
+            status: 'REJECTED',
+            decidedAt: new Date(),
+            rejectReason: 'Auto-rejected: deep score below 55',
+          }),
         },
       });
       

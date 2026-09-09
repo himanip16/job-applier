@@ -8,7 +8,7 @@ const ProfileInput = z.object({
   email: z.string().email(),
   fullName: z.string().min(1),
   firstName: z.string().min(1),
-  lastName: z.string().min(1),
+  lastName: z.string().trim().default(''),
   phone: z.string().trim().min(1).optional(),
   city: z.string().trim().min(1).optional(),
   region: z.string().trim().min(1).optional(),

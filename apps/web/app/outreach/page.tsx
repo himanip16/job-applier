@@ -53,6 +53,9 @@ export default function OutreachPage() {
   const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [syncStatus, setSyncStatus] = useState<{ connections: any } | null>(null);
+  const [hasProfile, setHasProfile] = useState<boolean | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
 
@@ -96,14 +99,27 @@ export default function OutreachPage() {
     loadSyncStatus();
   }, [loadSyncStatus]);
 
+  useEffect(() => {
+    api<{ profile: { id: string } | null }>('/api/profile')
+      .then(({ profile }) => setHasProfile(Boolean(profile)))
+      .catch((err) => setSyncMessage(err instanceof Error ? err.message : 'Could not load your profile.'));
+  }, []);
+
   const handleSyncConnections = async () => {
+    if (!hasProfile || syncing) return;
+    setSyncing(true);
+    setSyncMessage(null);
     try {
-      await api('/api/linkedin/sync/connections', { method: 'POST' });
+      const result = await api<{ synced: number; errors: string[] }>('/api/linkedin/sync/connections', { method: 'POST' });
+      setSyncMessage(result.errors.length
+        ? `Synced ${result.synced} connections. ${result.errors.join(' ')}`
+        : `Synced and categorized ${result.synced} connections.`);
       await loadSyncStatus();
       await loadColdTargets();
     } catch (err) {
-      console.error('Failed to sync connections:', err);
-      alert('Failed to sync connections. Check console for details.');
+      setSyncMessage(err instanceof Error ? err.message : 'Failed to sync connections.');
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -226,9 +242,16 @@ export default function OutreachPage() {
 
       {activeTab === 'COLD' && (
         <div style={{ marginTop: '1rem' }}>
+          {hasProfile === false && (
+            <p role="status">
+              Create your Job Applier profile before syncing LinkedIn connections.{' '}
+              <a href="/profile">Set up your profile</a>, or sign in to the account with your existing profile.
+            </p>
+          )}
+          {syncMessage && <p role="status">{syncMessage}</p>}
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-            <button onClick={handleSyncConnections}>
-              Sync Connections
+            <button onClick={handleSyncConnections} disabled={!hasProfile || syncing}>
+              {syncing ? 'Syncing connections…' : 'Sync Connections'}
             </button>
             {syncStatus?.connections && (
               <span className="small muted">

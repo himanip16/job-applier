@@ -2,6 +2,8 @@ import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import Fastify from 'fastify';
 import type { FastifyError, FastifyRequest, FastifyReply } from 'fastify';
 import { LlmUnavailableError } from '../src/llm/client.js';
+import { ZodError } from 'zod';
+import { z } from 'zod';
 
 describe('global error handler', () => {
   let app: ReturnType<typeof Fastify>;
@@ -11,6 +13,14 @@ describe('global error handler', () => {
 
     // Set up the same error handler as the main app
     app.setErrorHandler((err: FastifyError, req: FastifyRequest, reply: FastifyReply) => {
+      // Handle Zod validation errors
+      if (err instanceof ZodError) {
+        return reply.code(400).send({
+          error: 'Invalid request',
+          issues: (err as any).issues,
+        });
+      }
+
       if (err instanceof LlmUnavailableError) {
         // Rate limit errors should return 429
         if (err.retryable && /rate limit|quota exhausted|429/i.test(err.message)) {
@@ -39,6 +49,13 @@ describe('global error handler', () => {
 
     app.get('/test/other-error', async () => {
       throw new Error('Some other error');
+    });
+
+    app.get('/test/zod-error', async () => {
+      const schema = z.object({
+        field: z.string(),
+      });
+      schema.parse({ field: 123 }); // This will throw ZodError
     });
 
     await app.ready();
@@ -79,5 +96,18 @@ describe('global error handler', () => {
     expect(response.statusCode).toBe(500);
     const body = JSON.parse(response.payload);
     expect(body.error).toBe('Internal server error');
+  });
+
+  it('returns 400 for Zod validation errors', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/test/zod-error',
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = JSON.parse(response.payload);
+    expect(body.error).toBe('Invalid request');
+    expect(body.issues).toBeDefined();
+    expect(body.issues.length).toBeGreaterThan(0);
   });
 });

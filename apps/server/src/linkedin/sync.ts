@@ -124,7 +124,7 @@ export async function syncConnections(profileId: string): Promise<{
     const page = await linkedInPage();
     
     // Navigate to connections page
-    await openLinkedIn(page, 'https://www.linkedin.com/mynetwork/contacts/connect/');
+    await openLinkedIn(page, 'https://www.linkedin.com/mynetwork/invite-connect/connections/');
     
     // Read all connections
     const connections = await readConnections(page);
