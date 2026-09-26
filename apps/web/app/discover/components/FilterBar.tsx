@@ -143,15 +143,18 @@ export function FilterBar({
 /** A select that looks like a pill, and says so when it is doing something. */
 function Pill({ label, value, options, onChange }: { label: string; value: string; options: Option[]; onChange: (v: string) => void }) {
   const active = value !== options[0]?.value;
+  // The native select sits invisibly over the pill, so the pill is as wide as
+  // what it says now rather than as wide as its longest option.
+  const shown = active ? (options.find((o) => o.value === value)?.label ?? value).replace(/ \(\d+\)$/, '') : label;
   return (
     <label className={`${styles.pill} ${active ? styles.pillOn : ''}`}>
-      <span className="sr-only">{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}>
+      <span>{shown}</span>
+      <Icon name="chevron" size={13} />
+      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} className={styles.pillSelect}>
         {options.map((o) => (
-          <option key={o.value} value={o.value}>{o.value === options[0]?.value ? label : o.label}</option>
+          <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
-      <Icon name="chevron" size={13} />
     </label>
   );
 }

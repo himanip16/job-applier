@@ -46,10 +46,10 @@ export const SORTS: { value: Sort; label: string; hint: string }[] = [
   {
     value: 'recommended',
     label: 'Recommended',
-    hint: 'Match score, weighted by how well the company pays (up to 150 LPA) and how recently it was posted. Unknown pay or date gets a middle weight.',
+    hint: 'Match score, weighted by the company’s estimated pay (unverified; up to 150 LPA) and how recently it was posted. Unknown pay or date is not guessed: it gets a neutral weight.',
   },
   { value: 'score', label: 'Best match', hint: 'Match score alone.' },
-  { value: 'pay', label: 'Highest pay', hint: 'Company SDE2 pay ceiling, then match.' },
+  { value: 'pay', label: 'Highest pay (est.)', hint: 'Estimated company SDE2 pay ceiling (unverified), then match. Companies with no estimate go last.' },
   { value: 'posted', label: 'Newest posted', hint: 'By posting date; jobs with no date go last.' },
   { value: 'discovered', label: 'Recently found', hint: 'When Job Applier found it.' },
 ];
@@ -70,9 +70,9 @@ export const POSTED_OPTIONS = [
 
 export const PAY_OPTIONS = [
   { value: '', label: 'Any pay' },
-  { value: '80', label: '80+ LPA' },
-  { value: '100', label: '100+ LPA' },
-  { value: '150', label: '150+ LPA' },
+  { value: '80', label: '80+ LPA (est.)' },
+  { value: '100', label: '100+ LPA (est.)' },
+  { value: '150', label: '150+ LPA (est.)' },
 ];
 
 export const TIER_LABELS: Record<string, string> = {

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { Icon } from '../../../components/Icon';
 import type { Lead } from '../types';
 
@@ -54,6 +55,16 @@ export function LeadCard({
             <span className="jc-company"><Icon name="building" size={14} />{lead.companyName}</span>
             {lead.location && <span><Icon name="pin" size={14} />{lead.location}</span>}
             {lead.remote && <span className="jc-chip"><Icon name="globe" size={12} />Remote</span>}
+            {lead.payCeiling ? (
+              <span className="jc-chip" title="Unverified estimate of this company's SDE2 pay ceiling (companies_50lpa.json), not a figure from the posting">
+                <Icon name="wallet" size={12} />est. up to {lead.payCeiling} LPA
+              </span>
+            ) : null}
+            {lead.autoApply === false && (
+              <span className="jc-chip" title="The app has no form-filler for this site: expect to finish this one yourself">
+                Apply by hand
+              </span>
+            )}
             <a
               href={lead.url}
               target="_blank"

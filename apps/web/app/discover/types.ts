@@ -32,12 +32,12 @@ export interface Lead {
 }
 
 /** A filter option with how many jobs in the current tab have it. */
-export export interface Facet {
+export interface Facet {
   name: string;
   count: number;
 }
 
-export export interface LeadPage {
+export interface LeadPage {
   leads: Lead[];
   counts: Record<string, number>;
   facets: { companies: Facet[]; cities: Facet[]; tiers: Facet[] };

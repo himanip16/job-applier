@@ -741,14 +741,6 @@ tbody tr:hover { background: var(--panel-2); }
 .discover-heading .sub { font-size: var(--fs-md); line-height: 1.55; }
 .discover-heading > .spread > .row { align-items: center; }
 .discover-heading .primary { border-radius: 8px; padding: .65rem 1.3rem; font-weight: 600; box-shadow: 0 4px 14px var(--accent-soft); }
-.discover-options { position: relative; font-size: var(--fs-sm); }
-.discover-options summary, .discover-filters summary { cursor: pointer; list-style: none; padding: .55rem .9rem; border-radius: 8px; color: var(--text-dim); font-weight: 600; font-size: var(--fs-sm); }
-.discover-options summary::-webkit-details-marker, .discover-filters summary::-webkit-details-marker { display: none; }
-.discover-options summary:hover, .discover-filters summary:hover { background: var(--panel); box-shadow: var(--lift); color: var(--text); }
-.discover-options[open] > summary, .discover-filters[open] > summary { background: var(--panel); box-shadow: var(--lift); color: var(--text); }
-.discover-menu { position: absolute; right: 0; top: calc(100% + .4rem); z-index: 5; display: grid; gap: 2px; min-width: 15rem; padding: .35rem; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow-md); }
-.discover-menu button { display: block; width: 100%; padding: .55rem .75rem; border: 0; border-radius: 10px; background: transparent; font-size: var(--fs-sm); text-align: left; }
-.discover-menu button:hover:not(:disabled) { background: var(--panel-2); }
 
 /* ---- results: no frame, the cards sit on the page ground ---- */
 .discover-page .discover-results { padding: 0; background: transparent; border: 0; box-shadow: none; }
@@ -763,25 +755,6 @@ tbody tr:hover { background: var(--panel-2); }
 .discover-results .tabs button[aria-pressed='true'] .muted { color: inherit; opacity: .8; }
 
 /* Floating filter bar: each control its own pill on the page ground */
-.discover-page .discover-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin: 0 0 .9rem; padding: 0; background: transparent; border: 0; border-radius: 0; }
-.discover-toolbar .field { display: block; margin: 0; }
-.discover-toolbar .field > .cap { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.discover-toolbar .grow { flex: 1 1 18rem; }
-.discover-toolbar input[type='search'] { width: 100%; min-height: 46px; padding: 0 1.1rem 0 2.6rem; border: 1px solid transparent; border-radius: 8px; background: var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%237d8794' stroke-width='2.2' viewBox='0 0 24 24'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") no-repeat 1rem center; box-shadow: var(--lift); font-size: var(--fs-md); }
-.discover-toolbar select, .discover-filter-fields input { min-height: 46px; padding: 0 2.2rem 0 1rem; border: 1px solid transparent; border-radius: 8px; background-color: var(--panel); box-shadow: var(--lift); font-size: var(--fs-sm); font-weight: 500; }
-.discover-toolbar .field .row > button { min-width: 46px; min-height: 46px; border-radius: 8px; border: 1px solid transparent; background: var(--panel); box-shadow: var(--lift); }
-.discover-toolbar input[type='search']:focus, .discover-toolbar select:focus, .discover-filter-fields input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.discover-filters { position: relative; }
-.discover-filters summary { min-height: 46px; display: inline-flex; align-items: center; background: var(--panel); box-shadow: var(--lift); }
-.discover-filter-fields { position: absolute; z-index: 5; top: 3.2rem; left: 0; display: flex; gap: .8rem; flex-wrap: wrap; padding: 1rem; min-width: 22rem; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-md); }
-.discover-filter-fields .field > .cap { position: static; width: auto; height: auto; clip: auto; display: block; margin-bottom: .3rem; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); text-transform: none; letter-spacing: 0; }
-.discover-toolbar .toolbar-sep { flex: 1; }
-.discover-toolbar .toolbar-note { color: var(--muted); font-size: var(--fs-sm); }
-
-.discover-preferences { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1.4rem; margin: .1rem 0 .9rem; padding: .7rem .9rem; border-radius: 10px; background: var(--panel); box-shadow: var(--lift); font-size: var(--fs-sm); }
-.discover-pref-title { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.discover-pref { display: flex; align-items: flex-start; gap: .5rem; cursor: pointer; max-width: 30rem; line-height: 1.45; }
-.discover-pref input { margin-top: .2rem; width: auto; flex: none; }
 .discover-selection { padding: .5rem .2rem !important; margin-bottom: .6rem; }
 
 /* ---- job cards ---- */
@@ -830,8 +803,6 @@ tbody tr:hover { background: var(--panel-2); }
 @media (max-width: 760px) {
   .discover-heading > .spread { flex-direction: column; align-items: flex-start; gap: 1rem; }
   .discover-results > .panel-head { align-items: flex-start; }
-  .discover-toolbar .grow { flex-basis: 100%; }
-  .discover-filter-fields { min-width: 0; width: calc(100vw - 2rem); }
   .jc { padding: 1rem; border-radius: 12px; }
   .jc-reasons, .jc-note, .jc-description { margin-left: 0; }
   .jc-quiet { margin-left: 0; }
@@ -841,19 +812,6 @@ tbody tr:hover { background: var(--panel-2); }
 
 
 /* Sort and location as labelled pills with an icon; match as quick chips. */
-.discover-controls { margin-bottom: .9rem; }
-.discover-select { position: relative; display: inline-flex; align-items: center; }
-.discover-select > svg { position: absolute; left: .85rem; color: var(--muted); pointer-events: none; }
-.discover-page .discover-select select { padding-left: 2.3rem; min-width: 10.5rem; }
-.discover-subbar { display: flex; align-items: center; justify-content: space-between; gap: .8rem; flex-wrap: wrap; margin-top: .7rem; }
-.discover-chips { display: inline-flex; flex-wrap: wrap; gap: .35rem; }
-.discover-chips button { padding: .35rem .75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text-dim); font-size: var(--fs-sm); font-weight: 500; transition: background var(--fast) var(--ease), color var(--fast) var(--ease), border-color var(--fast) var(--ease); }
-.discover-chips button:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
-.discover-chips button[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent); font-weight: 600; }
-.discover-count { display: inline-flex; align-items: center; gap: .7rem; color: var(--muted); font-size: var(--fs-sm); }
-.discover-count strong { color: var(--text); font-variant-numeric: tabular-nums; }
-.discover-clear { display: inline-flex; align-items: center; gap: .25rem; padding: .25rem .55rem; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: var(--fs-sm); }
-.discover-clear:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
 
 .discover-country { max-width: 26rem; text-align: center; border-radius: 12px; }
 .discover-country .discover-welcome-icon { margin-bottom: .8rem; }
@@ -879,8 +837,7 @@ tbody tr:hover { background: var(--panel-2); }
 .jc-quiet button { display: inline-flex; align-items: center; gap: .35rem; }
 .jc-score { grid-auto-flow: row; }
 .jc-score svg { display: none; }
-.discover-heading .primary, .discover-results .tabs button, .discover-filters summary, .discover-options summary, .discover-menu button { display: inline-flex; align-items: center; gap: .45rem; }
-.discover-menu button { display: flex; }
+.discover-heading .primary, .discover-results .tabs button { display: inline-flex; align-items: center; gap: .45rem; }
 
 /* ---- motion: quiet, and off for anyone who asked for less ---- */
 @keyframes jc-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
@@ -889,7 +846,7 @@ tbody tr:hover { background: var(--panel-2); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .jc { animation: jc-in .35s var(--ease) both; animation-delay: calc(var(--i, 0) * 45ms); }
 .jc-score { animation: jc-pop .35s var(--ease) both; animation-delay: calc(var(--i, 0) * 45ms + 120ms); }
-.jc-description, .discover-menu, .discover-filter-fields { animation: jc-open .18s var(--ease) both; }
+.jc-description { animation: jc-open .18s var(--ease) both; }
 .jc-arrow { width: 0; opacity: 0; margin-left: -.4rem; transition: width var(--fast) var(--ease), opacity var(--fast) var(--ease), margin var(--fast) var(--ease), transform var(--fast) var(--ease); }
 .jc-apply:hover:not(:disabled) .jc-arrow { width: 15px; opacity: 1; margin-left: 0; transform: translateX(2px); }
 .chev { transition: transform var(--fast) var(--ease); }
@@ -900,7 +857,7 @@ tbody tr:hover { background: var(--panel-2); }
 .jc-quiet button:hover:not(:disabled) svg { transform: scale(1.12); }
 .jc-quiet button svg { transition: transform var(--fast) var(--ease); }
 @media (prefers-reduced-motion: reduce) {
-  .jc, .jc-score, .jc-description, .discover-menu, .discover-filter-fields, .spin { animation: none; }
+  .jc, .jc-score, .jc-description, .spin { animation: none; }
   .jc:hover { transform: none; }
   .jc-arrow, .chev, .jc-quiet button svg { transition: none; }
 }
