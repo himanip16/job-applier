@@ -47,6 +47,24 @@
 .meterFill { height: 100%; border-radius: 4px; background: var(--accent); transition: width .5s var(--ease); }
 .meterFill.done { background: var(--good); }
 
+.saveActions { display: flex; align-items: center; gap: .7rem; margin-top: .5rem; }
+.saveBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .5rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.saveBtn:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.saveBtn:disabled { opacity: .5; cursor: not-allowed; }
+
 /* ---- sections ---- */
 .section {
   padding: var(--space-5);

@@ -10,7 +10,7 @@ interface Resume { id: string; label: string; filename: string; bytes: number; i
 interface Profile {
   id: string; email: string; fullName: string; firstName: string; lastName: string;
   phone: string | null; city: string | null; region: string | null; country: string | null;
-  citizenship: string | null; expectedCTC: string | null; linkedin: string | null; github: string | null; website: string | null; summary: string | null;
+  countryCode: string | null; citizenship: string | null; expectedCTC: string | null; linkedin: string | null; github: string | null; website: string | null; portfolio: string | null; summary: string | null;
   facts: Fact[]; resumes: Resume[];
 }
 
@@ -20,13 +20,13 @@ type Key = keyof Profile;
 const GROUPS: { title: string; icon: IconName; fields: [Key, string, string?][] }[] = [
   { title: 'Name', icon: 'user', fields: [['fullName', 'Full name'], ['firstName', 'First name'], ['lastName', 'Last name']] },
   { title: 'Contact', icon: 'mail', fields: [['email', 'Email', 'you@example.com'], ['phone', 'Phone', '+91 98765 43210']] },
-  { title: 'Location', icon: 'pin', fields: [['city', 'City'], ['region', 'State / region'], ['country', 'Country'], ['citizenship', 'Citizenship']] },
-  { title: 'Links', icon: 'link', fields: [['linkedin', 'LinkedIn', 'linkedin.com/in/…'], ['github', 'GitHub', 'github.com/…'], ['website', 'Website / portfolio']] },
+  { title: 'Location', icon: 'pin', fields: [['city', 'City'], ['region', 'State / region'], ['country', 'Country'], ['countryCode', 'Country code'], ['citizenship', 'Citizenship']] },
+  { title: 'Links', icon: 'link', fields: [['linkedin', 'LinkedIn', 'linkedin.com/in/…'], ['github', 'GitHub', 'github.com/…'], ['website', 'Website'], ['portfolio', 'Portfolio']] },
   { title: 'Salary', icon: 'wallet', fields: [['expectedCTC', 'Expected CTC', 'e.g. 45 LPA']] },
 ];
 
 const FIELDS: [Key, string][] = GROUPS.flatMap((g) => g.fields.map(([k, l]) => [k, l] as [Key, string]));
-const URL_FIELDS: Key[] = ['linkedin', 'github', 'website'];
+const URL_FIELDS: Key[] = ['linkedin', 'github', 'website', 'portfolio'];
 
 /** How long after the last keystroke the profile saves itself. */
 const AUTOSAVE_MS = 900;
@@ -82,9 +82,9 @@ export default function ProfilePage() {
           email: trimmed(p.email), fullName: trimmed(p.fullName),
           firstName: trimmed(p.firstName), lastName: trimmed(p.lastName),
           phone: opt('phone'), city: opt('city'), region: opt('region'), country: opt('country'),
-          citizenship: opt('citizenship'), expectedCTC: opt('expectedCTC'),
+          countryCode: opt('countryCode'), citizenship: opt('citizenship'), expectedCTC: opt('expectedCTC'),
           linkedin: opt('linkedin') && asUrl(opt('linkedin')!), github: opt('github') && asUrl(opt('github')!),
-          website: opt('website') && asUrl(opt('website')!), summary: opt('summary'),
+          website: opt('website') && asUrl(opt('website')!), portfolio: opt('portfolio') && asUrl(opt('portfolio')!), summary: opt('summary'),
         }),
       });
       dirty.current = false;
@@ -159,6 +159,7 @@ export default function ProfilePage() {
 
   const filledCount = FIELDS.filter(([k]) => trimmed(profile[k])).length + (profile.resumes?.length ? 1 : 0);
   const totalCount = FIELDS.length + 1;
+  const canSave = trimmed(profile.fullName) && trimmed(profile.firstName) && trimmed(profile.email);
 
   return (
     <div className={s.page}>
@@ -179,7 +180,25 @@ export default function ProfilePage() {
               style={{ width: `${Math.round((filledCount / totalCount) * 100)}%` }}
             />
           </div>
-          <SaveStatus state={save} />
+          <div className={s.saveActions}>
+            <button
+              type="button"
+              className={s.saveBtn}
+              onClick={() => void persist(profile)}
+              disabled={!canSave || save.kind === 'saving'}
+            >
+              {save.kind === 'saving' ? (
+                <>
+                  <Icon name="refresh" size={14} className="spin" /> Saving…
+                </>
+              ) : (
+                <>
+                  <Icon name="save" size={14} /> Save
+                </>
+              )}
+            </button>
+            <SaveStatus state={save} />
+          </div>
         </div>
       </header>
 

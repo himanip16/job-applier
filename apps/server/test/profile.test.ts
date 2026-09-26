@@ -106,8 +106,8 @@ describe('profile routes', () => {
     expect((res.json() as { error: string }).error).toBe('Invalid input');
   });
 
-  it('rejects empty strings in optional fields with 400', async () => {
-    const { cookie } = await createAuthenticatedUser('test@example.com');
+  it('converts empty strings in optional fields to undefined', async () => {
+    const { user, cookie } = await createAuthenticatedUser('test@example.com');
 
     const res = await post('/api/profile', {
       email: 'test@example.com',
@@ -118,8 +118,12 @@ describe('profile routes', () => {
       city: '',      // empty string
     }, cookie);
 
-    expect(res.statusCode).toBe(400);
-    expect((res.json() as { error: string }).error).toBe('Invalid input');
+    expect(res.statusCode).toBe(200);
+
+    // Profile should be created with empty strings converted to null
+    const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
+    expect(profile?.phone).toBeNull();
+    expect(profile?.city).toBeNull();
   });
 
   it('rejects invalid URLs with 400', async () => {
