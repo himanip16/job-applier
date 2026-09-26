@@ -1,5 +1,4 @@
 import { prisma } from '../lib/db.js';
-import { type BoardRef } from './boardUrls.js';
 
 /**
  * Register the company so the per-company crawler picks it up from now on.
@@ -10,7 +9,8 @@ import { type BoardRef } from './boardUrls.js';
  * re-finding it.
  */
 export async function registerCompany(
-  ref: BoardRef,
+  /** A source id and its handle - a BoardRef, or any crawler in careerSites.ts. */
+  ref: { ats: string; slug: string },
   name: string,
 ): Promise<{ id: string; created: boolean }> {
   const found = await prisma.company.findUnique({

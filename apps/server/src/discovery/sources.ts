@@ -11,6 +11,8 @@
  * That one is best-effort and depth-limited.
  */
 import type { Page } from 'playwright';
+import type { Country } from '@ja/shared';
+import { CAREER_SITE_SOURCES } from './careerSites.js';
 
 export interface DiscoveredJob {
   url: string;
@@ -23,16 +25,30 @@ export interface DiscoveredJob {
   postedAt?: Date;
 }
 
+/**
+ * What the caller is looking for, for boards too big to read whole.
+ *
+ * NVIDIA or Google list thousands of openings worldwide; reading all of them
+ * to keep the dozen that match is slow and impolite. The sources that can
+ * search server-side use these; the small ATS boards ignore them and return
+ * everything, which the caller filters anyway.
+ */
+export interface FetchHints {
+  /** Role titles to search for, e.g. ["Software Engineer", "Backend Engineer"]. */
+  queries?: string[];
+  country?: Country;
+}
+
 export interface Source {
   id: string;
   /** Human-readable hint for what `handle` should be. */
   handleHint: string;
-  fetchJobs(handle: string): Promise<DiscoveredJob[]>;
+  fetchJobs(handle: string, hints?: FetchHints): Promise<DiscoveredJob[]>;
 }
 
-const UA = 'job-applier/0.1 (personal job search assistant)';
+export const UA = 'job-applier/0.1 (personal job search assistant)';
 
-async function getJson<T>(url: string): Promise<T> {
+export async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { accept: 'application/json', 'user-agent': UA } });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} from ${url}`);
   return (await res.json()) as T;
@@ -71,7 +87,7 @@ const decodeEntities = (text: string): string =>
  * Three passes is enough for the double-escaping seen in the wild, and the
  * loop stops as soon as a pass changes nothing.
  */
-const stripHtml = (html: string): string => {
+export const stripHtml = (html: string): string => {
   let text = html;
   for (let pass = 0; pass < 3; pass++) {
     const next = decodeEntities(removeTags(text));
@@ -100,7 +116,7 @@ const stripHtml = (html: string): string => {
  * the boards with no structured field to ask instead - see the callers that
  * have one and use it as the authority.
  */
-const looksRemote = (s: string): boolean => {
+export const looksRemote = (s: string): boolean => {
   const text = s.toLowerCase();
   if (/\b(hybrid|on-?site|in-?office|in the office)\b/.test(text)) return false;
   if (/\b(not|no|isn'?t|is not|won'?t be|not currently|does not offer|doesn'?t offer)\b(?:\s+\w+){0,3}\s+remote\b/.test(text)) {
@@ -114,7 +130,7 @@ const looksRemote = (s: string): boolean => {
  * guess. "Hybrid" or "on-site" from the source is a fact; a stray "remote" in
  * three paragraphs of benefits copy is a guess, and the fact wins.
  */
-function remoteFrom(structured: 'remote' | 'hybrid' | 'onsite' | 'unspecified', fallbackText: string): boolean {
+export function remoteFrom(structured: 'remote' | 'hybrid' | 'onsite' | 'unspecified', fallbackText: string): boolean {
   if (structured === 'remote') return true;
   if (structured === 'hybrid' || structured === 'onsite') return false;
   return looksRemote(fallbackText);
@@ -302,7 +318,10 @@ export const workableSource: Source = {
 
 export const API_SOURCES: Source[] = [greenhouseSource, leverSource, ashbySource, workableSource];
 
-export const sourceById = (id: string): Source | undefined => API_SOURCES.find((s) => s.id === id);
+// Looked up at call time, not module load: careerSites imports this file's
+// helpers, so reading CAREER_SITE_SOURCES at the top level would hit the cycle.
+export const sourceById = (id: string): Source | undefined =>
+  API_SOURCES.find((s) => s.id === id) ?? CAREER_SITE_SOURCES.find((s) => s.id === id);
 
 // -------------------------------------------------------------- careers page ---
 

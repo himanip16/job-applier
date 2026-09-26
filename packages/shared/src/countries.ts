@@ -54,13 +54,23 @@ export function countryFromText(text: string | null | undefined): Country | unde
 export function locatedIn(location: string | null | undefined, remote: boolean, country: Country): boolean {
   const loc = (location ?? '').toLowerCase();
   if (!loc.trim()) return true;
-  const words = [country.name.toLowerCase(), country.code.toLowerCase(), ...country.aliases];
-  const mentions = words.some((w) => new RegExp(`(^|[^a-z])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`).test(loc));
-  if (mentions) return true;
+
+  // A place name ("Bengaluru", "India") is strong evidence; a bare two-letter
+  // code is not - "USA - Remote, IN" is Indiana, not India.
+  if ([country.name.toLowerCase(), ...country.aliases].some((w) => mentionsWord(loc, w))) return true;
+
+  // Any other country named, by name, alias or code, rules it out. Short
+  // aliases count here too: "Remote - USA" and "US-CA-Menlo Park" are both
+  // American jobs, and a substring test on long names alone waved them through.
+  const other = COUNTRIES.some(
+    (c) => c !== country && [c.name.toLowerCase(), c.code.toLowerCase(), ...c.aliases].some((w) => mentionsWord(loc, w)),
+  );
+  if (other) return false;
+
+  if (mentionsWord(loc, country.code.toLowerCase())) return true;
   // "Remote" with no other country named is open to this one too.
-  if (remote || /\bremote\b|\banywhere\b/.test(loc)) {
-    const other = COUNTRIES.some((c) => c !== country && [c.name.toLowerCase(), ...c.aliases.filter((a) => a.length > 3)].some((w) => loc.includes(w)));
-    return !other;
-  }
-  return false;
+  return remote || /\bremote\b|\banywhere\b/.test(loc);
 }
+
+const mentionsWord = (text: string, word: string): boolean =>
+  new RegExp(`(^|[^a-z])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`).test(text);

@@ -128,8 +128,7 @@ export default function DiscoverPage() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [sources, setSources] = useState<{ id: string; handleHint: string }[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
-  const [searchConfigured, setSearchConfigured] = useState(true);
-  const [report, setReport] = useState<SearchReport | null>(null);
+    const [report, setReport] = useState<SearchReport | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -223,7 +222,6 @@ export default function DiscoverPage() {
         const dd = d as { sources: { id: string; handleHint: string }[]; rejectCategories: string[]; searchConfigured: boolean };
         setSources(dd.sources);
         setCategories(dd.rejectCategories);
-        setSearchConfigured(dd.searchConfigured);
       })
       .catch(() => {});
   }, [load]);
@@ -444,7 +442,7 @@ export default function DiscoverPage() {
             <button
               disabled={busy !== null}
               onClick={() => setAskCountry('preview')}
-              title="Show the searches it would run. Costs nothing and needs no key."
+              title="Show the roles and companies it would search. Reads nothing."
             >
               <Icon name="eye" /> {busy === 'preview' ? 'Working…' : 'Preview search'}
             </button>
@@ -459,21 +457,6 @@ export default function DiscoverPage() {
             </details>
           </div>
         </div>
-
-        {!searchConfigured && (
-          <div className="notice" style={{ marginTop: '.9rem' }}>
-            Searching needs a free Firecrawl key. Add it on the{' '}
-            <a href="/settings" className="link">
-              Settings page
-            </a>{' '}
-            — get one at{' '}
-            <a href="https://firecrawl.dev" target="_blank" rel="noreferrer">
-              firecrawl.dev
-            </a>
-            . <strong>Preview</strong> works without one and shows you what it would search for.
-            You can also add boards by hand below, or paste a job URL on the Runs page.
-          </div>
-        )}
 
         {flash && <div className="notice good" style={{ marginTop: '.9rem' }}>{flash}</div>}
         {error && <div className="notice bad" style={{ marginTop: '.9rem' }}>{error}</div>}
@@ -1281,7 +1264,7 @@ function SearchReportPanel({ report }: { report: SearchReport }) {
     <div className="notice" style={{ marginTop: '.9rem' }}>
       <strong>
         {dryRun
-          ? `Would run ${report.queries.length} search${report.queries.length === 1 ? '' : 'es'}.`
+          ? `Would search ${report.boards.length} top-paying compan${report.boards.length === 1 ? 'y' : 'ies'} for ${report.queries.length} role${report.queries.length === 1 ? '' : 's'}.`
           : nothing
             ? 'No new jobs this time.'
             : `${report.newLeads} new job${report.newLeads === 1 ? '' : 's'} from ${boards.length} compan${
@@ -1290,7 +1273,7 @@ function SearchReportPanel({ report }: { report: SearchReport }) {
       </strong>{' '}
       {!dryRun && (
         <span className="muted small">
-          Searched {report.queries.length} time{report.queries.length === 1 ? '' : 's'} ·{' '}
+          Read {report.boards.filter((b) => !b.error).length} of {report.boards.length} top-paying companies ·{' '}
           {report.jobsSeen} posting{report.jobsSeen === 1 ? '' : 's'} considered ·{' '}
           {report.skippedAlreadySeen} already seen · {report.deepScored} read in full
           {report.companiesRegistered > 0 &&
@@ -1307,22 +1290,21 @@ function SearchReportPanel({ report }: { report: SearchReport }) {
 
       <details className="disclosure inline" open={dryRun} style={{ marginTop: '.6rem' }}>
         <summary className="small">
-          {dryRun ? 'The searches it would run' : 'What it searched for'}
+          {dryRun ? 'The roles it would search for' : 'Roles it searched for'}
           {report.planSource === 'profile' && ' (derived from your profile, no model used)'}
         </summary>
         <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
           {report.queries.map((q) => (
             <li key={q.query}>
               &ldquo;{q.query}&rdquo;
-              {!dryRun && ` — ${q.hits} usable hit${q.hits === 1 ? '' : 's'}`}
+              {!dryRun && ` — ${q.hits} matching opening${q.hits === 1 ? '' : 's'}`}
             </li>
           ))}
         </ul>
         {report.roleTitles.length > 0 && (
           <p className="small muted" style={{ margin: '.5rem 0 0' }}>
-            Kept other openings at those companies matching:{' '}
-            {report.roleTitles.map((t) => `“${t}”`).join(', ')}. Reject a few below and the next
-            search narrows.
+            Reject a few leads below and the next search narrows.
+            {dryRun && ` Companies: ${report.boards.map((b) => b.company).join(', ')}.`}
           </p>
         )}
       </details>

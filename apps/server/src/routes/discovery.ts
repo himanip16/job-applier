@@ -3,7 +3,6 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { crawlAll, rescore } from '../discovery/crawler.js';
 import { findJobs } from '../discovery/findJobs.js';
-import { isFirecrawlConfigured } from '../discovery/firecrawl.js';
 import type { RequireProfile } from './types.js';
 
 export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
@@ -18,11 +17,11 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
   });
 
   /**
-   * Find openings without being told where to look.
+   * Find openings at the best-paying companies.
    *
    * The primary way in. `/crawl` re-reads boards you already know about;
-   * this one goes and finds them, so the first run needs nothing but a
-   * resume.
+   * this one reads the top-paying companies in companies_50lpa.json for the
+   * roles your profile points at, so the first run needs nothing but a resume.
    */
   app.post('/api/discovery/find', async (req, reply) => {
     const profile = await requireProfile(req, reply);
@@ -32,7 +31,6 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       .object({
         dryRun: z.boolean().default(false),
         maxQueries: z.number().min(1).max(12).optional(),
-        resultsPerQuery: z.number().min(1).max(30).optional(),
         maxBoards: z.number().min(1).max(60).optional(),
         deepScoreTop: z.number().min(0).max(60).default(15),
         country: z.string().length(2).optional(),
@@ -41,16 +39,6 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
 
     if (body.country && !countryByCode(body.country)) {
       return reply.code(400).send({ error: `Searching in "${body.country}" is not supported yet.` });
-    }
-
-    // A dry run never touches Firecrawl, so it works without a key - which is
-    // exactly when you most want to see what the app thinks it would do.
-    if (!body.dryRun && !isFirecrawlConfigured()) {
-      return reply.code(400).send({
-        error:
-          'Job search needs a Firecrawl key. Get one free at firecrawl.dev and add it on the ' +
-          'Settings page. Everything else works without it.',
-      });
     }
 
     try {

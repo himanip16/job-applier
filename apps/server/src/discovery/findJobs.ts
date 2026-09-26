@@ -1,65 +1,43 @@
 import { countryByCode, locatedIn, type Country } from '@ja/shared';
-import { prisma, type Prisma } from '../lib/db.js';
-import { config } from '../lib/config.js';
-import { sourceById, type DiscoveredJob } from './sources.js';
-import {
-  ATS_SEARCH_DOMAINS,
-  boardKey,
-  companyNameFromTitle,
-  parseBoardUrl,
-  type BoardRef,
-} from './boardUrls.js';
-import { firecrawlSearch, isFirecrawlConfigured, type SearchHit } from './firecrawl.js';
+import { prisma } from '../lib/db.js';
+import { newPage } from '../browser/session.js';
+import { crawlCareersPage, sourceById, type DiscoveredJob, type FetchHints } from './sources.js';
 import { buildSearchPlan, titleMatchesPlan, type SearchPlan } from './searchQueries.js';
 import { rescoreLexically } from './rescoreLeads.js';
-import {
-  loadScoringContext,
-  type ScoringContext,
-  scoreLexically,
-  serialiseReasons,
-} from './scoring.js';
+import { loadScoringContext, scoreLexically, serialiseReasons } from './scoring.js';
 import { deepScoreLeads, type DeepScoreEntry } from './deepScore.js';
 import { registerCompany } from './companyRegistration.js';
-import {
-  canonicalUrl,
-  isSeniorLevel,
-  requiresMoreThan5YearsExperience,
-  fallbackJobsFromHits,
-} from './jobSearchUtils.js';
+import { topCompanies, type TargetCompany } from './topCompanies.js';
+import { isFirecrawlConfigured } from './firecrawl.js';
+import { canonicalUrl, isSeniorLevel, requiresMoreThan5YearsExperience } from './jobSearchUtils.js';
 
 /**
- * Finding openings without being told where to look.
+ * Finding openings at the companies worth working for.
  *
- * The existing crawler answers "what is open at the companies I listed". This
- * answers "who is hiring someone like me", which is the question you actually
- * have at the start of a job hunt, and it needs a different first move: web
- * search rather than a board API, because a board API needs a slug you do not
- * have yet.
+ * Search used to be an open web search over every ATS board, which surfaced
+ * whoever ranked for the query - mostly small startups. Now it reads the
+ * best-paying companies directly (topCompanies.ts), each through the crawler
+ * that fits its careers site: a board API for Greenhouse/Lever/Ashby, a
+ * careers-site API for Workday, Eightfold, Google, Apple and the rest, and a
+ * headless-browser crawl for the few with nothing better.
  *
- * The shape is search -> identify -> hydrate:
+ * The shape is plan -> read -> filter:
  *
- *  1. Turn the profile into a handful of queries.
- *  2. Search, restricted to the ATS hosts we can actually apply on. A posting
- *     we cannot submit is not a lead, it is a distraction.
- *  3. Reduce each hit to the board it lives on, then pull that board's own
- *     JSON API for the full, structured posting.
+ *  1. Turn the profile into role titles (the same plan as before).
+ *  2. Read every target company, passing those titles and the country so the
+ *     big sites search server-side instead of handing back thousands of roles.
+ *  3. Keep what matches the plan, in the chosen country, not too senior.
  *
- * Step 3 is the one worth defending. It would be simpler to scrape the pages
- * search returned, and much worse: the board APIs give complete descriptions,
- * real locations and posting dates with no parsing, they cost nothing, and
- * they hand back every *other* opening at that company at the same time. One
- * search hit at a company routinely turns into four leads.
- *
+ * No search credits are spent: every one of these endpoints is free to read.
  * Everything then joins the existing pipeline - same scoring, same triage,
- * same learning - so a job found this way is indistinguishable downstream from
- * one found by the crawler.
+ * same learning.
  */
 
 export interface BoardOutcome {
   ats: string;
   slug: string;
   company: string;
-  /** Openings the board reported, or 0 if we could not reach it. */
+  /** Openings the site reported for this search, or 0 if we could not reach it. */
   openings: number;
   /** How many became leads. */
   kept: number;
@@ -69,7 +47,9 @@ export interface BoardOutcome {
 export interface JobSearchReport {
   planSource: SearchPlan['source'];
   roleTitles: string[];
+  /** One entry per role title searched for, with how many relevant postings matched it. */
   queries: { query: string; hits: number }[];
+  /** Always 0 now; kept so older clients still render. */
   creditsUsed: number;
   boards: BoardOutcome[];
   jobsSeen: number;
@@ -86,35 +66,45 @@ export interface JobSearchReport {
   errors: { where: string; error: string }[];
 }
 
-/** Seams, so the whole flow is testable without a network or an API key. */
+/** Seams, so the whole flow is testable without a network. */
 export interface FindJobsDeps {
-  search: (query: string, opts: { includeDomains: string[]; limit: number; country?: string }) =>
-    Promise<{ hits: SearchHit[]; creditsUsed: number; warning?: string }>;
-  fetchBoard: (ref: BoardRef) => Promise<DiscoveredJob[]>;
   plan: (profileId: string, opts: { maxQueries: number; country?: Country }) => Promise<SearchPlan>;
+  companies: (limit: number) => TargetCompany[];
+  fetchCompany: (company: TargetCompany, hints: FetchHints) => Promise<DiscoveredJob[]>;
+}
+
+/**
+ * The careers-page crawls share one browser page and run one at a time; the
+ * API sources are plain HTTP and need none.
+ */
+let sharedPage: Awaited<ReturnType<typeof newPage>> | null = null;
+let pageQueue: Promise<unknown> = Promise.resolve();
+
+async function crawlWithBrowser(url: string): Promise<DiscoveredJob[]> {
+  const run = pageQueue.then(async () => {
+    sharedPage ??= await newPage();
+    return crawlCareersPage(sharedPage, url, { maxPages: 25 });
+  });
+  pageQueue = run.catch(() => {});
+  return run;
 }
 
 const defaultDeps: FindJobsDeps = {
-  search: (query, opts) => firecrawlSearch(query, opts),
-  fetchBoard: async (ref) => {
-    const source = sourceById(ref.ats);
-    if (!source) throw new Error(`No source registered for "${ref.ats}"`);
-    return source.fetchJobs(ref.slug);
-  },
   plan: (profileId, opts) => buildSearchPlan(profileId, opts),
+  companies: (limit) => topCompanies(limit),
+  fetchCompany: async (company, hints) => {
+    if (company.source === 'careers-page') return crawlWithBrowser(company.handle);
+    const source = sourceById(company.source);
+    if (!source) throw new Error(`No crawler registered for "${company.source}"`);
+    return source.fetchJobs(company.handle, hints);
+  },
 };
 
 export interface FindJobsOptions {
-  /**
-   * Work out what it would search for and stop, without spending a credit.
-   *
-   * The answer to "I pressed the button and nothing happened" is almost always
-   * visible here, and finding it out should not cost anything.
-   */
+  /** Work out what it would search for and stop, without reading any site. */
   dryRun?: boolean;
   maxQueries?: number;
-  resultsPerQuery?: number;
-  /** Bound the work: a run that hydrates ninety boards takes minutes. */
+  /** How many of the best-paying companies to read. */
   maxBoards?: number;
   deepScoreTop?: number;
   /** Where to look, as an ISO code. Asked for before every search. */
@@ -122,14 +112,16 @@ export interface FindJobsOptions {
   deps?: Partial<FindJobsDeps>;
 }
 
+/** Companies read at once. Each site is still read politely, one request at a time. */
+const CONCURRENCY = 6;
+
 export async function findJobs(
   profileId: string,
   opts: FindJobsOptions = {},
 ): Promise<JobSearchReport> {
   const deps: FindJobsDeps = { ...defaultDeps, ...opts.deps };
-  const maxQueries = opts.maxQueries ?? config.jobSearchQueries;
-  const resultsPerQuery = opts.resultsPerQuery ?? config.jobSearchResultsPerQuery;
-  const maxBoards = opts.maxBoards ?? 25;
+  const maxQueries = opts.maxQueries ?? 6;
+  const maxCompanies = opts.maxBoards ?? 50;
   const deepScoreTop = opts.deepScoreTop ?? 15;
 
   const report: JobSearchReport = {
@@ -155,73 +147,60 @@ export async function findJobs(
   report.planSource = plan.source;
   report.roleTitles = plan.roleTitles;
   report.notes.push(...plan.notes);
+  report.queries = plan.roleTitles.map((query) => ({ query, hits: 0 }));
+
+  const companies = deps.companies(maxCompanies);
 
   if (opts.dryRun) {
-    report.queries = plan.queries.map((query) => ({ query, hits: 0 }));
+    report.boards = companies.map((c) => ({ ats: c.source, slug: c.handle, company: c.company, openings: 0, kept: 0 }));
     report.notes.push(
-      'Dry run: this is what it would search for. Nothing was searched and no credits were spent.',
+      `Dry run: this would read the ${companies.length} best-paying companies (${companies
+        .slice(0, 5)
+        .map((c) => c.company)
+        .join(', ')}, ...) for these roles. Nothing was read.`,
     );
     return report;
   }
 
-  log(`searching ${plan.queries.length} quer${plan.queries.length === 1 ? 'y' : 'ies'} ` +
-      `(plan from ${plan.source})`);
-
-  // ---- 1. search -----------------------------------------------------------
-  //
-  // Boards are keyed so the same company found by three different queries is
-  // hydrated once. The matched URLs are tracked separately because those are
-  // the postings the candidate was actually looking for, and they are kept
-  // regardless of what the title-matching gate makes of their siblings.
-  const boards = new Map<string, { ref: BoardRef; name?: string }>();
-  const matchedUrls = new Set<string>();
-  const hitsByUrl = new Map<string, SearchHit>();
-
-  for (const query of plan.queries) {
-    try {
-      const { hits, creditsUsed, warning } = await deps.search(query, {
-        includeDomains: [...ATS_SEARCH_DOMAINS],
-        limit: resultsPerQuery,
-        country: plan.country,
-      });
-      report.creditsUsed += creditsUsed;
-      if (warning) report.notes.push(warning);
-
-      let usable = 0;
-      for (const hit of hits) {
-        const ref = parseBoardUrl(hit.url);
-        if (!ref) continue;
-        usable++;
-        matchedUrls.add(canonicalUrl(hit.url));
-        hitsByUrl.set(canonicalUrl(hit.url), hit);
-        const key = boardKey(ref);
-        if (!boards.has(key)) {
-          boards.set(key, { ref, name: companyNameFromTitle(hit.title, ref.slug) });
-        }
-      }
-      report.queries.push({ query, hits: usable });
-      log(`  "${query}" -> ${hits.length} result(s), ${usable} on a board we can apply to`);
-    } catch (err) {
-      report.errors.push({ where: `search "${query}"`, error: (err as Error).message });
-      report.queries.push({ query, hits: 0 });
-      log(`  "${query}" -> FAILED: ${(err as Error).message}`);
-      // A dead key or an exhausted balance fails every remaining query the
-      // same way; nine more identical errors help nobody.
-      if (!isTransient(err)) break;
-    }
-  }
-
-  log(`found ${boards.size} board(s) to read`);
-
-  if (!boards.size) {
-    if (!report.errors.length) {
-      report.notes.push(
-        'The searches ran but nothing came back on a job board we can apply to. Try again ' +
-          'later, or add a company by hand below.',
-      );
-    }
+  if (!plan.roleTitles.length) {
+    report.notes.push('The plan came back with no role titles, so there was nothing to match postings against.');
     return report;
   }
+
+  log(`reading ${companies.length} companies for ${plan.roleTitles.map((t) => `"${t}"`).join(', ')}`);
+
+  // ---- 1. read every company ------------------------------------------------
+  const hints: FetchHints = { queries: plan.roleTitles, country: target };
+  const fetched: { company: TargetCompany; outcome: BoardOutcome; jobs: DiscoveredJob[] }[] = [];
+
+  let next = 0;
+  const worker = async () => {
+    while (next < companies.length) {
+      const company = companies[next++]!;
+      const outcome: BoardOutcome = { ats: company.source, slug: company.handle, company: company.company, openings: 0, kept: 0 };
+      report.boards.push(outcome);
+      try {
+        const jobs = await deps.fetchCompany(company, hints);
+        outcome.openings = jobs.length;
+        fetched.push({ company, outcome, jobs });
+        log(`  ${company.company} (${company.source}): ${jobs.length} opening(s)`);
+      } catch (err) {
+        outcome.error = (err as Error).message;
+        report.errors.push({ where: company.company, error: outcome.error });
+        log(`  ${company.company} (${company.source}): FAILED - ${outcome.error}`);
+      }
+    }
+  };
+  try {
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, companies.length) }, worker));
+  } finally {
+    await sharedPage?.close().catch(() => {});
+    sharedPage = null;
+  }
+  // Report in pay order, not in whichever order the sites happened to answer.
+  const rank = new Map(companies.map((c, i) => [c.company, i]));
+  report.boards.sort((a, b) => rank.get(a.company)! - rank.get(b.company)!);
+  fetched.sort((a, b) => rank.get(a.company.company)! - rank.get(b.company.company)!);
 
   // ---- 2. what do we already have? -----------------------------------------
   //
@@ -237,70 +216,20 @@ export async function findJobs(
   const scoring = await loadScoringContext(profileId);
   const fresh: DeepScoreEntry[] = [];
 
-  // ---- 3. hydrate ----------------------------------------------------------
-  const selected = [...boards.values()].slice(0, maxBoards);
-  if (boards.size > selected.length) {
-    report.notes.push(
-      `Found ${boards.size} companies; hydrated the first ${selected.length}. Run it again to pick up the rest.`,
-    );
-  }
-
-  for (const [index, entry] of selected.entries()) {
-    const outcome: BoardOutcome = {
-      ats: entry.ref.ats,
-      slug: entry.ref.slug,
-      company: entry.name || entry.ref.slug,
-      openings: 0,
-      kept: 0,
-    };
-    report.boards.push(outcome);
-
-    // These are public APIs meant to be read, but a burst of requests is still
-    // rude. A quarter-second between boards costs nothing here.
-    if (index > 0) await sleep(250);
-
-    let jobs: DiscoveredJob[];
-    try {
-      jobs = await deps.fetchBoard(entry.ref);
-      outcome.openings = jobs.length;
-      log(`  ${outcome.company} (${entry.ref.ats}/${entry.ref.slug}): ${jobs.length} opening(s)`);
-    } catch (err) {
-      // The board API refused - a renamed slug, a private board, an outage.
-      // The posting search found is still real, so fall back to that rather
-      // than dropping the company entirely.
-      outcome.error = (err as Error).message;
-      log(`  ${outcome.company} (${entry.ref.ats}/${entry.ref.slug}): board API failed - ${outcome.error}`);
-      jobs = fallbackJobsFromHits(entry.ref, matchedUrls, hitsByUrl, entry.name);
-      outcome.openings = jobs.length;
-      if (jobs.length) {
-        report.notes.push(
-          `${outcome.company}'s board API was unreachable (${outcome.error}); kept the ${jobs.length} ` +
-            'posting(s) search found, with shorter descriptions.',
-        );
-      }
-    }
-
-    const company = await registerCompany(entry.ref, outcome.company);
-    if (company.created) report.companiesRegistered++;
+  // ---- 3. keep what matches -------------------------------------------------
+  for (const { company, outcome, jobs } of fetched) {
+    const registered = await registerCompany({ ats: company.source, slug: company.handle }, company.company);
+    if (registered.created) report.companiesRegistered++;
 
     for (const job of jobs) {
-      // Filter out senior-level positions
-      if (isSeniorLevel(job.title)) {
+      if (isSeniorLevel(job.title) || requiresMoreThan5YearsExperience(job.descriptionText)) {
         report.skippedTooSenior++;
         continue;
       }
 
-      // Filter out jobs requiring more than 5 years of experience
-      if (requiresMoreThan5YearsExperience(job.descriptionText)) {
-        report.skippedTooSenior++;
-        continue;
-      }
-
-      const canonical = canonicalUrl(job.url);
-      // Keep what the search actually matched; keep a sibling only if it looks
-      // like a role the plan asked for.
-      const wanted = matchedUrls.has(canonical) || titleMatchesPlan(job.title, plan.roleTitles);
-      if (!wanted) continue;
+      // The big sites' own search is loose - Apple answers "Software Engineer"
+      // with retail specialists - so the plan's titles are the real gate.
+      if (!titleMatchesPlan(job.title, plan.roleTitles)) continue;
 
       // A board lists every office. You asked for one country.
       if (target && !locatedIn(job.location, job.remote, target)) {
@@ -309,19 +238,22 @@ export async function findJobs(
       }
 
       report.jobsSeen++;
+      for (const q of report.queries) if (titleMatchesPlan(job.title, [q.query])) q.hits++;
+
+      const canonical = canonicalUrl(job.url);
       if (existing.has(canonical)) {
         report.skippedAlreadySeen++;
         continue;
       }
       existing.add(canonical);
 
-      const named: DiscoveredJob = { ...job, companyName: outcome.company || job.companyName };
+      const named: DiscoveredJob = { ...job, companyName: company.company };
       const lex = scoreLexically(named, scoring);
       try {
         const lead = await prisma.jobLead.create({
           data: {
             profileId,
-            companyId: company.id,
+            companyId: registered.id,
             url: job.url,
             ats: job.ats,
             title: job.title,
@@ -329,7 +261,7 @@ export async function findJobs(
             location: job.location ?? null,
             remote: job.remote,
             descriptionText: job.descriptionText,
-            postedAt: job.postedAt ?? null,
+            postedAt: job.postedAt && !Number.isNaN(job.postedAt.getTime()) ? job.postedAt : null,
             score: lex.score,
             scoreReasons: serialiseReasons(lex, null),
             scoredAt: new Date(),
@@ -347,6 +279,14 @@ export async function findJobs(
 
   log(`${report.newLeads} new lead(s) from ${report.jobsSeen} relevant posting(s)`);
 
+  if (!report.jobsSeen && !report.errors.length) {
+    report.notes.push(
+      `None of the ${companies.length} companies has an opening matching these roles${
+        target ? ` in ${target.name}` : ''
+      } right now. Try again in a few days, or broaden the roles on your profile.`,
+    );
+  }
+
   // ---- 4. read the most promising in full ----------------------------------
   if (fresh.length && deepScoreTop > 0) {
     const deepScoreResult = await deepScoreLeads(profileId, fresh, deepScoreTop);
@@ -361,11 +301,6 @@ export async function findJobs(
 
   return report;
 }
-
-const isTransient = (err: unknown): boolean =>
-  typeof err === 'object' && err !== null && (err as { transient?: boolean }).transient === true;
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Progress on stdout.
