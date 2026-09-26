@@ -78,9 +78,14 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
    * accounts.google.com, whose first screen asks for an email address and
    * nothing else. There is no password box to find and no "sign in to apply"
    * text - just a different host. Checked against the live page.
+   *
+   * Identity vendors' tenants live on subdomains (acme.okta.com), but the
+   * vendors hire too: www.okta.com/company/careers is an ordinary application
+   * form, and matching `*.okta.com` parked every Okta job at a sign-in wall
+   * that was never there. So `www.` is not a tenant.
    */
   const identityHost =
-    /^(accounts\.google\.com|login\.microsoftonline\.com|login\.live\.com|signin\.aws\.amazon\.com|.*\.okta\.com|.*\.auth0\.com|.*\.onelogin\.com|.*\.pingidentity\.com|github\.com\/login|.*\.oktapreview\.com)$/i;
+    /^(accounts\.google\.com|login\.microsoftonline\.com|login\.live\.com|signin\.aws\.amazon\.com|github\.com\/login|(?!www\.)(?:[^.]+\.)+(okta|oktapreview|auth0|onelogin|pingidentity)\.com)$/i;
 
   let host = '';
   try {

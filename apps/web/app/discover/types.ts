@@ -24,9 +24,15 @@ export interface Lead {
     missingTerms?: string[];
   } | null;
   status: string;
-  /** Company SDE2 pay ceiling in LPA, from the target list; null when unknown. */
-  payCeiling?: number | null;
+  /** What people reported being paid at this company on LeetCode; null when nobody has. */
+  pay?: { baseMedian: number | null; totalMedian: number | null; baseReports: number; totalReports: number } | null;
+  /** Interview-experience posts naming the company on LeetCode in the last 90 days. */
+  interviews90d?: number;
+  /** The LeetCode posts behind those numbers. */
+  leetcode?: { title: string; url: string; date: string; kind: 'pay' | 'interview' }[];
   tier?: string | null;
+  /** What the description says about experience, verbatim; null when it says nothing. */
+  experience?: { min: number; max?: number; quote: string } | null;
   /** Whether the app can fill this board's form by itself. */
   autoApply?: boolean;
 }

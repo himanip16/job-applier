@@ -42,7 +42,15 @@ export interface CleanableLead {
  * to read in a report - "412 sales" tells you your search queries are wrong,
  * where "412 rejected" tells you nothing.
  */
-const WRONG_DOMAIN: { rule: string; pattern: RegExp }[] = [
+/**
+ * A title that names a software role outright. "Senior Fullstack Engineer,
+ * Marketing" is an engineer on the marketing team, not a marketer - but a bare
+ * "Engineer" is not enough, or "Solutions Engineer" and "Support Engineer"
+ * would pass too.
+ */
+const SOFTWARE_ROLE = /\b(software|full[- ]?stack|back[- ]?end|front[- ]?end|developer|programmer|sde|swe)\b/i;
+
+const WRONG_DOMAIN: { rule: string; pattern: RegExp; unless?: RegExp }[] = [
   {
     rule: 'sales',
     pattern:
@@ -52,21 +60,35 @@ const WRONG_DOMAIN: { rule: string; pattern: RegExp }[] = [
     rule: 'marketing & comms',
     pattern:
       /\b(marketing|brand|content (writer|strategist|manager|designer)|copywriter|communications|public relations|social media|seo|demand gen|events? (manager|coordinator)|community manager)\b/i,
+    unless: SOFTWARE_ROLE,
   },
   {
     rule: 'design',
     pattern:
       /\b(designer|graphic|illustrat|ux researcher|user experience researcher|creative director|art director|motion|brand design)\b/i,
+    unless: SOFTWARE_ROLE,
   },
   {
     rule: 'people, legal & finance',
     pattern:
       /\b(recruit|talent acquisition|sourcer|people (partner|operations|team)|hr\b|human resources|counsel|legal|paralegal|attorney|accountant|controller|bookkeep|payroll|auditor|tax\b|treasury|procurement|facilities|office manager|executive assistant|chief of staff|workplace)\b/i,
+    unless: SOFTWARE_ROLE,
   },
   {
     rule: 'finance & trading',
     pattern:
       /\b(quantitative|quant\b|trader|trading|portfolio manager|investment|investor|banking|equity research|actuar|underwrit|credit risk|fp&a|financial (analyst|planning))\b/i,
+    // "Quantitative Developer" and "C++ Engineer, Trading Systems" are the
+    // engineering jobs at the quant firms this search targets.
+    unless: /\b(developer|engineer|engineering|programmer|software|sde|swe)\b/i,
+  },
+  {
+    rule: 'enterprise platform configuration',
+    // A platform's name followed by a platform role: "Workday Extend
+    // Developer", "SAP ABAP Consultant", "Salesforce Apex Developer". Not a
+    // software engineer who happens to work at Workday or ServiceNow.
+    pattern:
+      /\b(workday|sap|salesforce|servicenow|oracle (ebs|fusion|apps|hcm|erp)|dynamics 365|d365|netsuite|peoplesoft|sharepoint|power (apps|platform|bi)|mulesoft|pega|appian|outsystems|guidewire|siebel|coupa|ariba|successfactors|veeva|tableau)\s+(extend|hcm|hris|integrations?|abap|apex|cpq|crm|erp|functional|technical|admin|administrator|consultant|developer|platform developer|workflow|reporting|analyst|lead|specialist|architect|financials?)\b/i,
   },
   {
     rule: 'support & operations',
@@ -76,7 +98,7 @@ const WRONG_DOMAIN: { rule: string; pattern: RegExp }[] = [
   {
     rule: 'analyst & consulting',
     pattern:
-      /\b(business analyst|\bba\b|data analyst|analytics (manager|lead)|insights analyst|strategy (manager|lead|associate)|strategist|consultant|advisory|program manager|project manager|product manager|product owner|scrum master|delivery manager)\b/i,
+      /\b(business analyst|\bba\b|data analyst|analytics (manager|lead)|insights analyst|strategy (manager|lead|associate)|strategist|consultant|advisory|program manager|project manager|product manager|product owner|scrum master|delivery (manager|lead)|engagement manager)\b/i,
   },
   {
     rule: 'research & data science',
@@ -90,7 +112,8 @@ const WRONG_DOMAIN: { rule: string; pattern: RegExp }[] = [
   },
   {
     rule: 'qa & test',
-    pattern: /\b(qa\b|quality (assurance|engineer)|sdet|test engineer|tester|automation tester|manual testing)\b/i,
+    pattern:
+      /\b(qa\b|quality (assurance|engineer|engineering)|sdet|engineer in test|developer in test|test engineer|test automation|automation (tester|qa|test engineer)|tester|manual testing|test lead|test analyst)\b/i,
   },
   {
     rule: 'outside tech entirely',
@@ -98,6 +121,11 @@ const WRONG_DOMAIN: { rule: string; pattern: RegExp }[] = [
       /\b(nurse|physician|doctor|clinical|pharmac|dentist|therapist|veterinar|teacher|tutor|lecturer|professor|driver|courier|warehouse|picker|barista|chef|cook|waiter|bartender|housekeep|janitor|security guard|cleaner|retail associate|store manager|cashier|flight attendant|pilot|paramedic|firefighter|police)\b/i,
   },
 ];
+
+/** The kind of non-engineering job a title describes, or null if it could be one. */
+export function wrongDomain(title: string): string | null {
+  return WRONG_DOMAIN.find(({ pattern, unless }) => pattern.test(title) && !unless?.test(title))?.rule ?? null;
+}
 
 // -------------------------------------------------------------- seniority ---
 
@@ -167,14 +195,13 @@ export function cleanupVerdict(
   const body = lead.descriptionText ?? '';
   const where = `${lead.location ?? ''}`;
 
-  for (const { rule, pattern } of WRONG_DOMAIN) {
-    if (pattern.test(title)) {
-      return {
-        category: 'Wrong domain',
-        reason: `Not a software engineering role — this is ${rule}.`,
-        rule: `domain:${rule}`,
-      };
-    }
+  const domain = wrongDomain(title);
+  if (domain) {
+    return {
+      category: 'Wrong domain',
+      reason: `Not a software engineering role — this is ${domain}.`,
+      rule: `domain:${domain}`,
+    };
   }
 
   if (TOO_SENIOR.test(title)) {

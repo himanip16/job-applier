@@ -2,6 +2,7 @@ import { locatedIn, type Country } from '@ja/shared';
 import { prisma } from '../lib/db.js';
 import type { DeepScoreEntry } from './deepScore.js';
 import { isSeniorLevel, isStale, requiresMoreThan5YearsExperience } from './jobFilters.js';
+import { wrongDomain } from './leadCleanup.js';
 import { canonicalUrl } from './jobSearchUtils.js';
 import { type ScoringContext, scoreLexically, serialiseReasons } from './scoring.js';
 import { titleMatchesPlan } from './searchQueries.js';
@@ -17,7 +18,7 @@ import type { DiscoveredJob } from './sources/index.js';
  */
 
 /** Why a posting was turned away, for the run's report. */
-export type Rejection = 'tooOld' | 'tooSenior' | 'otherCountry' | 'offPlan' | 'alreadySeen';
+export type Rejection = 'tooOld' | 'wrongDomain' | 'tooSenior' | 'otherCountry' | 'offPlan' | 'alreadySeen';
 
 export interface IntakeRules {
   /** Only postings in this country (or remote and open to it). */
@@ -29,6 +30,8 @@ export interface IntakeRules {
 /** The first rule a posting breaks, or null if it may be saved. */
 export function screen(job: DiscoveredJob, rules: IntakeRules): Exclude<Rejection, 'alreadySeen'> | null {
   if (isStale(job.postedAt)) return 'tooOld';
+  // Sales engineers, recruiters, Workday configurators: not this job, whatever the keywords say.
+  if (wrongDomain(job.title)) return 'wrongDomain';
   if (isSeniorLevel(job.title) || requiresMoreThan5YearsExperience(job.descriptionText)) return 'tooSenior';
   if (rules.roleTitles && !titleMatchesPlan(job.title, rules.roleTitles)) return 'offPlan';
   // A board lists every office. You asked for one country.
@@ -49,7 +52,7 @@ export interface IntakeTally {
 export const emptyTally = (): IntakeTally => ({
   saved: 0,
   relevant: 0,
-  rejected: { tooOld: 0, tooSenior: 0, otherCountry: 0, offPlan: 0, alreadySeen: 0 },
+  rejected: { tooOld: 0, wrongDomain: 0, tooSenior: 0, otherCountry: 0, offPlan: 0, alreadySeen: 0 },
   errors: [],
   fresh: [],
 });

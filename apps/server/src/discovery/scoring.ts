@@ -3,6 +3,7 @@ import { normalizeLabel, tokenize } from '@ja/shared';
 import { prisma, type Prisma } from '../lib/db.js';
 import { generate, describeLlmError } from '../llm/client.js';
 import type { DiscoveredJob } from './sources/index.js';
+import { wrongDomain } from './leadCleanup.js';
 
 /**
  * Ranking leads, and learning to rank them better.
@@ -70,6 +71,19 @@ const STOP_TERMS = new Set([
   'ensure', 'also', 'well', 'based', 'related', 'using', 'use', 'used', 'make', 'able',
   'ability', 'may', 'must', 'will', 'can', 'our', 'your', 'their', 'etc', 'via', 'per',
   'more', 'most', 'best', 'great', 'good', 'key', 'level', 'low', 'every', 'each', 'into',
+  // Words every tech posting and every tech resume share. They put "Workday
+  // Extend Developer" at 99% and "People Technology Delivery Lead" at 98% for
+  // a backend engineer, on "application, architecture, apis, services,
+  // technology, management" - agreement about nothing.
+  'application', 'applications', 'architecture', 'api', 'apis', 'service', 'services',
+  'technology', 'technologies', 'technical', 'management', 'manage', 'business', 'solution',
+  'solutions', 'customer', 'customers', 'teams', 'skills', 'skill', 'operations', 'while',
+  'environment', 'requirements', 'responsibilities', 'knowledge', 'understanding', 'support',
+  'development', 'develop', 'process', 'processes', 'product', 'products', 'quality', 'tools',
+  'project', 'projects', 'global', 'world', 'people', 'opportunity', 'position', 'candidate',
+  'qualifications', 'preferred', 'plus', 'excellent', 'communication', 'collaborate',
+  'collaboration', 'stakeholders', 'deliver', 'delivery', 'drive', 'impact', 'problems',
+  'solve', 'systems', 'system', 'design', 'implementation', 'implement', 'features', 'feature',
 ]);
 
 /**
@@ -96,7 +110,8 @@ function jobTermWeights(
 
   // Title terms count for far more than body terms.
   for (const t of tokenize(normalizeLabel(job.title))) add(title, t, 4);
-  for (const t of tokenize(normalizeLabel(job.location ?? ''))) add(body, t, 2);
+  // The location is not counted: "India" on a posting matching "India" on a
+  // resume says where, not what, and the country filter already handles where.
   // The first chunk of a description is where the role is actually defined;
   // the tail is benefits boilerplate and EEO statements.
   for (const t of tokenize(normalizeLabel((job.descriptionText ?? '').slice(0, 3000)))) {
@@ -269,7 +284,9 @@ export function scoreLexically(job: ScorableJob, ctx: ScoringContext): LexicalSc
   // is known - but now it is the rare case rather than every row.
   const drive = (known ? AFFINITY_GAIN * (affinity - AFFINITY_NEUTRAL) : 0) + learned / 3;
   const raw = 100 / (1 + Math.exp(-drive));
-  const offRole = ctx.technical && !TECH_TITLE.test(job.title);
+  // A sales engineer or a Workday configurator is off-role however many
+  // words the description shares with the resume.
+  const offRole = (ctx.technical && !TECH_TITLE.test(job.title)) || wrongDomain(job.title) !== null;
   const score = offRole ? Math.min(raw, OFF_ROLE_CAP) : raw;
 
   const hits = positives.length + negatives.length;

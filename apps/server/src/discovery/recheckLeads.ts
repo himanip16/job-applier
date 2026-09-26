@@ -18,7 +18,7 @@ import { API_SOURCES, sourceById, type DiscoveredJob } from './sources/index.js'
 export interface RecheckReport {
   checked: number;
   removed: number;
-  removedBy: { tooOld: number; tooSenior: number; otherCountry: number; closed: number };
+  removedBy: { tooOld: number; wrongDomain: number; tooSenior: number; otherCountry: number; closed: number };
   /** Boards that could not be read, so their leads were left alone. */
   unreachable: string[];
 }
@@ -38,7 +38,7 @@ export async function recheckLeads(profileId: string, opts: { country?: Country 
   const report: RecheckReport = {
     checked: leads.length,
     removed: 0,
-    removedBy: { tooOld: 0, tooSenior: 0, otherCountry: 0, closed: 0 },
+    removedBy: { tooOld: 0, wrongDomain: 0, tooSenior: 0, otherCountry: 0, closed: 0 },
     unreachable: [],
   };
   const doomed: string[] = [];
@@ -53,7 +53,7 @@ export async function recheckLeads(profileId: string, opts: { country?: Country 
       postedAt: lead.postedAt ?? undefined,
     };
     const rejection = screen(job, { country: opts.country });
-    if (rejection === 'tooOld' || rejection === 'tooSenior' || rejection === 'otherCountry') {
+    if (rejection === 'tooOld' || rejection === 'wrongDomain' || rejection === 'tooSenior' || rejection === 'otherCountry') {
       report.removedBy[rejection]++;
       doomed.push(lead.id);
     } else {

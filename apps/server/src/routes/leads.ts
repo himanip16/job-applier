@@ -75,7 +75,7 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
     status: z.string().default('NEW'),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(25),
-    sort: z.enum(['recommended', 'score', 'pay', 'posted', 'discovered']).catch('recommended'),
+    sort: z.enum(['recommended', 'score', 'pay', 'hiring', 'posted', 'discovered']).catch('recommended'),
     q: z.string().trim().default(''),
     remote: z.enum(['any', 'yes', 'no']).default('any'),
     minScore: optionalNumber,
@@ -88,6 +88,8 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
     minPay: optionalNumber,
     autoApply: flag,
     excludeSenior: flag,
+    hiring: flag,
+    maxYears: optionalNumber,
   });
 
   app.get('/api/leads', async (req, reply) => {

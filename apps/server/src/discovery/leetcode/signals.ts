@@ -124,6 +124,15 @@ export const namesFor = (company: string): string[] => ALIASES[company] ?? [comp
 const mentions = (text: string, name: string) =>
   new RegExp(`(^|[^a-z0-9])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`, 'i').test(text);
 
+/**
+ * A post weighing offers against each other ("Sprinklr vs HighRadius", "Offer
+ * evaluation - eBay vs Sprinklr vs Kotak"). Its numbers belong to more than
+ * one company and the post does not say which line is whose, so no pay is
+ * read from it - even when only one of the companies is on the target list.
+ */
+export const isComparison = (title: string): boolean =>
+  /\b(vs\.?|versus|v\/s|or|compare|comparison|which (offer|one|company)|offer evaluation|evaluate|multiple offers|offers)\b/i.test(title);
+
 /** The one target company a title names, or null if none or several. */
 export function soleCompany(title: string, companies: string[]): string | null {
   const named = companies.filter((c) => namesFor(c).some((n) => mentions(title, n)));
@@ -200,7 +209,7 @@ export async function collectSignals(
   out.interviews = interviewPosts.filter((p) => soleCompany(p.title, allCompanies) === company);
 
   const compPosts = (await searchPosts(keyword, 'compensation', opts.compSince, 80))
-    .filter((p) => soleCompany(p.title, allCompanies) === company)
+    .filter((p) => soleCompany(p.title, allCompanies) === company && !isComparison(p.title))
     .slice(0, opts.maxCompPosts ?? 12);
   for (const post of compPosts) {
     await sleep(300);

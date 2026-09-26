@@ -170,8 +170,8 @@ export default function DiscoverPage() {
         setFlash(
           r.removed === 0
             ? `Checked ${r.checked} jobs — all still fit ${name}.`
-            : `Checked ${r.checked} jobs and removed ${r.removed}: ${b.otherCountry} outside ${name}, ${b.closed} closed, ` +
-                `${b.tooOld} older than 3 months, ${b.tooSenior} too senior.` +
+            : `Checked ${r.checked} jobs and removed ${r.removed}: ${b.wrongDomain} not engineering roles, ${b.otherCountry} outside ${name}, ` +
+                `${b.closed} closed, ${b.tooOld} older than 3 months, ${b.tooSenior} too senior.` +
                 (r.unreachable.length ? ` Could not reach ${r.unreachable.length} board(s), so their jobs were left alone.` : ''),
         );
       }

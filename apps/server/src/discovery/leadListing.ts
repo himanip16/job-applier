@@ -1,8 +1,10 @@
 import { citiesIn, countryByCode, locatedIn } from '@ja/shared';
 import { prisma, type Prisma } from '../lib/db.js';
-import { isSeniorLevel, requiresMoreThan5YearsExperience } from './jobFilters.js';
+import { isSeniorLevel, requiredExperience, requiresMoreThan5YearsExperience } from './jobFilters.js';
+import { screen } from './leadIntake.js';
 import { API_SOURCES } from './sources/index.js';
-import { companyDirectory, type CompanyFacts } from './topCompanies.js';
+import { companyDirectory } from './topCompanies.js';
+import { leetcodeReports, type CompanyReport } from './leetcode/store.js';
 
 /**
  * Which leads are on screen, in what order, one page at a time.
@@ -15,7 +17,7 @@ import { companyDirectory, type CompanyFacts } from './topCompanies.js';
  * under a header promising 25.
  */
 
-export type LeadSort = 'recommended' | 'score' | 'pay' | 'posted' | 'discovered';
+export type LeadSort = 'recommended' | 'score' | 'pay' | 'hiring' | 'posted' | 'discovered';
 
 export interface LeadListQuery {
   status: string;
@@ -36,8 +38,12 @@ export interface LeadListQuery {
   company?: string;
   /** Target-list tier: quant, bigtech, infra-saas, india-product, finance-gcc. */
   tier?: string;
-  /** Minimum company SDE2 pay ceiling, in LPA. */
+  /** Minimum median base salary reported on LeetCode for the company, in LPA. */
   minPay?: number;
+  /** Only companies with interview-experience posts on LeetCode in the last 90 days. */
+  hiring: boolean;
+  /** Leave out postings asking for more than this many years. Postings that do not say are kept. */
+  maxYears?: number;
   /** Only boards the app can fill in by itself. */
   autoApply: boolean;
   excludeSenior: boolean;
@@ -46,8 +52,10 @@ export interface LeadListQuery {
 /** The boards the app has form adapters for. */
 const AUTO_APPLY = new Set(API_SOURCES.map((s) => s.id));
 
-/** The pay ceiling that earns full weight in the recommended order. */
-const PAY_FOR_FULL_WEIGHT = 150;
+/** The reported median base salary that earns full weight in the recommended order. */
+const PAY_FOR_FULL_WEIGHT = 80;
+/** The weight for what nobody reported: neither rewarded nor punished. */
+const NEUTRAL = 0.85;
 
 /**
  * The recommended order: match first, then pay, then freshness.
@@ -56,11 +64,12 @@ const PAY_FOR_FULL_WEIGHT = 150;
  * Unknown pay and undated postings get a middle weight - not rewarded, not
  * punished for what the source did not say.
  */
-export function recommendedRank(score: number, facts: CompanyFacts | undefined, postedAt: Date | null, now = Date.now()): number {
-  const pay = facts ? Math.min(facts.payCeiling, PAY_FOR_FULL_WEIGHT) / PAY_FOR_FULL_WEIGHT : 0;
+export function recommendedRank(score: number, report: CompanyReport | undefined, postedAt: Date | null, now = Date.now()): number {
+  const base = report?.baseMedian;
+  const pay = base == null ? NEUTRAL : 0.7 + (0.3 * Math.min(base, PAY_FOR_FULL_WEIGHT)) / PAY_FOR_FULL_WEIGHT;
   const days = postedAt ? (now - postedAt.getTime()) / 86_400_000 : null;
-  const fresh = days === null ? 0.85 : days <= 14 ? 1 : days <= 30 ? 0.9 : days <= 60 ? 0.8 : 0.7;
-  return score * (0.7 + 0.3 * pay) * fresh;
+  const fresh = days === null ? NEUTRAL : days <= 14 ? 1 : days <= 30 ? 0.9 : days <= 60 ? 0.8 : 0.7;
+  return score * pay * fresh;
 }
 
 export async function listLeads(profileId: string, query: LeadListQuery) {
@@ -81,26 +90,37 @@ export async function listLeads(profileId: string, query: LeadListQuery) {
     }));
   }
 
+  const waiting = query.status === 'NEW';
   const rows = await prisma.jobLead.findMany({
     where,
     orderBy: [{ score: 'desc' }, { discoveredAt: 'desc' }, { id: 'asc' }],
     select: {
       id: true, title: true, companyName: true, location: true, remote: true, score: true,
-      postedAt: true, discoveredAt: true, descriptionText: query.excludeSenior,
+      postedAt: true, discoveredAt: true, descriptionText: waiting || query.excludeSenior || query.maxYears !== undefined,
     },
   });
 
   // ---- the rest ----------------------------------------------------------------
   const directory = companyDirectory();
   const facts = (name: string) => directory.get(name.toLowerCase());
+  const reports = leetcodeReports();
+  const report = (name: string) => reports.get(name.toLowerCase());
   const country = countryByCode(query.country);
 
   const kept = rows.filter((r) => {
+    // The waiting queue shows only what intake would admit today: not
+    // engineering, asking for more than five years, or past three months are
+    // hidden, including leads saved before a rule existed. Nothing is deleted
+    // here; "Re-check listed jobs" removes them for good.
+    if (waiting && screen({ ...r, url: '', ats: '', location: r.location ?? undefined, descriptionText: r.descriptionText ?? '', postedAt: r.postedAt ?? undefined }, {})) return false;
+    if (query.maxYears !== undefined && (requiredExperience(r.descriptionText)?.min ?? 0) > query.maxYears) return false;
     const f = facts(r.companyName);
     if (country && !locatedIn(r.location, r.remote, country)) return false;
     if (query.city && !citiesIn(r.location).includes(query.city)) return false;
     if (query.tier && f?.tier !== query.tier) return false;
-    if (query.minPay && (f?.payCeiling ?? 0) < query.minPay) return false;
+    const rep = report(r.companyName);
+    if (query.minPay && (rep?.baseMedian ?? 0) < query.minPay) return false;
+    if (query.hiring && !rep?.interviews90d) return false;
     if (query.excludeSenior && (isSeniorLevel(r.title) || requiresMoreThan5YearsExperience(r.descriptionText))) return false;
     return true;
   });
@@ -109,9 +129,10 @@ export async function listLeads(profileId: string, query: LeadListQuery) {
   const time = (d: Date | null) => d?.getTime() ?? -Infinity;
   const rank: Record<LeadSort, (a: (typeof kept)[number], b: (typeof kept)[number]) => number> = {
     recommended: (a, b) =>
-      recommendedRank(b.score, facts(b.companyName), b.postedAt) - recommendedRank(a.score, facts(a.companyName), a.postedAt),
+      recommendedRank(b.score, report(b.companyName), b.postedAt) - recommendedRank(a.score, report(a.companyName), a.postedAt),
     score: () => 0,
-    pay: (a, b) => (facts(b.companyName)?.payCeiling ?? 0) - (facts(a.companyName)?.payCeiling ?? 0),
+    pay: (a, b) => (report(b.companyName)?.baseMedian ?? -1) - (report(a.companyName)?.baseMedian ?? -1),
+    hiring: (a, b) => (report(b.companyName)?.interviews90d ?? 0) - (report(a.companyName)?.interviews90d ?? 0),
     posted: (a, b) => time(b.postedAt) - time(a.postedAt),
     discovered: (a, b) => time(b.discoveredAt) - time(a.discoveredAt),
   };
@@ -144,8 +165,20 @@ export async function listLeads(profileId: string, query: LeadListQuery) {
   return {
     // The description is large and the list view never shows it in full.
     leads: leads.map((l) => {
-      const f = facts(l.companyName);
-      return { ...l, descriptionText: l.descriptionText?.slice(0, 600) ?? null, payCeiling: f?.payCeiling ?? null, tier: f?.tier ?? null, autoApply: AUTO_APPLY.has(l.ats) };
+      const rep = report(l.companyName);
+      return {
+        ...l,
+        descriptionText: l.descriptionText?.slice(0, 600) ?? null,
+        tier: facts(l.companyName)?.tier ?? null,
+        autoApply: AUTO_APPLY.has(l.ats),
+        // Only what the description says; null when it says nothing.
+        experience: requiredExperience(l.descriptionText),
+        pay: rep && (rep.baseReports || rep.totalReports)
+          ? { baseMedian: rep.baseMedian, totalMedian: rep.totalMedian, baseReports: rep.baseReports, totalReports: rep.totalReports }
+          : null,
+        interviews90d: rep?.interviews90d ?? 0,
+        leetcode: rep?.links ?? [],
+      };
     }),
     counts: Object.fromEntries(counts.map((c) => [c.status, c._count])),
     facets: {

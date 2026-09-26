@@ -55,11 +55,13 @@ export function LeadCard({
             <span className="jc-company"><Icon name="building" size={14} />{lead.companyName}</span>
             {lead.location && <span><Icon name="pin" size={14} />{lead.location}</span>}
             {lead.remote && <span className="jc-chip"><Icon name="globe" size={12} />Remote</span>}
-            {lead.payCeiling ? (
-              <span className="jc-chip" title="Unverified estimate of this company's SDE2 pay ceiling (companies_50lpa.json), not a figure from the posting">
-                <Icon name="wallet" size={12} />est. up to {lead.payCeiling} LPA
+            {lead.experience && (
+              <span className="jc-chip" title={`From the description: “${lead.experience.quote}”`}>
+                <Icon name="clock" size={12} />
+                {lead.experience.max ? `${lead.experience.min}–${lead.experience.max}` : `${lead.experience.min}+`} yrs exp
               </span>
-            ) : null}
+            )}
+            <LeetcodeSignals lead={lead} />
             {lead.autoApply === false && (
               <span className="jc-chip" title="The app has no form-filler for this site: expect to finish this one yourself">
                 Apply by hand
@@ -164,13 +166,13 @@ function JobDates({ postedAt, discoveredAt }: { postedAt?: string | null; discov
     <div className={`jc-dates${stale ? ' is-stale' : ''}`}>
       {posted && (
         <span title={`Posted ${posted.toLocaleString()}`}>
-          <Icon name="calendar" size={13} /> Posted {ago(posted)}
+          <Icon name="calendar" size={13} /> Posted {fullDate(posted)} ({ago(posted)})
           {stale && <em> · older posting</em>}
         </span>
       )}
       {found && (
         <span title={`Found by Job Applier ${found.toLocaleString()}`}>
-          <Icon name="clock" size={13} /> Found {shortDate(found)}
+          <Icon name="clock" size={13} /> Found {fullDate(found)}
         </span>
       )}
     </div>
@@ -186,9 +188,9 @@ function ago(d: Date): string {
   return months === 1 ? 'a month ago' : `${months} months ago`;
 }
 
-function shortDate(d: Date): string {
-  const sameYear = d.getFullYear() === new Date().getFullYear();
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) });
+/** Always with the year: "Sep 23, 2026". A date without one is ambiguous a few months later. */
+function fullDate(d: Date): string {
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 /**
@@ -227,3 +229,45 @@ function QuickScoreReasons({
 }
 
 /** Where to look. Asked before every search, remembered as the next default. */
+
+/**
+ * What people reported on LeetCode about this company, never an estimate.
+ * Each chip links to the posts it summarises; no reports, no chip.
+ */
+function LeetcodeSignals({ lead }: { lead: Lead }) {
+  const pay = lead.pay;
+  const payLinks = (lead.leetcode ?? []).filter((l) => l.kind === 'pay');
+  const interviewLinks = (lead.leetcode ?? []).filter((l) => l.kind === 'interview');
+  const list = (links: typeof payLinks) => links.map((l) => `${l.date} · ${l.title}`).join('\n');
+  const base = pay?.baseMedian != null ? `base ~${pay.baseMedian} LPA` : null;
+  const total = pay?.totalMedian != null ? `total ~${pay.totalMedian} LPA` : null;
+  return (
+    <>
+      {(base || total) && (
+        <a
+          className="jc-chip"
+          href={payLinks[0]?.url}
+          target="_blank"
+          rel="noreferrer"
+          title={`Median of what people reported on LeetCode for ${lead.companyName} (any level):\n${list(payLinks)}`}
+        >
+          <Icon name="wallet" size={12} />
+          {[base, total].filter(Boolean).join(' · ')} · {Math.max(pay!.baseReports, pay!.totalReports)} report
+          {Math.max(pay!.baseReports, pay!.totalReports) === 1 ? '' : 's'}
+        </a>
+      )}
+      {lead.interviews90d ? (
+        <a
+          className="jc-chip"
+          href={interviewLinks[0]?.url}
+          target="_blank"
+          rel="noreferrer"
+          title={`Interview-experience posts on LeetCode naming ${lead.companyName}, last 90 days:\n${list(interviewLinks)}`}
+        >
+          <Icon name="message" size={12} />
+          {lead.interviews90d} interview post{lead.interviews90d === 1 ? '' : 's'} (90d)
+        </a>
+      ) : null}
+    </>
+  );
+}

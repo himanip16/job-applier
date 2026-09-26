@@ -10,6 +10,7 @@ import {
   serialiseReasons,
 } from './scoring.js';
 import { applyHardRules, candidateConstraints } from './hardRules.js';
+import { wrongDomain } from './leadCleanup.js';
 
 
 /**
@@ -219,7 +220,11 @@ export async function rescoreLexically(profileId: string): Promise<number> {
     //
     // Moved to Dismissed, never deleted: nothing in the app removes your data
     // on its own. A lead you disagree with is one tab away.
-    if (lex.score < PRUNE_BELOW) {
+    //
+    // And only a role the rules already say is not engineering. A keyword
+    // score alone must never dismiss a real engineering job: "Senior Data
+    // Engineer" scored 8 once the filler words stopped counting.
+    if (lex.score < PRUNE_BELOW && wrongDomain(lead.title)) {
       await prisma.jobLead
         .update({
           where: { id: lead.id },
@@ -229,7 +234,8 @@ export async function rescoreLexically(profileId: string): Promise<number> {
             scoreReasons: serialiseReasons(lex, null),
             scoredAt: new Date(),
             decidedAt: new Date(),
-            rejectReason: `Auto-dismissed: keyword match ${lex.score}%, below ${PRUNE_BELOW}%`,
+            rejectCategory: 'Wrong domain',
+            rejectReason: `Auto-dismissed: not a software engineering role (${wrongDomain(lead.title)}).`,
           },
         })
         .catch(() => {});

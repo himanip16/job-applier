@@ -12,6 +12,7 @@ import {
   POSTED_OPTIONS,
   SORTS,
   TIER_LABELS,
+  YEARS_OPTIONS,
   WORK_MODE_LABELS,
   type View,
 } from '../view';
@@ -80,6 +81,7 @@ export function FilterBar({
       <div className={styles.filterRow} role="group" aria-label="Filters">
         <Pill label="Match" value={view.minScore} options={MATCH_OPTIONS} onChange={(minScore) => onChange({ minScore })} />
         <Pill label="Posted" value={view.postedWithin} options={POSTED_OPTIONS} onChange={(postedWithin) => onChange({ postedWithin })} />
+        <Pill label="Experience" value={view.maxYears} options={YEARS_OPTIONS} onChange={(maxYears) => onChange({ maxYears })} />
         <Pill label="Pay" value={view.minPay} options={PAY_OPTIONS} onChange={(minPay) => onChange({ minPay })} />
         <Pill
           label="Company type"
@@ -116,6 +118,12 @@ export function FilterBar({
           hint="Only Greenhouse, Lever, Ashby and Workable jobs, whose forms the app can fill in by itself."
           on={view.autoApply}
           onChange={(autoApply) => onChange({ autoApply })}
+        />
+        <Toggle
+          label="Hiring now"
+          hint="Only companies with interview-experience posts on LeetCode in the last 90 days."
+          on={view.hiring}
+          onChange={(hiring) => onChange({ hiring })}
         />
         <Toggle
           label="Hide senior roles"
@@ -188,10 +196,12 @@ function ActiveFilters({
     city: () => view.city,
     remote: () => WORK_MODE_LABELS[view.remote],
     minPay: () => labelOf(PAY_OPTIONS, view.minPay),
+    maxYears: () => `${labelOf(YEARS_OPTIONS, view.maxYears)} (unstated kept)`,
     tier: () => TIER_LABELS[view.tier] ?? view.tier,
     company: () => view.company,
     autoApply: () => 'Auto-apply only',
     excludeSenior: () => 'No senior roles',
+    hiring: () => 'Hiring now',
     depth: () => (view.depth === 'deep' ? 'Read by AI' : 'Keywords only'),
   };
   const active = FILTER_KEYS.filter((k) => !isDefault(view, k));
