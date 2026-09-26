@@ -1,15 +1,16 @@
-import { countryByCode, locatedIn, type Country } from '@ja/shared';
-import { prisma } from '../lib/db.js';
+import { countryByCode, type Country } from '@ja/shared';
 import { newPage } from '../browser/session.js';
 import { crawlCareersPage, sourceById, type DiscoveredJob, type FetchHints } from './sources/index.js';
+import { admit, emptyTally, openIntake, screen } from './leadIntake.js';
 import { buildSearchPlan, titleMatchesPlan, type SearchPlan } from './searchQueries.js';
 import { rescoreLexically } from './rescoreLeads.js';
-import { loadScoringContext, scoreLexically, serialiseReasons } from './scoring.js';
-import { deepScoreLeads, type DeepScoreEntry } from './deepScore.js';
+import { loadScoringContext } from './scoring.js';
+import { deepScoreLeads } from './deepScore.js';
 import { registerCompany } from './companyRegistration.js';
 import { topCompanies, type TargetCompany } from './topCompanies.js';
 import { isFirecrawlConfigured } from './firecrawl.js';
-import { canonicalUrl, isSeniorLevel, requiresMoreThan5YearsExperience } from './jobSearchUtils.js';
+import { canonicalUrl } from './jobSearchUtils.js';
+import { MAX_POSTING_AGE_DAYS } from './jobFilters.js';
 
 /**
  * Finding openings at the companies worth working for.
@@ -56,6 +57,8 @@ export interface JobSearchReport {
   newLeads: number;
   skippedAlreadySeen: number;
   skippedTooSenior: number;
+  /** Posted more than MAX_POSTING_AGE_DAYS ago. */
+  skippedTooOld: number;
   /** Outside the country you chose to search in, and not remote. */
   skippedOtherCountry: number;
   deepScored: number;
@@ -135,6 +138,7 @@ export async function findJobs(
     newLeads: 0,
     skippedAlreadySeen: 0,
     skippedTooSenior: 0,
+    skippedTooOld: 0,
     skippedOtherCountry: 0,
     deepScored: 0,
     companiesRegistered: 0,
@@ -202,82 +206,38 @@ export async function findJobs(
   report.boards.sort((a, b) => rank.get(a.company)! - rank.get(b.company)!);
   fetched.sort((a, b) => rank.get(a.company.company)! - rank.get(b.company.company)!);
 
-  // ---- 2. what do we already have? -----------------------------------------
+  // ---- 2. keep what matches -------------------------------------------------
   //
-  // One query rather than one per posting. A decided lead must never come
-  // back: re-offering a job someone rejected last week is how a triage queue
-  // stops being used.
-  const existing = new Set(
-    (await prisma.jobLead.findMany({ where: { profileId }, select: { url: true } })).map((l) =>
-      canonicalUrl(l.url),
-    ),
+  // The big sites' own search is loose - Apple answers "Software Engineer"
+  // with retail specialists - so the plan's titles are the real gate.
+  const intake = await openIntake(
+    profileId,
+    { country: target, roleTitles: plan.roleTitles },
+    await loadScoringContext(profileId),
   );
-
-  const scoring = await loadScoringContext(profileId);
-  const fresh: DeepScoreEntry[] = [];
-
-  // ---- 3. keep what matches -------------------------------------------------
+  const tally = emptyTally();
   for (const { company, outcome, jobs } of fetched) {
     const registered = await registerCompany({ ats: company.source, slug: company.handle }, company.company);
     if (registered.created) report.companiesRegistered++;
-
+    outcome.kept = await admit(intake, { id: registered.id, name: company.company }, jobs, tally);
     for (const job of jobs) {
-      if (isSeniorLevel(job.title) || requiresMoreThan5YearsExperience(job.descriptionText)) {
-        report.skippedTooSenior++;
-        continue;
-      }
-
-      // The big sites' own search is loose - Apple answers "Software Engineer"
-      // with retail specialists - so the plan's titles are the real gate.
-      if (!titleMatchesPlan(job.title, plan.roleTitles)) continue;
-
-      // A board lists every office. You asked for one country.
-      if (target && !locatedIn(job.location, job.remote, target)) {
-        report.skippedOtherCountry++;
-        continue;
-      }
-
-      report.jobsSeen++;
+      if (screen(job, intake.rules)) continue;
       for (const q of report.queries) if (titleMatchesPlan(job.title, [q.query])) q.hits++;
-
-      const canonical = canonicalUrl(job.url);
-      if (existing.has(canonical)) {
-        report.skippedAlreadySeen++;
-        continue;
-      }
-      existing.add(canonical);
-
-      const named: DiscoveredJob = { ...job, companyName: company.company };
-      const lex = scoreLexically(named, scoring);
-      try {
-        const lead = await prisma.jobLead.create({
-          data: {
-            profileId,
-            companyId: registered.id,
-            url: job.url,
-            ats: job.ats,
-            title: job.title,
-            companyName: named.companyName,
-            location: job.location ?? null,
-            remote: job.remote,
-            descriptionText: job.descriptionText,
-            postedAt: job.postedAt && !Number.isNaN(job.postedAt.getTime()) ? job.postedAt : null,
-            score: lex.score,
-            scoreReasons: serialiseReasons(lex, null),
-            scoredAt: new Date(),
-            deepScored: false,
-          },
-        });
-        report.newLeads++;
-        outcome.kept++;
-        fresh.push({ id: lead.id, job: named, lexScore: lex.score });
-      } catch (err) {
-        report.errors.push({ where: `saving ${job.url}`, error: (err as Error).message });
-      }
     }
   }
+  report.jobsSeen = tally.relevant;
+  report.newLeads = tally.saved;
+  report.skippedAlreadySeen = tally.rejected.alreadySeen;
+  report.skippedTooSenior = tally.rejected.tooSenior;
+  report.skippedTooOld = tally.rejected.tooOld;
+  report.skippedOtherCountry = tally.rejected.otherCountry;
+  report.errors.push(...tally.errors);
+  const fresh = tally.fresh;
 
   log(`${report.newLeads} new lead(s) from ${report.jobsSeen} relevant posting(s)`);
+  if (report.skippedTooOld) {
+    report.notes.push(`Skipped ${report.skippedTooOld} posting(s) older than ${MAX_POSTING_AGE_DAYS} days.`);
+  }
 
   if (!report.jobsSeen && !report.errors.length) {
     report.notes.push(

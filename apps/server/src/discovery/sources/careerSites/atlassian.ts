@@ -1,7 +1,7 @@
 import { getBrowserJson } from '../http.js';
 import { stripHtml } from '../text.js';
 import type { DiscoveredJob, Source } from '../types.js';
-import { mentionsCountry, toDate } from './shared.js';
+import { mentionsCountry } from './shared.js';
 
 interface Listing {
   id: string | number;
@@ -11,7 +11,7 @@ interface Listing {
   responsibilities?: string;
   qualifications?: string;
   applyUrl?: string;
-  portalJobPost?: { portalUrl?: string; updatedDate?: string };
+  portalJobPost?: { portalUrl?: string };
 }
 
 /** Atlassian: one JSON document with every opening and its full text. */
@@ -36,7 +36,8 @@ export const atlassianSource: Source = {
             .map((h) => stripHtml(h ?? ''))
             .filter(Boolean)
             .join('\n\n'),
-          postedAt: toDate(l.portalJobPost?.updatedDate),
+          // The feed only says when a posting was last edited, which is not when
+          // it was posted, so no date rather than a wrong one.
         };
       });
   },

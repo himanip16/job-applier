@@ -6,7 +6,11 @@ interface GhJob {
   id: number;
   title: string;
   absolute_url: string;
-  updated_at?: string;
+  /**
+   * When the posting first went live. Not `updated_at`: any edit bumps that,
+   * and a year-old posting someone touched yesterday would read as new.
+   */
+  first_published?: string;
   content?: string;
   location?: { name?: string };
   /** The company's own display name. Greenhouse sends it; most boards fill it in. */
@@ -36,7 +40,7 @@ export const greenhouseSource: Source = {
         location: loc || undefined,
         remote: looksRemote(`${loc} ${j.title}`) || looksRemote(description.slice(0, 1200)),
         descriptionText: description,
-        postedAt: j.updated_at ? new Date(j.updated_at) : undefined,
+        postedAt: j.first_published ? new Date(j.first_published) : undefined,
       };
     });
   },

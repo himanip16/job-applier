@@ -1,7 +1,7 @@
 /**
  * Senior-level job title patterns to filter out.
  */
-const SENIORITY_PATTERNS = [
+export const SENIORITY_PATTERNS = [
   'staff',
   'principal',
   'director',
@@ -42,4 +42,20 @@ export function requiresMoreThan5YearsExperience(description: string | null | un
   }
   
   return false;
+}
+
+/** Postings older than this are almost always filled or forgotten. */
+export const MAX_POSTING_AGE_DAYS = 90;
+
+/**
+ * Whether a posting is too old to be worth applying to.
+ *
+ * An undated posting is kept: most careers-page crawls have no date, and
+ * dropping a live opening costs more than showing a stale one. Some boards
+ * send an "updated" date rather than a posted one, which only ever makes a
+ * posting look younger, so this errs the same way.
+ */
+export function isStale(postedAt: Date | null | undefined, now = new Date()): boolean {
+  if (!postedAt || Number.isNaN(postedAt.getTime())) return false;
+  return now.getTime() - postedAt.getTime() > MAX_POSTING_AGE_DAYS * 24 * 60 * 60 * 1000;
 }

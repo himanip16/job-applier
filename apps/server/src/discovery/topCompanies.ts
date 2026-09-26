@@ -46,3 +46,18 @@ export function topCompanies(limit = 50): TargetCompany[] {
     .slice(0, limit)
     .map(({ row }) => row);
 }
+
+/** What the target list knows about one company, for filtering and ranking leads. */
+export interface CompanyFacts {
+  tier: string;
+  payCeiling: number;
+}
+
+/**
+ * Every listed company by lower-cased name. A lead from a company not on the
+ * list simply has no facts: its pay is unknown, not assumed.
+ */
+export function companyDirectory(): Map<string, CompanyFacts> {
+  const rows = JSON.parse(readFileSync(LIST_URL, 'utf8')) as TargetCompany[];
+  return new Map(rows.map((r) => [r.company.toLowerCase(), { tier: r.tier, payCeiling: payCeiling(r.sde2_ctc_lpa) }]));
+}

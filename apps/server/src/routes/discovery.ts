@@ -3,16 +3,23 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { crawlAll, rescore } from '../discovery/crawler.js';
 import { findJobs } from '../discovery/findJobs.js';
+import { recheckLeads } from '../discovery/recheckLeads.js';
 import type { RequireProfile } from './types.js';
 
 export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   app.post('/api/discovery/crawl', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
-    const { deepScoreTop, companyId } = z
-      .object({ deepScoreTop: z.number().min(0).max(60).default(15), companyId: z.string().optional() })
+    const { deepScoreTop, companyId, country } = z
+      .object({
+        deepScoreTop: z.number().min(0).max(60).default(15),
+        companyId: z.string().optional(),
+        country: z.string().length(2).optional(),
+      })
       .parse(req.body ?? {});
-    const report = await crawlAll(profile.id, { deepScoreTop, onlyCompanyId: companyId });
+    const target = countryByCode(country);
+    if (country && !target) return reply.code(400).send({ error: `Searching in "${country}" is not supported yet.` });
+    const report = await crawlAll(profile.id, { deepScoreTop, onlyCompanyId: companyId, country: target });
     return { report };
   });
 
@@ -48,6 +55,19 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       // an empty profile, a rejected key, an exhausted balance.
       return reply.code(400).send({ error: (err as Error).message });
     }
+  });
+
+  /**
+   * Re-check the jobs already in the queue: drop the ones now too old, too
+   * senior, outside the chosen country, or closed on their board.
+   */
+  app.post('/api/discovery/recheck-leads', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    const { country } = z.object({ country: z.string().length(2).optional() }).parse(req.body ?? {});
+    const target = countryByCode(country);
+    if (country && !target) return reply.code(400).send({ error: `Searching in "${country}" is not supported yet.` });
+    return { report: await recheckLeads(profile.id, { country: target }) };
   });
 
   app.post('/api/discovery/rescore', async (req, reply) => {

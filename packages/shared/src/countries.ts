@@ -74,3 +74,39 @@ export function locatedIn(location: string | null | undefined, remote: boolean, 
 
 const mentionsWord = (text: string, word: string): boolean =>
   new RegExp(`(^|[^a-z])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`).test(text);
+
+/**
+ * Cities, each with the spellings postings use for it.
+ *
+ * "Bangalore" and "Bengaluru" are one place, and a city filter that listed
+ * them twice would split the count and hide half the jobs from each choice.
+ */
+export const CITIES: { name: string; country: string; variants: string[] }[] = [
+  { name: 'Bengaluru', country: 'IN', variants: ['bengaluru', 'bangalore'] },
+  { name: 'Hyderabad', country: 'IN', variants: ['hyderabad'] },
+  { name: 'Gurugram', country: 'IN', variants: ['gurugram', 'gurgaon'] },
+  { name: 'Delhi NCR', country: 'IN', variants: ['new delhi', 'delhi', 'noida'] },
+  { name: 'Mumbai', country: 'IN', variants: ['mumbai'] },
+  { name: 'Pune', country: 'IN', variants: ['pune'] },
+  { name: 'Chennai', country: 'IN', variants: ['chennai'] },
+  { name: 'Kolkata', country: 'IN', variants: ['kolkata'] },
+  { name: 'Ahmedabad', country: 'IN', variants: ['ahmedabad'] },
+  { name: 'Mohali', country: 'IN', variants: ['mohali'] },
+  { name: 'London', country: 'GB', variants: ['london'] },
+  { name: 'New York', country: 'US', variants: ['new york', 'nyc'] },
+  { name: 'San Francisco', country: 'US', variants: ['san francisco'] },
+  { name: 'Seattle', country: 'US', variants: ['seattle'] },
+  { name: 'Toronto', country: 'CA', variants: ['toronto'] },
+  { name: 'Dublin', country: 'IE', variants: ['dublin'] },
+  { name: 'Berlin', country: 'DE', variants: ['berlin'] },
+  { name: 'Amsterdam', country: 'NL', variants: ['amsterdam'] },
+  { name: 'Singapore', country: 'SG', variants: ['singapore'] },
+  { name: 'Dubai', country: 'AE', variants: ['dubai'] },
+];
+
+/** Every known city a location line names, by canonical name. */
+export function citiesIn(location: string | null | undefined): string[] {
+  const loc = (location ?? '').toLowerCase();
+  if (!loc) return [];
+  return CITIES.filter((c) => c.variants.some((v) => mentionsWord(loc, v))).map((c) => c.name);
+}
