@@ -6,6 +6,7 @@ import { api } from '../../../lib/api';
 import Header from '../components/Header';
 import { Loading } from '../../../components/Loading';
 import type { Detail } from '../components/types';
+import { useApplyPrefs } from '../../discover/components/ApplyPreferences';
 
 /**
  * One job, everything about it.
@@ -25,6 +26,9 @@ export default function JobPage() {
   const [rescoreBusy, setRescoreBusy] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
+  const [prefs] = useApplyPrefs();
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -57,6 +61,29 @@ export default function JobPage() {
     }
   }, [params.id, load]);
 
+  // Start a run, the same way Find work and Runs do. A job reached from the
+  // queue goes through its lead so the queue learns from the decision.
+  const handleApply = useCallback(async () => {
+    if (!d) return;
+    setApplyError(null);
+    setApplying(true);
+    try {
+      const r = d.lead
+        ? await api<{ applicationId: string }>(`/api/leads/${d.lead.id}/apply`, {
+            method: 'POST',
+            body: JSON.stringify({ writeCoverLetter: prefs.writeCoverLetter, autoTailorResume: prefs.tailorResume }),
+          })
+        : await api<{ applicationId: string }>('/api/applications', {
+            method: 'POST',
+            body: JSON.stringify({ url: d.job.url, autoStart: true, writeCoverLetter: prefs.writeCoverLetter }),
+          });
+      window.location.href = `/applications/${r.applicationId}`;
+    } catch (e) {
+      setApplyError((e as Error).message);
+      setApplying(false);
+    }
+  }, [d, prefs]);
+
   useEffect(() => {
     load().catch((e) => setError((e as Error).message));
     api('/api/sources')
@@ -79,7 +106,13 @@ export default function JobPage() {
 
   return (
     <>
-      <Header d={d} onReject={() => setRejecting(true)} />
+      <Header
+        d={d}
+        onReject={() => setRejecting(true)}
+        onApply={handleApply}
+        applying={applying}
+        applyError={applyError}
+      />
       <MatchPanel d={d} busy={rescoreBusy} onRescore={handleRescore} rescoreError={rescoreError} />
       <ApplicationPanel d={d} />
       <InterviewPanel d={d} />
@@ -287,7 +320,7 @@ function ApplicationPanel({ d }: { d: Detail }) {
           Not started.{' '}
           {d.lead?.status === 'REJECTED'
             ? `You turned this one down${d.lead.rejectReason ? `: “${d.lead.rejectReason}”` : '.'}`
-            : 'Apply from the Find work queue and the filled form will show up here.'}
+            : 'Press Apply above and the filled form will show up here.'}
         </p>
       </div>
     );

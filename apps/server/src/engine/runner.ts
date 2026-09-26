@@ -2,7 +2,7 @@ import type { Page } from 'playwright';
 import { prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
-import { newPage, screenshot } from '../browser/session.js';
+import { getContextSync, newPage, PageClosedError, screenshot } from '../browser/session.js';
 import { NeedsHumanError } from '../browser/openForm.js';
 import { findEmbeddedAts } from '../ats/embedded.js';
 import { adapterFor } from '../ats/registry.js';
@@ -97,7 +97,7 @@ export async function runApplication(applicationId: string): Promise<void> {
       companyKey: walk.companyKey,
     });
   } catch (err) {
-    const message = (err as Error).message;
+    const message = explainFailure(err, page);
     await prisma.application.update({
       where: { id: applicationId },
       data: { status: 'FAILED', blockedReason: message, attempts: { increment: 1 } },
@@ -184,4 +184,23 @@ export function continueRun(applicationId: string, carryOn: boolean, note?: stri
 
 export function decideReview(applicationId: string, approved: boolean, note?: string): boolean {
   return release(reviewKey(applicationId), { approved, note });
+}
+
+/**
+ * Playwright's "Target page, context or browser has been closed" names none of
+ * the three, and it is by far the most common way a run dies in development:
+ * saving any file under apps/server makes `tsx watch` restart the API, which
+ * takes Chromium down with it mid-application.
+ */
+function explainFailure(err: unknown, page: Page | null): string {
+  const message = (err as Error).message;
+  if (err instanceof PageClosedError || !page?.isClosed()) return message;
+  if (!getContextSync()) {
+    return (
+      'The browser shut down in the middle of this run. Most often that is the API server ' +
+      'restarting - `pnpm dev` restarts it whenever a file under apps/server is saved - or the ' +
+      'Chromium window being quit. Start the application again.'
+    );
+  }
+  return new PageClosedError('during the run').message;
 }
