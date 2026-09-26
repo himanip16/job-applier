@@ -185,7 +185,8 @@ export default function ProfilePage() {
               type="button"
               className={s.saveBtn}
               onClick={() => void persist(profile)}
-              disabled={!canSave || save.kind === 'saving'}
+              disabled={save.kind === 'saving'}
+              title={!canSave ? 'Fill in your name and email to save' : 'Save your profile'}
             >
               {save.kind === 'saving' ? (
                 <>
@@ -193,7 +194,7 @@ export default function ProfilePage() {
                 </>
               ) : (
                 <>
-                  <Icon name="save" size={14} /> Save
+                  <Icon name="check" size={14} /> Save
                 </>
               )}
             </button>

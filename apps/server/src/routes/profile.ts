@@ -66,11 +66,39 @@ export function registerProfileRoutes(app: FastifyInstance, requireProfile: Requ
       return reply.code(400).send({ error: 'Invalid input', issues: parseResult.error.issues });
     }
     const body = parseResult.data;
-    const profile = await prisma.profile.upsert({
-      where: { userId: user.id },
-      update: body,
-      create: { ...body, userId: user.id },
+
+    // Check if a profile with this email already exists
+    const existingProfile = await prisma.profile.findUnique({
+      where: { email: body.email },
     });
+
+    let profile;
+    if (existingProfile) {
+      // If the existing profile belongs to this user, update it
+      if (existingProfile.userId === user.id) {
+        profile = await prisma.profile.update({
+          where: { id: existingProfile.id },
+          data: body,
+        });
+      } else if (!existingProfile.userId) {
+        // If the existing profile has no userId (orphaned), attach it to this user
+        profile = await prisma.profile.update({
+          where: { id: existingProfile.id },
+          data: { ...body, userId: user.id },
+        });
+      } else {
+        // Email belongs to a different user - this is a conflict
+        return reply.code(409).send({ error: 'Email already in use by another account' });
+      }
+    } else {
+      // No existing profile with this email, create new one
+      profile = await prisma.profile.upsert({
+        where: { userId: user.id },
+        update: body,
+        create: { ...body, userId: user.id },
+      });
+    }
+
     // Sync email to User to prevent divergence
     if (profile.email !== user.email) {
       await prisma.user.update({ where: { id: user.id }, data: { email: profile.email } });

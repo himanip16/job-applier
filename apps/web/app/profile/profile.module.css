@@ -64,6 +64,7 @@
 }
 .saveBtn:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
 .saveBtn:disabled { opacity: .5; cursor: not-allowed; }
+.saveBtn:disabled:hover { border-color: var(--border); background: var(--panel); }
 
 /* ---- sections ---- */
 .section {
