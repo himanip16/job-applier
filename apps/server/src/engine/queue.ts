@@ -55,7 +55,9 @@ function pump(): void {
  */
 export async function recoverInterruptedRuns(): Promise<number> {
   const stuck = await prisma.application.findMany({
-    where: { status: { in: ['PREPARING', 'FILLING', 'NEEDS_INPUT', 'REVIEW', 'SUBMITTING'] } },
+    // QUEUED too: the queue is in memory, so a run waiting its turn when the
+    // process died is as orphaned as one that was mid-fill.
+    where: { status: { in: ['QUEUED', 'PREPARING', 'FILLING', 'NEEDS_INPUT', 'REVIEW', 'SUBMITTING'] } },
     select: { id: true, status: true },
   });
   for (const app of stuck) {
@@ -74,6 +76,8 @@ export async function recoverInterruptedRuns(): Promise<number> {
     });
     // Clear stale questions; they will be re-asked against the fresh page.
     await prisma.pendingQuestion.deleteMany({ where: { applicationId: app.id, answeredAt: null } });
+    // Marking it QUEUED is not the same as queueing it.
+    if (status === 'QUEUED') enqueue(app.id);
   }
   return stuck.length;
 }

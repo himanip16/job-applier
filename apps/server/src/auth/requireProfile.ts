@@ -20,7 +20,8 @@ export async function requireProfile(
   }
   const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
   if (!profile) {
-    reply.code(400).send({ error: 'Create your profile first (PUT /api/profile).' });
+    // The code lets a page show a welcome instead of an error; the sentence is for a person.
+    reply.code(400).send({ error: 'Set up your profile first.', code: 'PROFILE_REQUIRED' });
     return null;
   }
   return profile;

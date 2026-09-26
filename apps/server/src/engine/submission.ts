@@ -3,7 +3,7 @@ import { getCanonical, type FormField, type ResolvedAnswer } from '@ja/shared';
 import { prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
-import { screenshot, saveDom } from '../browser/session.js';
+import { screenshot, saveDom, unlessClosed } from '../browser/session.js';
 import { detectBlockers, detectSubmissionOutcome } from '../browser/blockers.js';
 import type { AdvanceControl } from '../browser/steps.js';
 import type { AtsAdapter } from '../ats/types.js';
@@ -66,7 +66,7 @@ export async function finishApplication(args: {
     // is dropped and the run waits forever.
     const decisionPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
     await setStatus(applicationId, 'REVIEW', reason, { blockers, plan });
-    const decision = await decisionPromise;
+    const decision = await unlessClosed(page, decisionPromise, 'while waiting for your review');
     if (!decision.approved) {
       await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
       return;
@@ -115,7 +115,7 @@ export async function finishApplication(args: {
       'REVIEW',
       `The form rejected the submission: ${outcome.detail}. It is still open in the browser - fix it there and approve, or cancel.`,
     );
-    const retry = await retryPromise;
+    const retry = await unlessClosed(page, retryPromise, 'while waiting for your review');
     if (!retry.approved) {
       await setStatus(applicationId, 'CANCELLED', retry.note ?? 'Cancelled after a validation error.');
       return;

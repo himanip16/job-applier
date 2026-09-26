@@ -6,6 +6,7 @@ import { rescoreByIds, rescoreLexically } from '../discovery/rescoreLeads.js';
 import { NOT_YOURS, ownedLead } from '../auth/ownership.js';
 import { adapterFor } from '../ats/registry.js';
 import { enqueue } from '../engine/queue.js';
+import { bus } from '../lib/events.js';
 import { tailorResume } from '../resume/tailor.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
 import { renderResume } from '../resume/render.js';
@@ -19,6 +20,9 @@ import type { RequireProfile } from './types.js';
  * waiting, which is the most a button press should ever ask for.
  */
 export const MAX_RESCORE_BATCH = 25;
+
+/** How long an application waits on resume tailoring before starting without it. */
+const TAILOR_TIMEOUT_MS = 90_000;
 
 export function registerLeadRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   /**
@@ -383,13 +387,23 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
         const resumeText = base?.text ?? full.resumeText;
 
         if (resumeText && resumeText.trim().length >= 100) {
-          const result = await tailorResume({
-            candidateContext: renderCandidateContext(full, resumeText),
-            resumeText,
-            jobTitle: lead.title,
-            companyName: lead.companyName,
-            jobDescription: lead.descriptionText,
-          });
+          // The run does not start until this is done, so say so - otherwise
+          // the page just reads "waiting" for as long as the model takes.
+          await bus.emitEvent(application.id, 'LOG', 'Tailoring your resume for this job before starting…');
+          // A slow or rate-limited model must not hold the application hostage:
+          // after this long, apply with the resume you already have.
+          const result = await Promise.race([
+            tailorResume({
+              candidateContext: renderCandidateContext(full, resumeText),
+              resumeText,
+              jobTitle: lead.title,
+              companyName: lead.companyName,
+              jobDescription: lead.descriptionText,
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('took longer than 90 seconds')), TAILOR_TIMEOUT_MS),
+            ),
+          ]);
 
           const rendered = await renderResume(result.text, {
             profileName: full.fullName,
@@ -421,8 +435,13 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
           tailoredResumeId = tailored.id;
         }
       } catch (err) {
-        // Don't fail the application if tailoring fails, just log it
+        // Don't fail the application if tailoring fails; say so and carry on.
         console.error('Auto-tailor resume failed:', err);
+        await bus.emitEvent(
+          application.id,
+          'LOG',
+          `Resume tailoring skipped (${(err as Error).message}). Applying with your default resume.`,
+        );
       }
     }
 

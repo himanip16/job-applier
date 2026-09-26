@@ -4,6 +4,7 @@ import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
 import { newPage, screenshot } from '../browser/session.js';
 import { NeedsHumanError } from '../browser/openForm.js';
+import { findEmbeddedAts } from '../ats/embedded.js';
 import { adapterFor } from '../ats/registry.js';
 import { handleOpenFailure, pauseForHuman } from './humanGate.js';
 import { artifact, setStatus } from './runLog.js';
@@ -35,7 +36,8 @@ export async function runApplication(applicationId: string): Promise<void> {
     include: { job: true, profile: { include: { facts: true, resumes: true } } },
   });
 
-  const adapter = adapterFor(app.job.url);
+  let adapter = adapterFor(app.job.url);
+  let formUrl = app.job.url;
   let page: Page | null = null;
 
   try {
@@ -47,7 +49,21 @@ export async function runApplication(applicationId: string): Promise<void> {
     page = await newPage();
 
     // ---- 1. Reach the form --------------------------------------------------
-    if (!(await openForm(applicationId, page, adapter, app.job.url))) return;
+    // A careers page on the company's own domain is often a known ATS in an
+    // iframe. Drive that ATS directly rather than the page around it.
+    if (adapter.id === 'generic') {
+      const embedded = await findEmbeddedAts(page, app.job.url);
+      if (embedded) {
+        adapter = embedded.adapter;
+        formUrl = embedded.url;
+        await bus.emitEvent(
+          applicationId,
+          'LOG',
+          `The application is a ${adapter.id} form embedded in this page; opening it directly.`,
+        );
+      }
+    }
+    if (!(await openForm(applicationId, page, adapter, formUrl))) return;
     await artifact(applicationId, 'screenshot', 'form-opened', await screenshot(page, applicationId, 'form-opened'));
 
     // ---- 2. Read the posting ------------------------------------------------
@@ -87,7 +103,7 @@ export async function runApplication(applicationId: string): Promise<void> {
       data: { status: 'FAILED', blockedReason: message, attempts: { increment: 1 } },
     });
     await bus.emitEvent(applicationId, 'ERROR', message, { stack: (err as Error).stack });
-    if (page) {
+    if (page && !page.isClosed()) {
       await artifact(applicationId, 'screenshot', 'failure', await screenshot(page, applicationId, 'failure')).catch(() => {});
     }
   } finally {
@@ -96,7 +112,7 @@ export async function runApplication(applicationId: string): Promise<void> {
     abandon(blockerKey(applicationId));
     // The page is left open on purpose while a human may still be looking at
     // it; closing here would destroy the evidence and any captcha token.
-    if (page && !config.headless) {
+    if (page && !page.isClosed() && !config.headless) {
       await bus.emitEvent(applicationId, 'LOG', 'Leaving the browser tab open for you.');
     } else {
       await page?.close().catch(() => {});

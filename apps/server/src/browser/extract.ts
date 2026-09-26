@@ -174,10 +174,16 @@ const EXTRACTOR = () => {
   const isRequired = (el: HTMLElement): boolean => {
     if (el.hasAttribute('required') || el.getAttribute('aria-required') === 'true') return true;
     // A marker glyph in the label is the near-universal convention for forms
-    // that do not set the attribute.
-    const wrapper = el.closest('.field-wrapper, fieldset, .field, .form-group');
-    const labelText = wrapper?.querySelector('label, legend')?.textContent ?? '';
-    return /[*\u2731\uFF0A\u2020\u271A]/.test(labelText);
+    // that do not set the attribute. Ashby draws its asterisk with CSS from a
+    // `_required_xxxx` class on the question title, so there is no glyph in
+    // the text at all - its consent radios and yes/no buttons were read as
+    // optional and left blank.
+    const wrapper = el.closest(
+      '.field-wrapper, fieldset, .field, .form-group, [class*="fieldEntry"], [class*="field-entry"]',
+    );
+    const caption = wrapper?.querySelector('label, legend');
+    if (/[*\u2731\uFF0A\u2020\u271A]/.test(caption?.textContent ?? '')) return true;
+    return /(^|[\s_-])required([\s_-]|$)/i.test(caption?.getAttribute('class') ?? '');
   };
 
   const mark = (el: Element): string => {
@@ -208,7 +214,58 @@ const EXTRACTOR = () => {
 
   const seenRadioGroups = new Set<string>();
 
+  /** The question above a group of options, never one of the options. */
+  const captionAbove = (container: HTMLElement, options: HTMLElement[] = []): string => {
+    // A <label for> pointing at one of the options is that option's caption.
+    const optionIds = new Set(options.map((o) => o.id).filter(Boolean));
+    const legend = container.querySelector('legend');
+    if (legend) {
+      const text = textOf(legend);
+      if (text) return text;
+    }
+    let node: HTMLElement | null = container.parentElement;
+    for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
+      for (const l of Array.from(node.querySelectorAll(CAPTION_SELECTOR))) {
+        if (container.contains(l) || l.contains(container)) continue;
+        if (optionIds.has(l.getAttribute('for') ?? '')) continue;
+        const text = textOf(l);
+        if (text) return text;
+      }
+    }
+    return '';
+  };
+
   for (const root of roots) {
+    // ---- toggle-button groups ---------------------------------------------
+    // Ashby's yes/no questions are two <button aria-pressed> and a hidden
+    // checkbox; none of it is an input anyone can see, so the sweep below
+    // never found them and they were submitted blank. A set of pressable
+    // buttons under one parent is a single-choice question.
+    const buttonGroups = new Set<HTMLElement>();
+    root.querySelectorAll<HTMLElement>('button[aria-pressed]').forEach((b) => {
+      const parent = b.parentElement;
+      if (parent && visible(b) && parent.querySelectorAll(':scope > button[aria-pressed]').length >= 2) {
+        buttonGroups.add(parent);
+      }
+    });
+    for (const group of buttonGroups) {
+      const buttons = Array.from(group.querySelectorAll<HTMLElement>(':scope > button[aria-pressed]'));
+      const handle = mark(group);
+      group.setAttribute('data-ja-group', handle);
+      results.push({
+        handle,
+        name: group.querySelector('input')?.getAttribute('name') ?? '',
+        tag: 'div', type: 'button-group',
+        kind: 'RADIO',
+        widget: 'button-group',
+        label: captionAbove(group),
+        helpText: '',
+        required: isRequired(group),
+        options: buttons.map((b) => ({ label: textOf(b) })).filter((o) => o.label),
+        groupHandle: handle,
+      });
+    }
+
     const controls = Array.from(
       root.querySelectorAll<HTMLElement>('input, select, textarea'),
     );
@@ -220,6 +277,10 @@ const EXTRACTOR = () => {
       const id = el.getAttribute('id') ?? '';
 
       if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'image') continue;
+      // react-select renders a second, aria-hidden input under each dropdown
+      // purely for form validation. It is not a question; reading it asked
+      // every Greenhouse dropdown twice, once as a text box.
+      if (el.getAttribute('aria-hidden') === 'true') continue;
       if (CAPTCHA_NAMES.test(name) || CAPTCHA_NAMES.test(id)) continue;
       if (!visible(el) && type !== 'file') continue;
 
@@ -264,22 +325,11 @@ const EXTRACTOR = () => {
         // named "Less than 2 yrs". A <legend> is the one caption that lives
         // inside the group and still describes it; everything else has to come
         // from above the container.
-        const groupLabel = ((): string => {
-          const legend = container.querySelector('legend');
-          if (legend && !legend.contains(el)) {
-            const text = textOf(legend);
-            if (text) return text;
-          }
-          let node: HTMLElement | null = container.parentElement;
-          for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
-            for (const l of Array.from(node.querySelectorAll(CAPTION_SELECTOR))) {
-              if (container.contains(l) || l.contains(container)) continue;
-              const text = textOf(l);
-              if (text) return text;
-            }
-          }
-          return labelFor(el, true);
-        })();
+        const legend = container.querySelector('legend');
+        const groupLabel =
+          (legend && !legend.contains(el) ? textOf(legend) : '') ||
+          captionAbove(container, siblings) ||
+          labelFor(el, true);
 
         results.push({
           handle: mark(el),
@@ -396,6 +446,15 @@ const EXTRACTOR = () => {
     }
   }
 
+  // Button groups are swept first; put everything back in the order a person
+  // reads the form, which is the order it is filled and reviewed in.
+  const at = (r: RawField) => document.querySelector(`[${ATTR}="${r.handle}"]`);
+  results.sort((a, b) => {
+    const ea = at(a);
+    const eb = at(b);
+    if (!ea || !eb) return 0;
+    return ea.compareDocumentPosition(eb) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
   return results;
 };
 
@@ -450,7 +509,20 @@ async function harvestOptions(page: Page, selector: string, max: number): Promis
   try {
     await input.scrollIntoViewIfNeeded({ timeout: 2000 });
     await input.click({ timeout: 3000 });
-    const options = page.locator('[role="option"], .select__option');
+    // A click focuses Greenhouse's dropdowns without opening them; ArrowDown does.
+    if ((await input.getAttribute('aria-expanded')) !== 'true') await input.press('ArrowDown');
+
+    // Only this dropdown's own menu. Reading every [role=option] on the page
+    // picked up the phone field's always-rendered, hidden country list first,
+    // waited for it to become visible, timed out - and the question reached
+    // you as a text box with no choices.
+    const controls = await input.getAttribute('aria-controls');
+    const scoped = controls
+      ? page.locator(`[id="${controls}"] [role="option"]`)
+      : input
+          .locator('xpath=ancestor::*[contains(@class,"select-shell") or contains(@class,"select__container")][1]')
+          .locator('[role="option"], .select__option');
+    const options = (await scoped.count()) ? scoped : page.locator('[role="option"]:visible, .select__option:visible');
     await options.first().waitFor({ state: 'visible', timeout: 2000 });
     const count = Math.min(await options.count(), max);
     const out: FieldOption[] = [];

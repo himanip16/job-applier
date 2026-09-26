@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/db.js';
 import { currentUser } from '../auth/sessions.js';
 import type { RequireProfile } from './types.js';
+import { contactDetailsFrom } from '../resume/contactDetails.js';
 
 const ProfileInput = z.object({
   email: z.string().email(),
@@ -32,6 +33,15 @@ export function registerProfileRoutes(app: FastifyInstance, requireProfile: Requ
       include: { facts: { orderBy: { key: 'asc' } }, resumes: { orderBy: { createdAt: 'desc' } } },
     });
     return { profile };
+  });
+
+  /** What the resume says about who you are, for the form to offer. Suggests only; saves nothing. */
+  app.get('/api/profile/autofill', async (req, reply) => {
+    const user = await currentUser(req);
+    if (!user) return reply.code(401).send({ error: 'Sign in to use this.' });
+    const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
+    if (!profile?.resumeText) return { details: {}, reason: 'Upload a resume first.' };
+    return { details: contactDetailsFrom(profile.resumeText) };
   });
 
   app.put('/api/profile', async (req, reply) => {

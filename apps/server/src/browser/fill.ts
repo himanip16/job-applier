@@ -53,6 +53,9 @@ export async function fillField(page: Page, field: FormField, value: string | st
     case 'checkbox-group':
       await fillCheckboxGroup(page, field, Array.isArray(value) ? value : [value]);
       break;
+    case 'button-group':
+      await fillButtonGroup(page, field, asOne(value, field));
+      break;
     case 'combobox-intl-tel':
       await fillNative(page, field, asOne(value, field));
       break;
@@ -318,10 +321,19 @@ async function fillReactSelect(page: Page, field: FormField, value: string | str
 }
 
 async function waitForOption(page: Page, field: FormField, want: string): Promise<Locator | null> {
+  // This dropdown's own menu, and only what is visible in it. Greenhouse keeps
+  // the phone field's 240-country list in the DOM, hidden, at all times; a
+  // page-wide lookup found that first, waited for it to show, and reported
+  // every dropdown on the form as "could not find option".
+  const controls = field.optionContainerSelector
+    ? null
+    : await page.locator(field.selector).first().getAttribute('aria-controls').catch(() => null);
   const container = field.optionContainerSelector
     ? page.locator(field.optionContainerSelector)
-    : page;
-  const options = container.locator('[role="option"], .select__option');
+    : controls
+      ? page.locator(`[id="${controls}"]`)
+      : page;
+  const options = container.locator('[role="option"]:visible, .select__option:visible');
   try {
     await options.first().waitFor({ state: 'visible', timeout: OPTION_TIMEOUT_MS });
   } catch {
@@ -364,6 +376,21 @@ async function fillRadioGroup(page: Page, field: FormField, want: string): Promi
     }
   }
   throw new FillError(`No radio option "${want}" under ${field.label}`, field);
+}
+
+/** Yes/no toggles: press the button whose text is the answer. */
+async function fillButtonGroup(page: Page, field: FormField, want: string): Promise<void> {
+  const target = normalizeLabel(want);
+  const buttons = page.locator(field.selector).first().locator(':scope > button[aria-pressed]');
+  const count = await buttons.count();
+  for (let i = 0; i < count; i++) {
+    const button = buttons.nth(i);
+    if (normalizeLabel(await button.innerText()) === target) {
+      if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click();
+      return;
+    }
+  }
+  throw new FillError(`No option "${want}" under ${field.label}`, field);
 }
 
 async function fillCheckboxGroup(page: Page, field: FormField, wants: string[]): Promise<void> {
@@ -519,8 +546,15 @@ export async function verifyFilled(
         .first()
         .locator('xpath=ancestor::*[contains(@class,"select-shell") or contains(@class,"select__control")][1]');
       const text = normalizeLabel(await shell.first().innerText().catch(() => ''));
-      const ok = wants.every((w) => text.includes(w));
+      // A phone country picker shows "+91" for "India +91" once chosen.
+      const ok = wants.every((w) => text.includes(w) || showsChosenOption(field, w, text));
       return { ok, actual: text };
+    }
+    if (field.widget === 'button-group') {
+      const pressed = page.locator(field.selector).first().locator(':scope > button[aria-pressed="true"]');
+      const labels: string[] = [];
+      for (let i = 0; i < (await pressed.count()); i++) labels.push(normalizeLabel(await pressed.nth(i).innerText()));
+      return { ok: wants.every((w) => labels.includes(w)), actual: labels.join(', ') };
     }
     if (field.widget === 'radio-group' || field.widget === 'checkbox-group') {
       const scope = page.locator(field.optionContainerSelector ?? field.selector);
@@ -531,7 +565,18 @@ export async function verifyFilled(
       return { ok: wants.every((w) => labels.includes(w)), actual: labels.join(', ') };
     }
     const el = page.locator(field.selector).first();
+    if (field.kind === 'CHECKBOX') {
+      // The input's value is whatever the site set ("1", "on"); what matters is the tick.
+      const want = /^(true|yes|1|on|checked)$/i.test(wants[0] ?? '');
+      const checked = await el.isChecked().catch(() => false);
+      return { ok: checked === want, actual: checked ? 'ticked' : 'not ticked' };
+    }
     const actual = normalizeLabel((await el.inputValue().catch(() => '')) || '');
+    if (field.kind === 'PHONE' || wants.every((w) => /^[\d\s()+.-]{6,}$/.test(w))) {
+      // Sites reformat numbers as you type: "9902583674" becomes "99025 83674".
+      const digits = (v: string) => v.replace(/\D/g, '');
+      return { ok: wants.every((w) => digits(actual).endsWith(digits(w))), actual };
+    }
     if (field.kind === 'SELECT') {
       const selectedText = normalizeLabel(
         await el.locator('option:checked').innerText().catch(() => ''),

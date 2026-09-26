@@ -4,7 +4,7 @@ import { normalizeLabel, type AnswerGap, type FormField, type ResolvedAnswer } f
 import { prisma, type Prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
-import { screenshot } from '../browser/session.js';
+import { assertOpen, PageClosedError, screenshot } from '../browser/session.js';
 import {
   fillField,
   attachFile,
@@ -29,10 +29,11 @@ import {
 import type { AtsAdapter, JobMeta } from '../ats/types.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
 import { generateCoverLetter } from '../llm/coverLetter.js';
-import { resolveField, type ResolveContext } from './resolver.js';
+import { resolveFields, type ResolveContext } from './resolver.js';
 import { askHuman, pauseForHuman } from './humanGate.js';
 import { artifact, setStatus, truncate, writeCoverLetterFile } from './runLog.js';
 import { entry, type FieldPlanEntry } from './fieldPlan.js';
+import { readAnswerCache, reuseCachedAnswers, saveToAnswerCache } from './answerCache.js';
 
 /**
  * Walking an application from its first screen to its last.
@@ -90,6 +91,8 @@ export async function walkApplication(args: {
   );
 
   const sessionAnswers = new Map<string, ResolvedAnswer>();
+  const earlierReplies = await answersFromEarlierRuns(applicationId);
+  const earlierDerived = await readAnswerCache(applicationId);
   const ctx: ResolveContext = {
     profile: app.profile,
     candidateContext,
@@ -116,6 +119,9 @@ export async function walkApplication(args: {
   // because on those screens the fields we want do not exist yet.
   let step = 0;
   let stuckSignature: string | null = null;
+  // Set when the run carries on after you worked in the browser. The next
+  // pass over the page must not overwrite what you typed there.
+  let afterHumanPause = false;
   let navigationRetries = 0;
   // Answering a question about how to fill the form should happen once. A
   // detector that fires on something which is not really that question would
@@ -195,6 +201,8 @@ export async function walkApplication(args: {
       // overwrite step 1's answer and its pending question.
       fields = (await adapter.extractForm(page)).map((f) => ({ ...f, id: `s${step}:${f.id}` }));
       allFields.push(...fields);
+      carryOverEarlierReplies(fields, earlierReplies, sessionAnswers);
+      reuseCachedAnswers(fields, earlierDerived, sessionAnswers);
       await bus.emitEvent(
         applicationId,
         'FORM_EXTRACTED',
@@ -245,8 +253,16 @@ export async function walkApplication(args: {
     // ---- Resolve, ask, fill -------------------------------------------------
     const fillable = fields.filter((f) => f.kind !== 'FILE');
     const gaps: AnswerGap[] = [];
+    const resolved = await resolveFields(fillable, ctx);
+    // Keep what the model worked out before anything can go wrong, so a
+    // restart reuses it instead of paying for it again.
+    await saveToAnswerCache(
+      applicationId,
+      fillable,
+      new Map([...resolved].flatMap(([id, r]) => (r.kind === 'answer' ? [[id, r.answer] as const] : []))),
+    );
     for (const field of fillable) {
-      const res = await resolveField(field, ctx);
+      const res = resolved.get(field.id)!;
       if (res.kind === 'answer') {
         answers.set(field.id, res.answer);
         await bus.emitEvent(
@@ -261,7 +277,7 @@ export async function walkApplication(args: {
     }
 
     if (gaps.length) {
-      const supplied = await askHuman(applicationId, fillable, gaps);
+      const supplied = await askHuman(applicationId, page, fillable, gaps);
       for (const [fieldId, answer] of supplied) {
         answers.set(fieldId, answer);
         sessionAnswers.set(fieldId, answer);
@@ -276,6 +292,8 @@ export async function walkApplication(args: {
 
     const unfilledRequired: string[] = [];
     for (const field of fillable) {
+      // Otherwise every remaining field reports "not found in DOM".
+      assertOpen(page, 'while the form was being filled');
       const answer = answers.get(field.id);
       if (!answer || answer.value === null || answer.displayValue === '') {
         plan.push(entry(field, answer, false));
@@ -311,6 +329,27 @@ export async function walkApplication(args: {
         );
         if (!correct && field.required) unfilledRequired.push(field.label);
         continue;
+      }
+
+      // You were just in the browser. A field already holding what we meant
+      // is done; one holding something else is what you chose - keep it.
+      if (afterHumanPause) {
+        const now = await verifyFilled(page, field, wanted);
+        const shown = now.actual.trim();
+        const blank = !shown || /^(select\b|not ticked$|verification failed)/i.test(shown);
+        if (now.ok || !blank) {
+          plan.push({
+            ...entry(field, answer, true),
+            ...(now.ok
+              ? {}
+              : { value: shown, source: 'USER', confidence: 1, rationale: 'You set this in the browser.' }),
+            verified: shown,
+          });
+          if (!now.ok) {
+            await bus.emitEvent(applicationId, 'LOG', `Keeping what you entered for "${field.label}": ${truncate(shown)}.`);
+          }
+          continue;
+        }
       }
 
       const attempt = async (target: FormField) => {
@@ -367,6 +406,9 @@ export async function walkApplication(args: {
       if (field.required) unfilledRequired.push(field.label);
     }
 
+    // Only the page you just worked on; later pages start fresh.
+    afterHumanPause = false;
+
     if (unfilledRequired.length) {
       // One awkward dropdown used to end the whole application. The browser
       // is open on a form that is otherwise complete, and setting one field
@@ -379,8 +421,10 @@ export async function walkApplication(args: {
           `${unfilledRequired.length === 1 ? 'is' : 'are'} required. Everything else on this step ` +
           'is filled in - set those in the open browser and it will carry on.',
         humanCanClear: true,
+        autoClears: false,
       });
       if (!carryOn) return { kind: 'ABANDONED' };
+      afterHumanPause = true;
       step--;
       continue;
     }
@@ -461,8 +505,10 @@ export async function walkApplication(args: {
           kind: 'UNKNOWN',
           detail: `${detail} The browser is open on it - fix it there and continue, or cancel.`,
           humanCanClear: true,
+          autoClears: false,
         });
         if (!carryOn) return { kind: 'ABANDONED' };
+        afterHumanPause = true;
         stuckSignature = null;
         continue;
       }
@@ -483,6 +529,10 @@ export async function walkApplication(args: {
       // its job, not a failure - look at wherever it landed instead. Bounded,
       // because a page that navigates on a timer would otherwise spin here
       // forever without ever making progress.
+      // A closed tab also reads as "Target closed"; it is not coming back.
+      if (page.isClosed() && !(err instanceof PageClosedError)) {
+        throw new PageClosedError('while the form was being filled');
+      }
       if (!isNavigationRace(err) || navigationRetries >= 4) throw err;
       navigationRetries++;
       step--;
@@ -503,6 +553,55 @@ export async function walkApplication(args: {
     submitControl,
     companyKey: ctx.companyKey,
   };
+}
+
+/**
+ * Answers given to this application on an earlier run that did not finish.
+ *
+ * The run most likely to need restarting is the one where you have just typed
+ * two dozen answers and the tab then closed; asking all of them again is the
+ * worst possible response to that.
+ */
+async function answersFromEarlierRuns(
+  applicationId: string,
+): Promise<Map<string, { label: string; value: string | string[]; remember: boolean }>> {
+  const answered = await prisma.pendingQuestion.findMany({
+    where: { applicationId, answeredAt: { not: null } },
+    orderBy: { answeredAt: 'asc' },
+  });
+  const out = new Map<string, { label: string; value: string | string[]; remember: boolean }>();
+  for (const q of answered) {
+    const v = q.answerValue;
+    if (typeof v !== 'string' && !(Array.isArray(v) && v.every((x) => typeof x === 'string'))) continue;
+    out.set(q.fieldId, { label: normalizeLabel(q.rawLabel), value: v as string | string[], remember: q.remember });
+  }
+  return out;
+}
+
+/**
+ * Reuse an earlier reply for a field on this screen - only when it is the same
+ * handle AND the same question, since handles are positional and a form that
+ * changed between runs would otherwise put an answer in the wrong box.
+ */
+function carryOverEarlierReplies(
+  fields: FormField[],
+  earlier: Map<string, { label: string; value: string | string[]; remember: boolean }>,
+  sessionAnswers: Map<string, ResolvedAnswer>,
+): void {
+  for (const field of fields) {
+    const prior = earlier.get(field.id);
+    if (!prior || prior.label !== normalizeLabel(field.label) || sessionAnswers.has(field.id)) continue;
+    sessionAnswers.set(field.id, {
+      fieldId: field.id,
+      value: prior.value,
+      displayValue: Array.isArray(prior.value) ? prior.value.join(', ') : prior.value,
+      source: 'USER',
+      confidence: 1,
+      rationale: 'You answered this on an earlier attempt.',
+      remember: prior.remember,
+      canonicalKey: field.canonicalKey,
+    });
+  }
 }
 
 /**

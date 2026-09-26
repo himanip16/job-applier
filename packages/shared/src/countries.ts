@@ -1,0 +1,66 @@
+/**
+ * Countries a job search can be pointed at.
+ *
+ * Postings rarely spell out the country - "Bengaluru" or "Gurugram, HR" is far
+ * more common than "India" - so each entry carries the cities that stand for
+ * it. The list is short on purpose: the countries this tool is actually used
+ * for, not every ISO code.
+ */
+export interface Country {
+  /** ISO 3166-1 alpha-2, which is what the search provider geo-targets on. */
+  code: string;
+  name: string;
+  /** Other ways a posting's location says the same thing. */
+  aliases: string[];
+}
+
+export const COUNTRIES: Country[] = [
+  { code: 'IN', name: 'India', aliases: ['bengaluru', 'bangalore', 'mumbai', 'pune', 'hyderabad', 'chennai', 'delhi', 'new delhi', 'gurugram', 'gurgaon', 'noida', 'kolkata', 'ahmedabad', 'mohali', 'karnataka', 'maharashtra', 'telangana', 'haryana', 'tamil nadu', 'ind'] },
+  { code: 'GB', name: 'United Kingdom', aliases: ['uk', 'u.k.', 'england', 'scotland', 'wales', 'london', 'manchester', 'edinburgh', 'cambridge', 'bristol', 'leeds', 'birmingham', 'great britain'] },
+  { code: 'US', name: 'United States', aliases: ['usa', 'u.s.', 'us', 'new york', 'san francisco', 'seattle', 'austin', 'boston', 'chicago', 'los angeles', 'denver', 'california', 'texas', 'washington', 'nyc'] },
+  { code: 'CA', name: 'Canada', aliases: ['toronto', 'vancouver', 'montreal', 'ottawa', 'calgary', 'ontario', 'british columbia', 'quebec'] },
+  { code: 'IE', name: 'Ireland', aliases: ['dublin', 'cork', 'galway'] },
+  { code: 'DE', name: 'Germany', aliases: ['berlin', 'munich', 'münchen', 'hamburg', 'frankfurt', 'cologne', 'deutschland'] },
+  { code: 'NL', name: 'Netherlands', aliases: ['amsterdam', 'rotterdam', 'utrecht', 'the hague', 'eindhoven'] },
+  { code: 'FR', name: 'France', aliases: ['paris', 'lyon', 'toulouse'] },
+  { code: 'ES', name: 'Spain', aliases: ['madrid', 'barcelona', 'valencia'] },
+  { code: 'PT', name: 'Portugal', aliases: ['lisbon', 'porto'] },
+  { code: 'PL', name: 'Poland', aliases: ['warsaw', 'krakow', 'kraków', 'wroclaw', 'wrocław'] },
+  { code: 'SE', name: 'Sweden', aliases: ['stockholm', 'gothenburg'] },
+  { code: 'CH', name: 'Switzerland', aliases: ['zurich', 'zürich', 'geneva', 'basel'] },
+  { code: 'SG', name: 'Singapore', aliases: [] },
+  { code: 'AE', name: 'United Arab Emirates', aliases: ['uae', 'dubai', 'abu dhabi'] },
+  { code: 'AU', name: 'Australia', aliases: ['sydney', 'melbourne', 'brisbane', 'perth'] },
+  { code: 'JP', name: 'Japan', aliases: ['tokyo', 'osaka'] },
+];
+
+export function countryByCode(code: string | null | undefined): Country | undefined {
+  return COUNTRIES.find((c) => c.code === code?.toUpperCase());
+}
+
+/** Best guess from free text such as a profile's country box ("India", "UK"). */
+export function countryFromText(text: string | null | undefined): Country | undefined {
+  const t = (text ?? '').trim().toLowerCase();
+  if (!t) return undefined;
+  return COUNTRIES.find((c) => c.code.toLowerCase() === t || c.name.toLowerCase() === t || c.aliases.includes(t));
+}
+
+/**
+ * Is a posting in this country, as far as its location line says?
+ *
+ * Remote postings and postings with no location are kept: neither can be
+ * ruled out, and dropping a remote role you could take is the worse mistake.
+ */
+export function locatedIn(location: string | null | undefined, remote: boolean, country: Country): boolean {
+  const loc = (location ?? '').toLowerCase();
+  if (!loc.trim()) return true;
+  const words = [country.name.toLowerCase(), country.code.toLowerCase(), ...country.aliases];
+  const mentions = words.some((w) => new RegExp(`(^|[^a-z])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`).test(loc));
+  if (mentions) return true;
+  // "Remote" with no other country named is open to this one too.
+  if (remote || /\bremote\b|\banywhere\b/.test(loc)) {
+    const other = COUNTRIES.some((c) => c !== country && [c.name.toLowerCase(), ...c.aliases.filter((a) => a.length > 3)].some((w) => loc.includes(w)));
+    return !other;
+  }
+  return false;
+}

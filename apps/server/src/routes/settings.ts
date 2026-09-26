@@ -32,9 +32,10 @@ import { firecrawlSearch, isFirecrawlConfigured } from '../discovery/firecrawl.j
 export function registerSettingsRoutes(app: FastifyInstance) {
   app.get('/api/settings', async () => ({
     settings: (Object.keys(EDITABLE_SETTINGS) as SettingKey[]).map((key) => describe(key)),
+    // Masked: a saved key must never reach the browser in full.
     namedKeys: {
-      anthropic: namedProviderState('anthropic'),
-      gemini: namedProviderState('gemini'),
+      anthropic: maskedProviderState('anthropic'),
+      gemini: maskedProviderState('gemini'),
     },
     // What the current combination actually gets you, so the page can say
     // which features are live rather than leaving you to work it out.
@@ -139,6 +140,11 @@ export function registerSettingsRoutes(app: FastifyInstance) {
     resetProvider();
     return { setting: describe(req.params.key) };
   });
+}
+
+function maskedProviderState(provider: 'anthropic' | 'gemini') {
+  const { activeId, keys } = namedProviderState(provider);
+  return { activeId, keys: keys.map((k) => ({ id: k.id, name: k.name, preview: maskSecret(k.value) })) };
 }
 
 /** Everything about a setting except the value itself. */

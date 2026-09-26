@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { api } from '../../lib/api';
+import { api, needsProfile } from '../../lib/api';
+import { Icon, type IconName } from '../../components/Icon';
 
 interface Lead {
   id: string;
@@ -10,6 +11,8 @@ interface Lead {
   title: string;
   companyName: string;
   location: string | null;
+  postedAt?: string | null;
+  discoveredAt?: string | null;
   remote: boolean;
   descriptionText: string | null;
   score: number;
@@ -110,6 +113,14 @@ interface Company {
   lastCrawlNote: string | null;
 }
 
+const TAB_ICON: Record<string, IconName> = {
+  NEW: 'sparkles',
+  SHORTLISTED: 'bookmark',
+  APPLIED: 'send',
+  REJECTED: 'archive',
+  ALL: 'list',
+};
+
 export default function DiscoverPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
@@ -121,6 +132,8 @@ export default function DiscoverPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // No profile yet is a first visit, not a failure: it gets a welcome.
+  const [noProfile, setNoProfile] = useState(false);
   const [loading, setLoading] = useState(true);
   const [rejecting, setRejecting] = useState<Lead | null>(null);
   // Keyed by lead. An error from a card has to appear on that card: the shared
@@ -151,9 +164,13 @@ export default function DiscoverPage() {
    * setting each time. A form that requires one always gets one regardless.
    */
   const [writeCoverLetter, setWriteCoverLetter] = useState(false);
+  // On by default, as it always was; off applies with your resume as it is,
+  // which also starts the run straight away instead of after a model call.
+  const [tailorResume, setTailorResume] = useState(true);
   useEffect(() => {
     try {
       setWriteCoverLetter(window.localStorage.getItem('ja.coverLetter') === 'on');
+      setTailorResume(window.localStorage.getItem('ja.tailorResume') !== 'off');
     } catch {
       // Private windows and blocked site data both throw here; the default stands.
     }
@@ -199,7 +216,7 @@ export default function DiscoverPage() {
   }
 
   useEffect(() => {
-    load().catch((e) => setError(e.message));
+    load().catch((e) => (needsProfile(e) ? setNoProfile(true) : setError(e.message)));
     api('/api/sources')
       .then((d) => {
         const dd = d as { sources: { id: string; handleHint: string }[]; rejectCategories: string[]; searchConfigured: boolean };
@@ -269,7 +286,7 @@ export default function DiscoverPage() {
       if (action === 'apply') {
         const rRaw = await api(`/api/leads/${lead.id}/apply`, {
           method: 'POST',
-          body: JSON.stringify({ writeCoverLetter, autoTailorResume: true }),
+          body: JSON.stringify({ writeCoverLetter, autoTailorResume: tailorResume }),
         });
         const r = rRaw as { applicationId: string; tailoredResumeId?: string };
         window.location.href = `/applications/${r.applicationId}`;
@@ -349,6 +366,35 @@ export default function DiscoverPage() {
     onReject: () => setRejecting(lead),
   });
 
+  if (noProfile) {
+    return (
+      <div className="discover-page">
+        <div className="discover-heading">
+          <span className="section-title">Your next opportunity</span>
+          <h1>Find work</h1>
+        </div>
+        <section className="discover-welcome">
+          <span className="discover-welcome-icon" aria-hidden="true">
+            <Icon name="sparkles" size={26} />
+          </span>
+          <h2>Set up your profile to see jobs picked for you</h2>
+          <p>
+            Upload your resume and the app reads your experience, then finds openings that match
+            it and explains why each one fits. It takes about a minute.
+          </p>
+          <ol className="discover-welcome-steps">
+            <li><Icon name="text" size={16} /> Upload your resume</li>
+            <li><Icon name="checkCircle" size={16} /> Check the details it read</li>
+            <li><Icon name="target" size={16} /> Come back here for your matches</li>
+          </ol>
+          <a href="/profile" className="btn primary discover-welcome-cta">
+            Set up my profile <Icon name="arrowRight" size={16} />
+          </a>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="discover-page">
       <div className="discover-heading">
@@ -373,24 +419,27 @@ export default function DiscoverPage() {
               onClick={() => find(false)}
               title="Search the web for openings that match your profile"
             >
+              <Icon name="sparkles" className={busy === 'find' ? 'spin' : undefined} />
               {busy === 'find' ? 'Searching…' : 'Find new jobs'}
             </button>
             <details className="discover-options">
-              <summary>Search options</summary>
+              <summary>Search options <Icon name="chevron" size={14} className="chev" /></summary>
+              <div className="discover-menu">
             <button
               disabled={busy !== null}
               onClick={() => find(true)}
               title="Show the searches it would run. Costs nothing and needs no key."
             >
-              {busy === 'preview' ? 'Working…' : 'Preview search'}
+              <Icon name="eye" /> {busy === 'preview' ? 'Working…' : 'Preview search'}
             </button>
             <button
               disabled={busy !== null}
               onClick={crawl}
               title="Re-read the boards already on the list, without searching"
             >
-              {busy === 'crawl' ? 'Re-checking…' : 'Re-check known boards'}
+              <Icon name="refresh" className={busy === 'crawl' ? 'spin' : undefined} /> {busy === 'crawl' ? 'Re-checking…' : 'Re-check known boards'}
             </button>
+              </div>
             </details>
           </div>
         </div>
@@ -425,6 +474,7 @@ export default function DiscoverPage() {
                 aria-pressed={view.status === s}
                 onClick={() => change({ status: s })}
               >
+                <Icon name={TAB_ICON[s]!} size={15} />
                 {{ NEW: 'For you', SHORTLISTED: 'Saved', APPLIED: 'Applied', REJECTED: 'Dismissed', ALL: 'All jobs' }[s]}
                 {counts[s] !== undefined && <span className="muted nums"> {counts[s]}</span>}
               </button>
@@ -440,30 +490,45 @@ export default function DiscoverPage() {
           total={pageInfo.total}
         />
 
-        <details className="discover-preferences">
-        <summary>Application preferences</summary>
-        <label
-          className="row small muted"
-          style={{ gap: '.4rem', marginTop: '.6rem', alignItems: 'center' }}
-        >
-          <input
-            type="checkbox"
-            checked={writeCoverLetter}
-            onChange={(e) => {
-              setWriteCoverLetter(e.target.checked);
-              try {
-                window.localStorage.setItem('ja.coverLetter', e.target.checked ? 'on' : 'off');
-              } catch {
-                // Not being able to remember it is not a reason to refuse the change.
-              }
-            }}
-          />
-          Write a cover letter when I press Apply
-          <span className="muted">
-            — off by default. A form that requires one gets one either way.
-          </span>
-        </label>
-        </details>
+        <div className="discover-preferences" role="group" aria-label="When I press Apply">
+          <span className="discover-pref-title">When I press Apply</span>
+          <label className="discover-pref">
+            <input
+              type="checkbox"
+              checked={tailorResume}
+              onChange={(e) => {
+                setTailorResume(e.target.checked);
+                try {
+                  window.localStorage.setItem('ja.tailorResume', e.target.checked ? 'on' : 'off');
+                } catch {
+                  // Not being able to remember it is not a reason to refuse the change.
+                }
+              }}
+            />
+            <span>
+              <strong>Tailor my resume to the job</strong>
+              <span className="muted"> — adds the job's keywords your experience supports. One AI call; off applies with your resume as it is.</span>
+            </span>
+          </label>
+          <label className="discover-pref">
+            <input
+              type="checkbox"
+              checked={writeCoverLetter}
+              onChange={(e) => {
+                setWriteCoverLetter(e.target.checked);
+                try {
+                  window.localStorage.setItem('ja.coverLetter', e.target.checked ? 'on' : 'off');
+                } catch {
+                  // Not being able to remember it is not a reason to refuse the change.
+                }
+              }}
+            />
+            <span>
+              <strong>Write a cover letter</strong>
+              <span className="muted"> — a form that requires one gets one either way.</span>
+            </span>
+          </label>
+        </div>
 
         <SelectionBar
           picked={picked}
@@ -496,7 +561,7 @@ export default function DiscoverPage() {
             <button onClick={() => change({ ...DEFAULT_VIEW })}>Reset filters</button>}
           </div>
         ) : (
-          <div className="discover-job-list">{leads.map((lead) => <LeadCard key={lead.id} {...cardProps(lead)} />)}</div>
+          <div className="discover-job-list">{leads.map((lead, i) => <LeadCard key={lead.id} index={i} {...cardProps(lead)} />)}</div>
         )}
 
         <Pager
@@ -602,7 +667,7 @@ function Controls({
                 : 'Lowest first — click for highest first'
             }
           >
-            {view.dir === 'desc' ? '↓' : '↑'}
+            <Icon name="sort" size={15} className={view.dir === 'asc' ? 'flip' : undefined} />
           </button>
         </div>
       </div>
@@ -621,7 +686,7 @@ function Controls({
       </div>
 
       <details className="discover-filters">
-      <summary>More filters{view.minScore || view.depth !== 'any' ? ' •' : ''}</summary>
+      <summary><Icon name="sliders" size={15} /> More filters{view.minScore || view.depth !== 'any' ? ' •' : ''}</summary>
       <div className="discover-filter-fields">
       <div className="field">
         <span className="cap">Minimum match</span>
@@ -799,6 +864,7 @@ function Pager({
 
 function LeadCard({
   lead,
+  index,
   busy,
   error,
   picked,
@@ -809,6 +875,7 @@ function LeadCard({
   onReject,
 }: {
   lead: Lead;
+  index: number;
   busy: boolean;
   error?: string;
   picked: boolean;
@@ -821,151 +888,163 @@ function LeadCard({
   const [open, setOpen] = useState(false);
   const r = lead.scoreReasons ?? {};
   const score = Math.round(lead.score);
-  const tone = score >= 70 ? 'var(--good)' : score >= 45 ? 'var(--warn)' : 'var(--bad)';
-  const toneSoft = score >= 70 ? 'var(--good-soft)' : score >= 45 ? 'var(--warn-soft)' : 'var(--bad-soft)';
+  const tone = score >= 70 ? 'good' : score >= 45 ? 'warn' : 'bad';
+  const actionable = lead.status === 'NEW' || lead.status === 'SHORTLISTED';
 
   return (
-    <div
-      style={{
-        borderTop: '1px solid var(--border)',
-        padding: '.9rem .6rem',
-        margin: '0 -.6rem',
-        borderRadius: 'var(--radius-sm)',
-        transition: 'background var(--fast) var(--ease)',
-      }}
-      className={`lead-row discover-job${picked ? ' is-selected' : ''}`}
+    <article
+      className={`jc${picked ? ' is-selected' : ''}`}
+      style={{ '--i': Math.min(index, 12) } as React.CSSProperties}
     >
-      <div className="discover-job-layout">
-        <div style={{ minWidth: 0 }}>
-          <div className="row discover-job-title" style={{ gap: '.55rem' }}>
-            <input
-              type="checkbox"
-              checked={picked}
-              onChange={onPick}
-              title="Pick this one to be read in full"
-              aria-label={`Select ${lead.title} at ${lead.companyName}`}
-            />
-            <span
-              style={{
-                color: tone,
-                background: toneSoft,
-                fontVariantNumeric: 'tabular-nums',
-                fontWeight: 700,
-                fontSize: '.85rem',
-                borderRadius: 'var(--radius-sm)',
-                padding: '.15rem .35rem',
-                minWidth: '2.1rem',
-                textAlign: 'center',
-              }}
-            >
-              {score}% match
-            </span>
-            <a href={`/jobs/${lead.id}`}>
-              <strong>{lead.title}</strong>
-            </a>
-            <span className="muted small discover-company">{lead.companyName}</span>
+      <header className="jc-head">
+        <input
+          type="checkbox"
+          className="jc-pick"
+          checked={picked}
+          onChange={onPick}
+          title="Pick this one to be read in full"
+          aria-label={`Select ${lead.title} at ${lead.companyName}`}
+        />
+        <div className="jc-titles">
+          <a href={`/jobs/${lead.id}`} className="jc-title">
+            {lead.title}
+          </a>
+          <div className="jc-meta">
+            <span className="jc-company"><Icon name="building" size={14} />{lead.companyName}</span>
+            {lead.location && <span><Icon name="pin" size={14} />{lead.location}</span>}
+            {lead.remote && <span className="jc-chip"><Icon name="globe" size={12} />Remote</span>}
             <a
               href={lead.url}
               target="_blank"
               rel="noreferrer"
-              className="small muted"
+              className="jc-posting"
               title="Open the original posting"
-              aria-label={`Original posting for ${lead.title}`}
             >
-              ↗
+              Posting <Icon name="external" size={12} />
             </a>
-            {lead.remote && <span className="src">remote</span>}
-            {lead.location && <span className="muted small">{lead.location}</span>}
-            {!lead.deepScored && <span className="src" title="Ranked on keywords only, not read in full">quick score</span>}
           </div>
-
-          {r.dealbreaker && (
-            <div className="notice bad" style={{ marginTop: '.4rem' }}>
-              Blocker: {r.dealbreaker}
-            </div>
-          )}
-          {r.forIt?.length ? (
-            <div className="small" style={{ marginTop: '.35rem', color: 'var(--good)' }}>
-              + {r.forIt.slice(0, 2).join(' · ')}
-            </div>
-          ) : null}
-          {r.againstIt?.length ? (
-            <div className="small" style={{ color: 'var(--warn)' }}>
-              − {r.againstIt.slice(0, 2).join(' · ')}
-            </div>
-          ) : null}
-          {!lead.deepScored && <QuickScoreReasons reasons={r} />}
         </div>
+        <div className={`jc-score jc-score-${tone}`} title={lead.deepScored ? 'Read in full' : 'Ranked on keywords only, not read in full'}>
+          <Icon name="target" size={14} />
+          <strong>{score}%</strong>
+          <span>{lead.deepScored ? 'match' : 'quick match'}</span>
+        </div>
+      </header>
 
-        {/*
-          Apply is the one action this card exists to offer; everything else
-          is here for the exceptions. Five identically-weighted buttons made
-          Apply just one option among equals, so the rest are ghost buttons -
-          still one click away, but visibly the supporting cast rather than
-          five things all shouting at once.
-        */}
-        <div className="row discover-job-actions">
-          <a href={`/jobs/${lead.id}`} className="btn" title="Everything about this job on one page">
-            View details
+      <JobDates postedAt={lead.postedAt} discoveredAt={lead.discoveredAt} />
+
+      {r.dealbreaker && <div className="notice bad jc-note"><Icon name="alert" size={14} /> Blocker: {r.dealbreaker}</div>}
+      {r.forIt?.length || r.againstIt?.length ? (
+        <ul className="jc-verdict" aria-label="Why it matches">
+          {r.forIt?.slice(0, 2).map((t, i) => (
+            <li key={`+${i}`} className="jc-verdict-for"><Icon name="checkCircle" size={15} />{t}</li>
+          ))}
+          {r.againstIt?.slice(0, 2).map((t, i) => (
+            <li key={`-${i}`} className="jc-verdict-against"><Icon name="alert" size={15} />{t}</li>
+          ))}
+        </ul>
+      ) : null}
+      {!lead.deepScored && <QuickScoreReasons reasons={r} />}
+
+      {error && <div className="notice bad jc-note">{error}</div>}
+
+      {open && (
+        <pre className="jc-description">{lead.descriptionText ?? 'No description captured.'}</pre>
+      )}
+
+      {/*
+        Apply is the one action this card exists to offer; everything else
+        is here for the exceptions, so it reads as quiet text on the left
+        rather than four more buttons competing with it.
+      */}
+      <footer className="jc-foot">
+        <div className="jc-quiet">
+          {actionable && lead.status === 'NEW' && (
+            <button disabled={busy} onClick={onShortlist}><Icon name="bookmark" size={14} />Save</button>
+          )}
+          {actionable && (
+            <button
+              disabled={busy}
+              onClick={onApplied}
+              title="You applied to this one yourself — record it and take it out of the queue"
+            >
+              <Icon name="checkCircle" size={14} />Already applied
+            </button>
+          )}
+          {actionable && (
+            <button className="jc-reject" disabled={busy} onClick={onReject}>
+              <Icon name="x" size={14} />Not for me
+            </button>
+          )}
+          <button aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+            <Icon name="text" size={14} />{open ? 'Hide description' : 'Description'}
+            <Icon name="chevron" size={13} className={open ? 'chev open' : 'chev'} />
+          </button>
+        </div>
+        <div className="jc-main">
+          <a href={`/jobs/${lead.id}`} className="btn jc-btn" title="Everything about this job on one page">
+            <Icon name="eye" size={15} />View details
           </a>
-          {lead.status === 'NEW' || lead.status === 'SHORTLISTED' ? (
-            <>
-              <button className="primary" disabled={busy} onClick={onApply}>
-                Apply
-              </button>
-              {lead.status === 'NEW' && <button className="ghost" disabled={busy} onClick={onShortlist}>
-                Save
-              </button>}
-              <button
-                className="ghost"
-                disabled={busy}
-                onClick={onApplied}
-                title="You applied to this one yourself — record it and take it out of the queue"
-              >
-                Already applied
-              </button>
-              <button className="danger ghost" disabled={busy} onClick={onReject}>
-                Not for me
-              </button>
-            </>
+          {actionable ? (
+            <button className="primary jc-btn jc-apply" disabled={busy} onClick={onApply}>
+              <Icon name="send" size={15} />Apply
+              <Icon name="arrowRight" size={15} className="jc-arrow" />
+            </button>
           ) : (
             <span className={`pill ${lead.status}`}>{lead.status}</span>
           )}
         </div>
-      </div>
+      </footer>
+    </article>
+  );
+}
 
-      {error && (
-        <div className="notice bad" style={{ marginTop: '.5rem' }}>
-          {error}
-        </div>
+/**
+ * When the job was posted (if the board says) and when it was found here.
+ * A posting's age is the best cheap signal of whether it is still open.
+ */
+function JobDates({ postedAt, discoveredAt }: { postedAt?: string | null; discoveredAt?: string | null }) {
+  if (!postedAt && !discoveredAt) return null;
+  const posted = postedAt ? new Date(postedAt) : null;
+  const found = discoveredAt ? new Date(discoveredAt) : null;
+  const stale = posted ? Date.now() - posted.getTime() > 30 * 86_400_000 : false;
+  return (
+    <div className={`jc-dates${stale ? ' is-stale' : ''}`}>
+      {posted && (
+        <span title={`Posted ${posted.toLocaleString()}`}>
+          <Icon name="calendar" size={13} /> Posted {ago(posted)}
+          {stale && <em> · older posting</em>}
+        </span>
       )}
-
-      <button
-        className="small"
-        aria-expanded={open}
-        style={{ marginTop: '.4rem', border: 0, background: 'none', padding: 0, color: 'var(--muted)' }}
-        onClick={() => setOpen((o) => !o)}
-      >
-        {open ? 'hide' : 'show'} description
-      </button>
-      {open && (
-        <pre
-          className="small muted"
-          style={{ whiteSpace: 'pre-wrap', marginTop: '.4rem', maxHeight: '14rem', overflow: 'auto' }}
-        >
-          {lead.descriptionText ?? 'No description captured.'}
-        </pre>
+      {found && (
+        <span title={`Found by Job Applier ${found.toLocaleString()}`}>
+          <Icon name="clock" size={13} /> Found {shortDate(found)}
+        </span>
       )}
     </div>
   );
 }
 
+function ago(d: Date): string {
+  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 30) return `${days} days ago`;
+  const months = Math.floor(days / 30);
+  return months === 1 ? 'a month ago' : `${months} months ago`;
+}
+
+function shortDate(d: Date): string {
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) });
+}
+
 /**
- * What a keyword score is actually made of.
+ * What a keyword score is actually made of, as chips.
  *
  * A number with nothing behind it is the reason the ranking felt arbitrary.
- * These two lines say it plainly: here is what the posting talks about that
- * you have done, and here is what it talks about that you have not.
+ * Fragments like "end" or "you'll" come out of the keyword split and mean
+ * nothing to a reader, so they are left off the card.
  */
 function QuickScoreReasons({
   reasons,
@@ -978,22 +1057,20 @@ function QuickScoreReasons({
     dislikedTerms?: string[];
   };
 }) {
-  const shared = reasons.sharedTerms ?? [];
-  const missing = reasons.missingTerms ?? [];
-  const learned = [...(reasons.likedTerms ?? []), ...(reasons.dislikedTerms ?? [])];
-  if (!shared.length && !missing.length && !learned.length) return null;
+  const readable = (t: string) => t.length > 3 && !/['’]/.test(t);
+  const shared = [...new Set(reasons.sharedTerms ?? [])].filter(readable).slice(0, 5);
+  const missing = [...new Set(reasons.missingTerms ?? [])].filter((t) => readable(t) && !shared.includes(t)).slice(0, 3);
+  if (!shared.length && !missing.length) return null;
 
   return (
-    <div className="muted small" style={{ marginTop: '.3rem' }}>
-      {shared.length > 0 && (
-        <>
-          <span style={{ color: 'var(--good)' }}>in your resume:</span> {shared.slice(0, 6).join(', ')}
-        </>
-      )}
-      {shared.length > 0 && missing.length > 0 && ' · '}
-      {missing.length > 0 && <>not in it: {missing.slice(0, 5).join(', ')}</>}
-      {learned.length > 0 && ` · from your past picks: ${learned.slice(0, 4).join(', ')}`}
-    </div>
+    <ul className="jc-reasons" aria-label="Why it ranked here">
+      {shared.map((t) => (
+        <li key={`s-${t}`} className="jc-for" title="In your resume">{t}</li>
+      ))}
+      {missing.map((t) => (
+        <li key={`m-${t}`} className="jc-missing" title="Not in your resume">{t}</li>
+      ))}
+    </ul>
   );
 }
 

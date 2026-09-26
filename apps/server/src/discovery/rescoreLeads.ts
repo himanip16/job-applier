@@ -216,8 +216,23 @@ export async function rescoreLexically(profileId: string): Promise<number> {
     // permanently delete most of a healthy queue on every crawl. Fifteen is
     // where the honest bottom of the distribution sits: marketing, support
     // and compliance postings for a backend engineer.
+    //
+    // Moved to Dismissed, never deleted: nothing in the app removes your data
+    // on its own. A lead you disagree with is one tab away.
     if (lex.score < PRUNE_BELOW) {
-      await prisma.jobLead.delete({ where: { id: lead.id } }).catch(() => {});
+      await prisma.jobLead
+        .update({
+          where: { id: lead.id },
+          data: {
+            status: 'REJECTED',
+            score: lex.score,
+            scoreReasons: serialiseReasons(lex, null),
+            scoredAt: new Date(),
+            decidedAt: new Date(),
+            rejectReason: `Auto-dismissed: keyword match ${lex.score}%, below ${PRUNE_BELOW}%`,
+          },
+        })
+        .catch(() => {});
       pruned++;
       continue;
     }
@@ -232,6 +247,6 @@ export async function rescoreLexically(profileId: string): Promise<number> {
     });
     updated++;
   }
-  if (pruned) process.stdout.write(`[discovery] pruned ${pruned} hopeless lead(s)\n`);
+  if (pruned) process.stdout.write(`[discovery] moved ${pruned} hopeless lead(s) to Dismissed\n`);
   return updated;
 }

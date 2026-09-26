@@ -23,6 +23,9 @@ const coverLetterMock = vi.fn();
 
 vi.mock('../src/llm/inferAnswer.js', () => ({
   inferAnswer: (...args: unknown[]) => inferMock(...args),
+  // Batching is an envelope; the tests reason per field.
+  inferAnswers: async ({ fields, ...rest }: { fields: { id: string }[] }) =>
+    new Map(await Promise.all(fields.map(async (field) => [field.id, await inferMock({ ...rest, field })] as const))),
 }));
 vi.mock('../src/llm/coverLetter.js', () => ({
   generateEssayAnswer: (...args: unknown[]) => essayMock(...args),
@@ -34,7 +37,7 @@ requireTestDatabase();
 
 const { prisma } = await import('../src/lib/db.js');
 const { runApplication, submitAnswers, decideReview } = await import('../src/engine/runner.js');
-const { closeContext } = await import('../src/browser/session.js');
+const { closeContext, getContextSync } = await import('../src/browser/session.js');
 const { bus } = await import('../src/lib/events.js');
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -320,6 +323,56 @@ describe('a complete application run', () => {
     bus.off(`app:${app.id}`, listen);
     const done = await prisma.application.findUniqueOrThrow({ where: { id: app.id } });
     expect(done.status).toBe('CANCELLED');
+  }, 180_000);
+});
+
+describe('the tab closing mid-run', () => {
+  it('fails at once with a clear reason, and the retry does not ask the same questions again', async () => {
+    inferMock.mockResolvedValue({
+      answerable: false, value: '', values: [], confidence: 0,
+      evidence: '', missingInformation: 'unknown',
+    });
+    essayMock.mockResolvedValue('A short, specific answer.');
+    coverLetterMock.mockResolvedValue({ body: 'letter', claimsMade: [], unsupportedClaims: [] });
+
+    const app = await createApplication('greenhouse-like.html');
+    const first = runApplication(app.id);
+    await waitForStatus(app.id, 'NEEDS_INPUT');
+
+    // Someone closes the window while the questions are up. The run used to
+    // sit parked until they were answered, then report every field as "not
+    // found in DOM" and crash taking a screenshot of the dead page.
+    const url = `${baseUrl}/greenhouse-like.html`;
+    await getContextSync()!.pages().find((p) => p.url().startsWith(url))!.close();
+    await first;
+
+    const failed = await prisma.application.findUniqueOrThrow({ where: { id: app.id } });
+    expect(failed.status).toBe('FAILED');
+    expect(failed.blockedReason).toMatch(/tab was closed while waiting for your answers/i);
+
+    // The answers typed into the popup are saved even with no run to take them.
+    const pending = await prisma.pendingQuestion.findMany({ where: { applicationId: app.id } });
+    expect(pending.length).toBeGreaterThan(0);
+    for (const q of pending) {
+      await prisma.pendingQuestion.update({
+        where: { id: q.id },
+        data: { answeredAt: new Date(), answerValue: /notice period/i.test(q.rawLabel) ? '1 month' : ['Go', 'TypeScript'] },
+      });
+    }
+
+    // Start again: straight to review, nothing asked twice.
+    await prisma.application.update({ where: { id: app.id }, data: { status: 'QUEUED', blockedReason: null } });
+    const second = runApplication(app.id);
+    await waitForStatus(app.id, 'REVIEW');
+    const asked = await prisma.pendingQuestion.count({ where: { applicationId: app.id, answeredAt: null } });
+    expect(asked).toBe(0);
+    const plan = (await prisma.application.findUniqueOrThrow({ where: { id: app.id } })).fieldPlan as Array<{
+      label: string; value: unknown; source: string; filled: boolean;
+    }>;
+    expect(plan.find((p) => /notice period/i.test(p.label))).toMatchObject({ value: '1 month', source: 'USER', filled: true });
+
+    expect(decideReview(app.id, false)).toBe(true);
+    await second;
   }, 180_000);
 });
 

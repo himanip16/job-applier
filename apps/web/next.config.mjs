@@ -22,6 +22,16 @@ export default {
         source: '/api/:path*',
         destination: 'http://localhost:8787/api/:path*',
       },
+      // Run screenshots and uploaded resumes are served by the API too. Without
+      // these the page asked itself for them and every image rendered broken.
+      {
+        source: '/artifacts/:path*',
+        destination: 'http://localhost:8787/artifacts/:path*',
+      },
+      {
+        source: '/files/:path*',
+        destination: 'http://localhost:8787/files/:path*',
+      },
     ];
   },
 };

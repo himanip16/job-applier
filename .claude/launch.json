@@ -8,6 +8,30 @@
         "dev"
       ],
       "port": 3000
+    },
+    {
+      "name": "job-applier-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@ja/web",
+        "exec",
+        "next",
+        "dev",
+        "-p",
+        "3001"
+      ],
+      "port": 3001
+    },
+    {
+      "name": "job-applier-server",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@ja/server",
+        "dev"
+      ],
+      "port": 8787
     }
   ]
 }

@@ -4,6 +4,8 @@ import { prisma, type Prisma } from '../lib/db.js';
 import { enqueue, activeRuns } from '../engine/queue.js';
 import { submitAnswers, decideReview, continueRun } from '../engine/runner.js';
 import { rememberAnswer } from '../engine/answerBank.js';
+import { ANSWER_POLL_MS } from '../engine/humanGate.js';
+import { isParked, blockerKey } from '../engine/waiters.js';
 import { adapterFor } from '../ats/registry.js';
 import { matchCanonical, normalizeLabel } from '@ja/shared';
 import { NOT_YOURS, ownedApplication } from '../auth/ownership.js';
@@ -82,7 +84,9 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
       },
     });
     if (!application) return reply.code(404).send({ error: 'Not found' });
-    return { application };
+    // NEEDS_HUMAN covers both a run paused at a wall, which can carry on, and a
+    // finished run whose outcome is unclear, which cannot. Only this tells them apart.
+    return { application, atWall: isParked(blockerKey(application.id)) };
   });
 
   app.post<{ Params: { id: string } }>('/api/applications/:id/start', async (req, reply) => {
@@ -93,6 +97,9 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
       where: { id: req.params.id },
       data: { status: 'QUEUED', blockedReason: null },
     });
+    // Unanswered questions belong to the run that died; the new one re-reads
+    // the form and asks again. Answered ones are kept and reused.
+    await prisma.pendingQuestion.deleteMany({ where: { applicationId: req.params.id, answeredAt: null } });
     enqueue(req.params.id);
     return { ok: true };
   });
@@ -100,6 +107,7 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
   app.post<{ Params: { id: string } }>('/api/applications/:id/answers', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
+    if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
 
     const { answers } = z
       .object({
@@ -159,11 +167,43 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
       remember: a.remember,
     })));
 
-    if (!delivered) {
-      return reply.code(409).send({
-        error: 'That run is not currently waiting for answers. They were saved to your answer bank; restart the application to use them.',
-      });
+    if (delivered) return { ok: true };
+
+    // Not parked in this process. The run may be alive in another one (started
+    // from the terminal), which watches the database and carries on within a
+    // poll or two; or it may be gone, in which case starting it again is what
+    // you wanted - a fresh run reuses every answer already on this application.
+    return { ok: true, ...(await resumeAfterAnswers(req.params.id)) };
+  });
+
+  async function resumeAfterAnswers(applicationId: string): Promise<{ resumed: 'elsewhere' | 'restarted' | 'waiting' }> {
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => setTimeout(r, ANSWER_POLL_MS * 1.5));
+      const app = await prisma.application.findUnique({ where: { id: applicationId } });
+      if (app?.status !== 'NEEDS_INPUT') return { resumed: 'elsewhere' };
     }
+    const open = await prisma.pendingQuestion.count({ where: { applicationId, answeredAt: null } });
+    if (open > 0) return { resumed: 'waiting' };
+    await prisma.application.update({
+      where: { id: applicationId },
+      data: { status: 'QUEUED', blockedReason: 'Restarted with your answers.' },
+    });
+    enqueue(applicationId);
+    return { resumed: 'restarted' };
+  }
+
+  /** "I checked: it did / did not go through" - for a submit nobody could confirm. */
+  app.post<{ Params: { id: string } }>('/api/applications/:id/outcome', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
+    const { submitted } = z.object({ submitted: z.boolean() }).parse(req.body);
+    await prisma.application.update({
+      where: { id: req.params.id },
+      data: submitted
+        ? { status: 'SUBMITTED', submittedAt: new Date(), confirmation: 'You confirmed it went through.', blockedReason: null }
+        : { status: 'FAILED', blockedReason: 'Not submitted - you checked. Resume to fill it in again.' },
+    });
     return { ok: true };
   });
 

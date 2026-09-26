@@ -35,3 +35,14 @@ export async function textOf(page: Page, selector: string): Promise<string> {
   if (!(await el.count())) return '';
   return (await el.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
 }
+
+/**
+ * What a file input is for, from everything that might say so.
+ *
+ * Greenhouse labels both of its upload inputs "Attach"; only the id says
+ * `resume` or `cover_letter`. Matching on the label alone found neither, and
+ * applications went out with no resume.
+ */
+export function fileHint(f: Pick<FormField, 'label' | 'name' | 'selector'>): string {
+  return `${f.label} ${f.name ?? ''} ${f.selector}`;
+}
