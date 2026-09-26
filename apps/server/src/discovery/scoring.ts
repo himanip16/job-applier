@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { normalizeLabel, tokenize } from '@ja/shared';
 import { prisma, type Prisma } from '../lib/db.js';
 import { generate, describeLlmError } from '../llm/client.js';
-import type { DiscoveredJob } from './sources.js';
+import type { DiscoveredJob } from './sources/index.js';
 
 /**
  * Ranking leads, and learning to rank them better.

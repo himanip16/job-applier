@@ -1,7 +1,7 @@
 import { prisma, type Prisma } from '../lib/db.js';
 import { bus } from '../lib/events.js';
 import { newPage } from '../browser/session.js';
-import { type DiscoveredJob } from './sources.js';
+import { type DiscoveredJob } from './sources/index.js';
 import {
   loadScoringContext,
   scoreLexically,

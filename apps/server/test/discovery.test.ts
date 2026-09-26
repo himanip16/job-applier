@@ -10,7 +10,7 @@ const { requireTestDatabase } = await import('./testDb.js');
 requireTestDatabase();
 
 const { prisma } = await import('../src/lib/db.js');
-const { greenhouseSource, leverSource, ashbySource } = await import('../src/discovery/sources.js');
+const { greenhouseSource, leverSource, ashbySource } = await import('../src/discovery/sources/index.js');
 const { scoreLexically, learnFromDecision, loadSignals, loadScoringContext, jobTerms } = await import(
   '../src/discovery/scoring.js'
 );

@@ -1,6 +1,6 @@
 import { prisma, type Prisma } from '../lib/db.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
-import { type DiscoveredJob } from './sources.js';
+import { type DiscoveredJob } from './sources/index.js';
 import {
   assessFit,
   blendScores,

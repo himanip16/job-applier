@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/db.js';
-import { API_SOURCES } from '../discovery/sources.js';
-import { eightfoldSource, smartRecruitersSource, workdaySource } from '../discovery/careerSites.js';
+import { API_SOURCES, SHARED_PLATFORM_SOURCES } from '../discovery/sources/index.js';
+
 import { isFirecrawlConfigured } from '../discovery/firecrawl.js';
 import type { RequireProfile } from './types.js';
 
@@ -29,8 +29,8 @@ export const REJECT_CATEGORIES = [
 export function registerCompanyRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   app.get('/api/sources', async () => ({
     // The careers-site platforms many companies share can be added by hand too;
-    // the one-company crawlers (Google, Apple, ...) are only reached via search.
-    sources: [...API_SOURCES, workdaySource, smartRecruitersSource, eightfoldSource].map((s) => ({ id: s.id, handleHint: s.handleHint })).concat([
+    // the rest are one company's own site, reached via search.
+    sources: [...API_SOURCES, ...SHARED_PLATFORM_SOURCES].map((s) => ({ id: s.id, handleHint: s.handleHint })).concat([
       { id: 'careers-page', handleHint: 'full URL of the careers page to crawl' },
     ]),
     rejectCategories: REJECT_CATEGORIES,

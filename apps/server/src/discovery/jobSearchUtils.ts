@@ -1,6 +1,6 @@
 import { type BoardRef, boardKey, parseBoardUrl } from './boardUrls.js';
 import { type SearchHit } from './firecrawl.js';
-import { type DiscoveredJob } from './sources.js';
+import { type DiscoveredJob } from './sources/index.js';
 
 /**
  * Senior-level job title patterns to filter out.

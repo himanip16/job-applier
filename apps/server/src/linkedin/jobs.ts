@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import type { DiscoveredJob } from '../discovery/sources.js';
+import type { DiscoveredJob } from '../discovery/sources/index.js';
 import { config } from '../lib/config.js';
 import { openLinkedIn, scrollToLoad } from './session.js';
 import { jobIdFrom, jobUrlFor } from './normalize.js';

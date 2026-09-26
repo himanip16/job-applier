@@ -1,7 +1,7 @@
 import { countryByCode, locatedIn, type Country } from '@ja/shared';
 import { prisma } from '../lib/db.js';
 import { newPage } from '../browser/session.js';
-import { crawlCareersPage, sourceById, type DiscoveredJob, type FetchHints } from './sources.js';
+import { crawlCareersPage, sourceById, type DiscoveredJob, type FetchHints } from './sources/index.js';
 import { buildSearchPlan, titleMatchesPlan, type SearchPlan } from './searchQueries.js';
 import { rescoreLexically } from './rescoreLeads.js';
 import { loadScoringContext, scoreLexically, serialiseReasons } from './scoring.js';
