@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, needsProfile } from '../../lib/api';
 import { Icon, type IconName } from '../../components/Icon';
+import { COUNTRIES, countryByCode, countryFromText } from '@ja/shared/countries';
 
 interface Lead {
   id: string;
@@ -227,7 +228,22 @@ export default function DiscoverPage() {
       .catch(() => {});
   }, [load]);
 
-  async function find(dryRun = false) {
+  // Asked before every search: which country to look in.
+  const [askCountry, setAskCountry] = useState<null | 'find' | 'preview'>(null);
+  const [searchCountry, setSearchCountry] = useState('');
+  useEffect(() => {
+    let saved = '';
+    try { saved = window.localStorage.getItem('ja.searchCountry') ?? ''; } catch { /* default below */ }
+    if (countryByCode(saved)) { setSearchCountry(saved); return; }
+    // First time: start from the profile's own country.
+    api<{ profile: { country: string | null } | null }>('/api/profile')
+      .then((d) => setSearchCountry(countryFromText(d.profile?.country)?.code ?? 'IN'))
+      .catch(() => setSearchCountry('IN'));
+  }, []);
+
+  async function find(dryRun = false, country = searchCountry) {
+    setAskCountry(null);
+    try { window.localStorage.setItem('ja.searchCountry', country); } catch { /* not remembered, still used */ }
     setBusy(dryRun ? 'preview' : 'find');
     setError(null);
     setFlash(null);
@@ -235,7 +251,7 @@ export default function DiscoverPage() {
     try {
       const rRaw = await api('/api/discovery/find', {
         method: 'POST',
-        body: JSON.stringify({ deepScoreTop: 15, dryRun }),
+        body: JSON.stringify({ deepScoreTop: 15, dryRun, country: country || undefined }),
       });
       const r = rRaw as { report: SearchReport };
       setReport(r.report);
@@ -416,7 +432,7 @@ export default function DiscoverPage() {
             <button
               className="primary"
               disabled={busy !== null}
-              onClick={() => find(false)}
+              onClick={() => setAskCountry('find')}
               title="Search the web for openings that match your profile"
             >
               <Icon name="sparkles" className={busy === 'find' ? 'spin' : undefined} />
@@ -427,7 +443,7 @@ export default function DiscoverPage() {
               <div className="discover-menu">
             <button
               disabled={busy !== null}
-              onClick={() => find(true)}
+              onClick={() => setAskCountry('preview')}
               title="Show the searches it would run. Costs nothing and needs no key."
             >
               <Icon name="eye" /> {busy === 'preview' ? 'Working…' : 'Preview search'}
@@ -587,6 +603,15 @@ export default function DiscoverPage() {
         </div>
       </details>
 
+      {askCountry && (
+        <CountryDialog
+          value={searchCountry}
+          preview={askCountry === 'preview'}
+          onChange={setSearchCountry}
+          onCancel={() => setAskCountry(null)}
+          onSearch={() => find(askCountry === 'preview', searchCountry)}
+        />
+      )}
       {rejecting && (
         <RejectDialog
           lead={rejecting}
@@ -610,6 +635,16 @@ export default function DiscoverPage() {
  * one you forget you left on, and then the page is lying to you about how many
  * jobs you have.
  */
+const SORTS: { value: string; label: string }[] = [
+  { value: 'score:desc', label: 'Best match' },
+  { value: 'discovered:desc', label: 'Newest found' },
+  { value: 'discovered:asc', label: 'Oldest found' },
+  { value: 'company:asc', label: 'Company A–Z' },
+  { value: 'title:asc', label: 'Title A–Z' },
+];
+
+const MATCH_STEPS = ['', '50', '70', '85'];
+
 function Controls({
   view,
   typed,
@@ -625,121 +660,96 @@ function Controls({
 }) {
   const filtered =
     view.q !== '' || view.minScore !== '' || view.remote !== 'any' || view.depth !== 'any';
+  const sortValue = `${view.sort}:${view.dir}`;
 
   return (
-    <div className="toolbar discover-toolbar">
-      <div className="field grow">
-        <span className="cap">search</span>
-        <input
-          type="search"
-          aria-label="Search jobs"
-          value={typed}
-          placeholder="Title, company or location"
-          onChange={(e) => onTyped(e.target.value)}
-        />
-      </div>
-
-      {/*
-        Sort and its direction are one control, not two - the arrow is
-        meaningless without the field it applies to, and on its own it used to
-        wrap onto a line of its own below the select.
-      */}
-      <div className="field">
-        <span className="cap">sort by</span>
-        <div className="row" style={{ gap: '.35rem', flexWrap: 'nowrap' }}>
-          <select
-            aria-label="Sort jobs"
-            value={view.sort}
-            onChange={(e) => onChange({ sort: e.target.value as View['sort'] })}
-          >
-            <option value="score">score</option>
-            <option value="discovered">when found</option>
-            <option value="company">company</option>
-            <option value="title">title</option>
-          </select>
-          <button
-            className="small"
-            onClick={() => onChange({ dir: view.dir === 'desc' ? 'asc' : 'desc' })}
-            aria-label={view.dir === 'desc' ? 'Highest first' : 'Lowest first'}
-            title={
-              view.dir === 'desc'
-                ? 'Highest first — click for lowest first'
-                : 'Lowest first — click for highest first'
-            }
-          >
-            <Icon name="sort" size={15} className={view.dir === 'asc' ? 'flip' : undefined} />
-          </button>
+    <div className="discover-controls">
+      <div className="toolbar discover-toolbar">
+        <div className="field grow">
+          <span className="cap">search</span>
+          <input
+            type="search"
+            aria-label="Search jobs"
+            value={typed}
+            placeholder="Search title, company or city"
+            onChange={(e) => onTyped(e.target.value)}
+          />
         </div>
+
+        <label className="discover-select">
+          <Icon name="sort" size={15} />
+          <span className="sr-only">Sort jobs</span>
+          <select
+            value={SORTS.some((s) => s.value === sortValue) ? sortValue : 'score:desc'}
+            onChange={(e) => {
+              const [sort, dir] = e.target.value.split(':') as [View['sort'], View['dir']];
+              onChange({ sort, dir });
+            }}
+          >
+            {SORTS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+        </label>
+
+        <label className="discover-select">
+          <Icon name="pin" size={15} />
+          <span className="sr-only">Work location</span>
+          <select value={view.remote} onChange={(e) => onChange({ remote: e.target.value as View['remote'] })}>
+            <option value="any">Anywhere</option>
+            <option value="yes">Remote only</option>
+            <option value="no">On-site</option>
+          </select>
+        </label>
+
+        <details className="discover-filters">
+          <summary><Icon name="sliders" size={15} /> More{view.depth !== 'any' ? ' •' : ''}</summary>
+          <div className="discover-filter-fields">
+            <div className="field">
+              <span className="cap">How it was scored</span>
+              <select
+                aria-label="Match assessment"
+                value={view.depth}
+                onChange={(e) => onChange({ depth: e.target.value as View['depth'] })}
+              >
+                <option value="any">Any way</option>
+                <option value="deep">Read in full by AI</option>
+                <option value="quick">Keywords only</option>
+              </select>
+            </div>
+            <div className="field">
+              <span className="cap">Jobs per page</span>
+              <select aria-label="Jobs per page" value={view.limit} onChange={(e) => onChange({ limit: Number(e.target.value) })}>
+                {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+          </div>
+        </details>
       </div>
 
-      <div className="field">
-        <span className="cap">remote</span>
-        <select
-          aria-label="Work location"
-          value={view.remote}
-          onChange={(e) => onChange({ remote: e.target.value as View['remote'] })}
-        >
-          <option value="any">any</option>
-          <option value="yes">remote only</option>
-          <option value="no">on site</option>
-        </select>
-      </div>
-
-      <details className="discover-filters">
-      <summary><Icon name="sliders" size={15} /> More filters{view.minScore || view.depth !== 'any' ? ' •' : ''}</summary>
-      <div className="discover-filter-fields">
-      <div className="field">
-        <span className="cap">Minimum match</span>
-        <input
-          type="number"
-          aria-label="Minimum match score"
-          min={0}
-          max={100}
-          value={view.minScore}
-          placeholder="0"
-          onChange={(e) => onChange({ minScore: e.target.value })}
-          style={{ width: '5rem' }}
-        />
-      </div>
-
-      <div className="field">
-        <span className="cap">scored</span>
-        <select
-          aria-label="Match assessment"
-          value={view.depth}
-          onChange={(e) => onChange({ depth: e.target.value as View['depth'] })}
-        >
-          <option value="any">any way</option>
-          <option value="deep">read in full</option>
-          <option value="quick">keywords only</option>
-        </select>
-      </div>
-
-      <div className="field">
-        <span className="cap">per page</span>
-        <select aria-label="Jobs per page" value={view.limit} onChange={(e) => onChange({ limit: Number(e.target.value) })}>
-          {[10, 25, 50, 100].map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
+      <div className="discover-subbar">
+        <div className="discover-chips" role="group" aria-label="Minimum match">
+          {MATCH_STEPS.map((m) => (
+            <button
+              key={m || 'any'}
+              aria-pressed={view.minScore === m}
+              onClick={() => onChange({ minScore: m })}
+            >
+              {m ? `${m}%+ match` : 'Any match'}
+            </button>
           ))}
-        </select>
+        </div>
+        <span className="discover-count">
+          <strong>{total.toLocaleString()}</strong> job{total === 1 ? '' : 's'}
+          {filtered && (
+            <button
+              className="discover-clear"
+              onClick={() => onChange({ q: '', minScore: '', remote: 'any', depth: 'any' })}
+              title="Clear the filters, keep the sort"
+            >
+              <Icon name="x" size={13} /> Clear filters
+            </button>
+          )}
+        </span>
       </div>
-      </div>
-      </details>
-
-      <span className="toolbar-sep" />
-
-      <span className="toolbar-note nums">{total} matching</span>
-      {filtered && (
-        <button
-          className="small"
-          onClick={() => onChange({ q: '', minScore: '', remote: 'any', depth: 'any' })}
-          title="Clear the filters, keep the sort"
-        >
-          clear filters
-        </button>
-      )}
     </div>
   );
 }
@@ -1071,6 +1081,53 @@ function QuickScoreReasons({
         <li key={`m-${t}`} className="jc-missing" title="Not in your resume">{t}</li>
       ))}
     </ul>
+  );
+}
+
+/** Where to look. Asked before every search, remembered as the next default. */
+function CountryDialog({
+  value,
+  preview,
+  onChange,
+  onCancel,
+  onSearch,
+}: {
+  value: string;
+  preview: boolean;
+  onChange: (code: string) => void;
+  onCancel: () => void;
+  onSearch: () => void;
+}) {
+  const name = countryByCode(value)?.name ?? 'this country';
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <form
+        className="modal discover-country"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => { e.preventDefault(); onSearch(); }}
+      >
+        <span className="discover-welcome-icon" aria-hidden="true"><Icon name="globe" size={22} /></span>
+        <h2>Where should I look?</h2>
+        <p className="sub">
+          {preview
+            ? 'See the searches it would run for this country. Costs nothing.'
+            : 'Jobs are searched in this country only. Remote roles open to it are included.'}
+        </p>
+        <label className="field">
+          <span className="cap">Country</span>
+          <select value={value} onChange={(e) => onChange(e.target.value)} autoFocus>
+            {COUNTRIES.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
+          </select>
+        </label>
+        <div className="row" style={{ justifyContent: 'flex-end', gap: '.5rem', marginTop: '1rem' }}>
+          <button type="button" className="ghost" onClick={onCancel}>Cancel</button>
+          <button type="submit" className="primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '.4rem' }}>
+            <Icon name={preview ? 'eye' : 'sparkles'} size={15} />
+            {preview ? `Preview for ${name}` : `Search in ${name}`}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 

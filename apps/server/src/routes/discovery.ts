@@ -1,3 +1,4 @@
+import { countryByCode } from '@ja/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { crawlAll, rescore } from '../discovery/crawler.js';
@@ -34,8 +35,13 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
         resultsPerQuery: z.number().min(1).max(30).optional(),
         maxBoards: z.number().min(1).max(60).optional(),
         deepScoreTop: z.number().min(0).max(60).default(15),
+        country: z.string().length(2).optional(),
       })
       .parse(req.body ?? {});
+
+    if (body.country && !countryByCode(body.country)) {
+      return reply.code(400).send({ error: `Searching in "${body.country}" is not supported yet.` });
+    }
 
     // A dry run never touches Firecrawl, so it works without a key - which is
     // exactly when you most want to see what the app thinks it would do.

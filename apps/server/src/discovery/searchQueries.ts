@@ -1,3 +1,4 @@
+import type { Country } from '@ja/shared';
 import { z } from 'zod';
 import { normalizeLabel, tokenize } from '@ja/shared';
 import { prisma } from '../lib/db.js';
@@ -63,7 +64,7 @@ Rules:
 
 export async function buildSearchPlan(
   profileId: string,
-  opts: { maxQueries?: number } = {},
+  opts: { maxQueries?: number; country?: Country } = {},
 ): Promise<SearchPlan> {
   const maxQueries = opts.maxQueries ?? 6;
 
@@ -102,14 +103,15 @@ export async function buildSearchPlan(
     );
   }
 
-  const country = profile.countryCode || undefined;
+  // The country you picked for this search wins over the profile's own.
+  const country = opts.country?.code ?? (profile.countryCode || undefined);
 
   if (isConfigured()) {
     try {
       const plan = await generate({
         task: 'searchPlanning',
         system: PLAN_SYSTEM,
-        prompt: renderPlanPrompt({ profile, summary, resume, accepted, rejected }),
+        prompt: renderPlanPrompt({ profile, summary, resume, accepted, rejected, searchCountry: opts.country?.name }),
         schema: PlanSchema,
         maxTokens: 1200,
       });
@@ -130,7 +132,11 @@ export async function buildSearchPlan(
   }
 
   const fallback = profileDerivedPlan({ profile, summary, resume, accepted, maxQueries });
-  return { ...fallback, country, source: 'profile', notes };
+  const place = opts.country?.name;
+  const queries = place
+    ? fallback.queries.map((q) => (q.toLowerCase().includes(place.toLowerCase()) ? q : `${q} ${place}`))
+    : fallback.queries;
+  return { ...fallback, queries, country, source: 'profile', notes };
 }
 
 function renderPlanPrompt(args: {
@@ -139,6 +145,7 @@ function renderPlanPrompt(args: {
   resume: string;
   accepted: { title: string; companyName: string; location: string | null }[];
   rejected: { title: string; rejectReason: string | null; rejectCategory: string | null }[];
+  searchCountry?: string;
 }): string {
   const where = [args.profile.city, args.profile.region, args.profile.country]
     .filter(Boolean)
@@ -150,6 +157,9 @@ function renderPlanPrompt(args: {
 
   return [
     `<candidate_location>${where || 'not stated'}</candidate_location>`,
+    args.searchCountry
+      ? `<search_country>${args.searchCountry}</search_country>\nThe candidate chose to search only in ${args.searchCountry}. Every query must target ${args.searchCountry} (name the country or one of its cities), or be for remote roles open there.`
+      : '',
     relevantFacts.length
       ? `<stated_facts>\n${relevantFacts.map((f) => `- ${f.label}: ${f.value}`).join('\n')}\n</stated_facts>`
       : '',

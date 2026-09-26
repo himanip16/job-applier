@@ -63,7 +63,25 @@ const STOP_TERMS = new Set([
   'style', 'class', 'rsquo', 'lsquo', 'ldquo', 'rdquo', 'amp', 'quot', 'apos',
   'font', 'color', 'align', 'width', 'height', 'padding', 'margin', 'border',
   'props', 'data', 'html', 'body', 'src', 'alt', 'utm', 'gh', 'jid',
+  // Connective filler every posting and every resume share. They matched
+  // anything to anything - "across", "other" and "high" were among the terms
+  // that put a management-consulting role at 83% for a backend engineer.
+  'across', 'other', 'others', 'high', 'highly', 'through', 'within', 'including', 'include',
+  'ensure', 'also', 'well', 'based', 'related', 'using', 'use', 'used', 'make', 'able',
+  'ability', 'may', 'must', 'will', 'can', 'our', 'your', 'their', 'etc', 'via', 'per',
+  'more', 'most', 'best', 'great', 'good', 'key', 'level', 'low', 'every', 'each', 'into',
 ]);
+
+/**
+ * A title that names a technical role. An engineer's resume shares plenty of
+ * ordinary business words with a consulting or HR posting, so without this a
+ * "Management Consultant - Financial Risk" scored 83%.
+ */
+const TECH_TITLE =
+  /engineer|developer|software|\bsde\b|back[- ]?end|front[- ]?end|full[- ]?stack|platform|devops|\bsre\b|reliability|infrastructure|\bdata\b|machine learning|\bml\b|\bai\b|architect|programmer|technical|technology|security|cloud|mobile|\bios\b|android|\bqa\b|\btest|automation|systems|kubernetes|golang|java|python|scientist/i;
+
+/** The most a non-technical title can score for a technical candidate. */
+const OFF_ROLE_CAP = 20;
 
 /** Terms that characterise a posting, split by where they came from. */
 function jobTermWeights(
@@ -133,6 +151,8 @@ export interface ScoringContext {
   signals: Map<string, number>;
   /** Every word that appears in the candidate's resume, summary or facts. */
   vocabulary: Set<string>;
+  /** The resume is an engineer's: non-technical titles are capped, not ranked on shared words. */
+  technical?: boolean;
 }
 
 export async function loadScoringContext(profileId: string): Promise<ScoringContext> {
@@ -140,7 +160,12 @@ export async function loadScoringContext(profileId: string): Promise<ScoringCont
     loadSignals(profileId),
     prisma.profile.findUnique({ where: { id: profileId }, include: { facts: true } }),
   ]);
-  return { signals, vocabulary: profile ? profileVocabulary(profile) : new Set() };
+  const text = `${profile?.resumeText ?? ''}\n${profile?.summary ?? ''}`;
+  return {
+    signals,
+    vocabulary: profile ? profileVocabulary(profile) : new Set(),
+    technical: /\b(software|backend|back-end|frontend|full[- ]?stack|engineer|developer|sde)\b/i.test(text),
+  };
 }
 
 export interface LexicalScore {
@@ -243,7 +268,9 @@ export function scoreLexically(job: ScorableJob, ctx: ScoringContext): LexicalSc
   // zero and the job lands mid-pack, which is the honest answer when nothing
   // is known - but now it is the rare case rather than every row.
   const drive = (known ? AFFINITY_GAIN * (affinity - AFFINITY_NEUTRAL) : 0) + learned / 3;
-  const score = 100 / (1 + Math.exp(-drive));
+  const raw = 100 / (1 + Math.exp(-drive));
+  const offRole = ctx.technical && !TECH_TITLE.test(job.title);
+  const score = offRole ? Math.min(raw, OFF_ROLE_CAP) : raw;
 
   const hits = positives.length + negatives.length;
   const confidence = Math.min(1, (known ? 0.7 : 0) + Math.min(0.3, hits * 0.075));

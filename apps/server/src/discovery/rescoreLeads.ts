@@ -54,7 +54,7 @@ export const DECLINED_MESSAGE = 'The model declined to assess this one.';
  * evidence, so the bar is set at the bottom of the observed distribution
  * rather than at the midpoint - see the note at the call site.
  */
-const PRUNE_BELOW = 15;
+const PRUNE_BELOW = 40;
 
 type Lead = Awaited<ReturnType<typeof prisma.jobLead.findFirstOrThrow>>;
 

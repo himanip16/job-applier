@@ -1,3 +1,4 @@
+import { countryByCode, locatedIn, type Country } from '@ja/shared';
 import { prisma, type Prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { sourceById, type DiscoveredJob } from './sources.js';
@@ -75,6 +76,8 @@ export interface JobSearchReport {
   newLeads: number;
   skippedAlreadySeen: number;
   skippedTooSenior: number;
+  /** Outside the country you chose to search in, and not remote. */
+  skippedOtherCountry: number;
   deepScored: number;
   companiesRegistered: number;
   /** Leads already in the queue whose cheap score was recomputed afterwards. */
@@ -88,7 +91,7 @@ export interface FindJobsDeps {
   search: (query: string, opts: { includeDomains: string[]; limit: number; country?: string }) =>
     Promise<{ hits: SearchHit[]; creditsUsed: number; warning?: string }>;
   fetchBoard: (ref: BoardRef) => Promise<DiscoveredJob[]>;
-  plan: (profileId: string, opts: { maxQueries: number }) => Promise<SearchPlan>;
+  plan: (profileId: string, opts: { maxQueries: number; country?: Country }) => Promise<SearchPlan>;
 }
 
 const defaultDeps: FindJobsDeps = {
@@ -114,6 +117,8 @@ export interface FindJobsOptions {
   /** Bound the work: a run that hydrates ninety boards takes minutes. */
   maxBoards?: number;
   deepScoreTop?: number;
+  /** Where to look, as an ISO code. Asked for before every search. */
+  country?: string;
   deps?: Partial<FindJobsDeps>;
 }
 
@@ -138,13 +143,15 @@ export async function findJobs(
     newLeads: 0,
     skippedAlreadySeen: 0,
     skippedTooSenior: 0,
+    skippedOtherCountry: 0,
     deepScored: 0,
     companiesRegistered: 0,
     notes: [],
     errors: [],
   };
 
-  const plan = await deps.plan(profileId, { maxQueries });
+  const target = countryByCode(opts.country);
+  const plan = await deps.plan(profileId, { maxQueries, country: target });
   report.planSource = plan.source;
   report.roleTitles = plan.roleTitles;
   report.notes.push(...plan.notes);
@@ -294,6 +301,12 @@ export async function findJobs(
       // like a role the plan asked for.
       const wanted = matchedUrls.has(canonical) || titleMatchesPlan(job.title, plan.roleTitles);
       if (!wanted) continue;
+
+      // A board lists every office. You asked for one country.
+      if (target && !locatedIn(job.location, job.remote, target)) {
+        report.skippedOtherCountry++;
+        continue;
+      }
 
       report.jobsSeen++;
       if (existing.has(canonical)) {
