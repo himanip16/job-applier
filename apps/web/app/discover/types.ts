@@ -73,6 +73,12 @@ export interface SearchReport {
   skippedAlreadySeen: number;
   skippedTooOld?: number;
   skippedOtherCountry?: number;
+  /** Titles that matched none of the planned roles. */
+  skippedOffPlan?: number;
+  /** Sales, recruiting, legal and the like. */
+  skippedWrongDomain?: number;
+  /** A few of the titles behind each count, so an over-strict filter is visible. */
+  droppedExamples?: { offPlan: string[]; wrongDomain: string[] };
   deepScored: number;
   companiesRegistered: number;
   rerankedExisting: number;

@@ -1,5 +1,8 @@
 /**
- * Senior-level job title patterns to filter out.
+ * Senior-level job title words to filter out, matched as whole words.
+ *
+ * "LMTS" and "PMTS" are the lead and principal rungs of Member of Technical
+ * Staff; "SMTS" is senior, which this search keeps.
  */
 export const SENIORITY_PATTERNS = [
   'staff',
@@ -9,15 +12,37 @@ export const SENIORITY_PATTERNS = [
   'head of',
   'chief',
   'cto',
-  'manager',
+  'lmts',
+  'pmts',
 ];
+
+const SENIOR_WORDS = new RegExp(`\\b(${SENIORITY_PATTERNS.join('|')})\\b`);
+
+/**
+ * Where the role ends and the team begins: "Engineering Manager - Payments",
+ * "Software Engineer, Package Manager", "Engineer (Build Manager)". A bare
+ * hyphen is not a break - "Full-Stack Engineering Manager" is one role.
+ */
+const ROLE_PART_END = /\s-\s|[,(–—]/;
 
 /**
  * Check if a job title indicates a senior-level position.
+ *
+ * Whole words only: a substring test dropped "Staffing Engineer" for "staff"
+ * and "Connectors Engineer" for "cto". "Member of Technical Staff"
+ * is a title, not the staff level, so it is taken out first - except its lead
+ * rung, spelled out. "Manager" only counts in the role itself, so "Software
+ * Engineer - Package Manager" is kept and "Engineering Manager - Payments" is
+ * not.
  */
 export function isSeniorLevel(title: string): boolean {
-  const titleLower = title.toLowerCase();
-  return SENIORITY_PATTERNS.some(pattern => titleLower.includes(pattern));
+  const titleLower = title
+    .toLowerCase()
+    .replace(/\blead member of technical staff\b/g, 'lmts')
+    .replace(/\btechnical staff\b/g, ' ');
+  if (SENIOR_WORDS.test(titleLower)) return true;
+  const role = titleLower.split(ROLE_PART_END)[0] ?? titleLower;
+  return /\bmanager\b/.test(role);
 }
 
 /** What a posting says about the experience it wants. */

@@ -61,6 +61,12 @@ export interface JobSearchReport {
   skippedTooOld: number;
   /** Outside the country you chose to search in, and not remote. */
   skippedOtherCountry: number;
+  /** Titles that matched none of the planned roles. */
+  skippedOffPlan: number;
+  /** Sales, recruiting, legal and the like - not engineering, whatever the keywords. */
+  skippedWrongDomain: number;
+  /** A few titles behind each of those two counts, so a filter that is too strict is visible. */
+  droppedExamples: { offPlan: string[]; wrongDomain: string[] };
   deepScored: number;
   companiesRegistered: number;
   /** Leads already in the queue whose cheap score was recomputed afterwards. */
@@ -140,6 +146,9 @@ export async function findJobs(
     skippedTooSenior: 0,
     skippedTooOld: 0,
     skippedOtherCountry: 0,
+    skippedOffPlan: 0,
+    skippedWrongDomain: 0,
+    droppedExamples: { offPlan: [], wrongDomain: [] },
     deepScored: 0,
     companiesRegistered: 0,
     notes: [],
@@ -231,10 +240,14 @@ export async function findJobs(
   report.skippedTooSenior = tally.rejected.tooSenior;
   report.skippedTooOld = tally.rejected.tooOld;
   report.skippedOtherCountry = tally.rejected.otherCountry;
+  report.skippedOffPlan = tally.rejected.offPlan;
+  report.skippedWrongDomain = tally.rejected.wrongDomain;
+  report.droppedExamples = { offPlan: tally.examples.offPlan, wrongDomain: tally.examples.wrongDomain };
   report.errors.push(...tally.errors);
   const fresh = tally.fresh;
 
   log(`${report.newLeads} new lead(s) from ${report.jobsSeen} relevant posting(s)`);
+  log(`dropped ${report.skippedOffPlan} not in plan, ${report.skippedWrongDomain} not engineering`);
   if (report.skippedTooOld) {
     report.notes.push(`Skipped ${report.skippedTooOld} posting(s) older than ${MAX_POSTING_AGE_DAYS} days.`);
   }

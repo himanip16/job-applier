@@ -15,6 +15,13 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
   const boards = report.boards.filter((b) => b.kept > 0);
   const nothing = report.newLeads === 0;
   const dryRun = report.notes.some((n) => n.startsWith('Dry run:'));
+  // Older servers did not send these; treat them as nothing dropped.
+  const offPlan = report.skippedOffPlan ?? 0;
+  const wrongDomain = report.skippedWrongDomain ?? 0;
+  const dropped = [
+    { label: 'not in plan', count: offPlan, examples: report.droppedExamples?.offPlan ?? [] },
+    { label: 'not engineering', count: wrongDomain, examples: report.droppedExamples?.wrongDomain ?? [] },
+  ].filter((d) => d.count > 0);
 
   return (
     <div className="notice" style={{ marginTop: '.9rem' }}>
@@ -31,7 +38,8 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
         <span className="muted small">
           Read {report.boards.filter((b) => !b.error).length} of {report.boards.length} top-paying companies ·{' '}
           {report.jobsSeen} posting{report.jobsSeen === 1 ? '' : 's'} considered ·{' '}
-          {report.skippedAlreadySeen} already seen · {report.deepScored} read in full
+          {report.skippedAlreadySeen} already seen · {offPlan} not in plan · {wrongDomain} not engineering ·{' '}
+          {report.deepScored} read in full
           {report.companiesRegistered > 0 &&
             ` · ${report.companiesRegistered} new board${
               report.companiesRegistered === 1 ? '' : 's'
@@ -75,6 +83,21 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
               <li key={`${b.ats}:${b.slug}`}>
                 {b.company} <span className="src">{b.ats}</span> — {b.kept} of {b.openings} opening
                 {b.openings === 1 ? '' : 's'} kept
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {/* A filter that is too strict hides jobs silently; the titles it dropped are how you notice. */}
+      {!dryRun && dropped.length > 0 && (
+        <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
+          <summary className="small">What the filters dropped</summary>
+          <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
+            {dropped.map((d) => (
+              <li key={d.label}>
+                {d.count} {d.label}
+                {d.examples.length > 0 && `, e.g. ${d.examples.map((t) => `“${t}”`).join(', ')}`}
               </li>
             ))}
           </ul>

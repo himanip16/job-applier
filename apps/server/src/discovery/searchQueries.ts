@@ -325,17 +325,18 @@ const dedupe = (xs: string[]): string[] => {
  */
 export function titleMatchesPlan(title: string, roleTitles: string[]): boolean {
   if (!roleTitles.length) return false;
-  const titleTokens = new Set(tokenize(normalizeLabel(title)));
-  const normalisedTitle = normalizeLabel(title);
+  const normalisedTitle = normalizeTitle(title);
+  const titleTokens = new Set(tokenize(normalisedTitle));
 
   return roleTitles.some((role) => {
-    const roleTokens = tokenize(normalizeLabel(role));
+    const normalisedRole = normalizeTitle(role);
+    const roleTokens = tokenize(normalisedRole);
     const distinctive = roleTokens.filter((t) => !GENERIC_TITLE_TOKENS.has(t));
     const kind = roleTokens.filter((t) => GENERIC_TITLE_TOKENS.has(t));
 
     // Every token was generic ("Software Engineer"), so token matching would
     // wave through the entire company. Fall back to the phrase itself.
-    if (!distinctive.length) return normalisedTitle.includes(normalizeLabel(role));
+    if (!distinctive.length) return normalisedTitle.includes(normalisedRole);
 
     // The distinctive words all have to be there...
     if (!distinctive.every((t) => titleTokens.has(t))) return false;
@@ -350,6 +351,26 @@ export function titleMatchesPlan(title: string, roleTitles: string[]): boolean {
     if (!kind.length) return true;
     return kind.some((t) => titleTokens.has(t));
   });
+}
+
+/**
+ * Companies name the same job differently: Amazon posts "SDE-2", Salesforce
+ * "SMTS", everyone else "Senior Software Engineer". Plan titles and posting
+ * titles are both rewritten into one vocabulary before they are compared, or
+ * a plan for "Backend Engineer" never sees a "Backend Developer". Applied in
+ * order, to text already through normalizeLabel.
+ */
+const TITLE_VOCABULARY: [RegExp, string][] = [
+  [/\b(smts|senior member of technical staff)\b/g, 'senior software engineer'],
+  [/\b(mts|member of technical staff)\b/g, 'software engineer'],
+  [/\b(software development engineer|sde)(?:[- ]?(?:iii|ii|i|[1-3]))?\b/g, 'software engineer'],
+  [/\bdevelopers?\b/g, 'engineer'],
+];
+
+export function normalizeTitle(title: string): string {
+  let s = normalizeLabel(title);
+  for (const [pattern, replacement] of TITLE_VOCABULARY) s = s.replace(pattern, replacement);
+  return s.replace(/\s+/g, ' ').trim();
 }
 
 /**

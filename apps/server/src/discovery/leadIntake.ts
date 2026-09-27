@@ -44,6 +44,8 @@ export interface IntakeTally {
   /** Postings that passed every rule, whether new or already known. */
   relevant: number;
   rejected: Record<Rejection, number>;
+  /** A few distinct titles behind each rejection, so an over-strict rule shows itself. */
+  examples: Record<Rejection, string[]>;
   errors: { where: string; error: string }[];
   /** The new leads, for the model pass over the most promising. */
   fresh: DeepScoreEntry[];
@@ -53,9 +55,19 @@ export const emptyTally = (): IntakeTally => ({
   saved: 0,
   relevant: 0,
   rejected: { tooOld: 0, wrongDomain: 0, tooSenior: 0, otherCountry: 0, offPlan: 0, alreadySeen: 0 },
+  examples: { tooOld: [], wrongDomain: [], tooSenior: [], otherCountry: [], offPlan: [], alreadySeen: [] },
   errors: [],
   fresh: [],
 });
+
+const EXAMPLES_PER_RULE = 5;
+
+function noteExample(examples: string[], title: string): void {
+  const t = title.trim();
+  if (examples.length >= EXAMPLES_PER_RULE || !t) return;
+  if (examples.some((e) => e.toLowerCase() === t.toLowerCase())) return;
+  examples.push(t);
+}
 
 /**
  * Everything a run needs to save leads: who for, what is already known, and
@@ -91,6 +103,7 @@ export async function admit(
     const rejection = screen(job, intake.rules);
     if (rejection) {
       tally.rejected[rejection]++;
+      noteExample(tally.examples[rejection], job.title);
       continue;
     }
     tally.relevant++;
