@@ -1,11 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma, type Prisma } from '../lib/db.js';
+import { listLeads } from '../discovery/leadListing.js';
 import { learnFromDecision } from '../discovery/scoring.js';
 import { rescoreByIds, rescoreLexically } from '../discovery/rescoreLeads.js';
 import { NOT_YOURS, ownedLead } from '../auth/ownership.js';
 import { adapterFor } from '../ats/registry.js';
 import { enqueue } from '../engine/queue.js';
+import { bus } from '../lib/events.js';
 import { tailorResume } from '../resume/tailor.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
 import { renderResume } from '../resume/render.js';
@@ -19,6 +21,9 @@ import type { RequireProfile } from './types.js';
  * waiting, which is the most a button press should ever ask for.
  */
 export const MAX_RESCORE_BATCH = 25;
+
+/** How long an application waits on resume tailoring before starting without it. */
+const TAILOR_TIMEOUT_MS = 90_000;
 
 export function registerLeadRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   /**
@@ -64,120 +69,40 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
     return { results, rescored: results.filter((r) => r.ok).length };
   });
 
+  const flag = z.enum(['true', 'false', '1', '0']).optional().transform((v) => v === 'true' || v === '1');
+  const optionalNumber = z.preprocess((v) => (v === '' || v === undefined ? undefined : v), z.coerce.number().min(0).optional());
   const LeadQuery = z.object({
     status: z.string().default('NEW'),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(25),
-    sort: z.enum(['score', 'discovered', 'company', 'title']).default('score'),
-    dir: z.enum(['desc', 'asc']).default('desc'),
-    /** Free text over the title, the company and the location. */
+    sort: z.enum(['recommended', 'score', 'pay', 'hiring', 'posted', 'discovered']).catch('recommended'),
     q: z.string().trim().default(''),
     remote: z.enum(['any', 'yes', 'no']).default('any'),
-    minScore: z.coerce.number().min(0).max(100).optional(),
-    /** Whether a model has read the posting, or only the keyword pass has. */
+    minScore: optionalNumber,
     depth: z.enum(['any', 'deep', 'quick']).default('any'),
-    /** Filter out staff-level and above seniority jobs */
-    excludeStaff: z.boolean().default(false),
+    postedWithin: optionalNumber,
+    country: z.string().length(2).optional().or(z.literal('').transform(() => undefined)),
+    city: z.string().optional(),
+    company: z.string().optional(),
+    tier: z.string().optional(),
+    minPay: optionalNumber,
+    autoApply: flag,
+    excludeSenior: flag,
+    hiring: flag,
+    maxYears: optionalNumber,
   });
 
   app.get('/api/leads', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
     const query = LeadQuery.parse(req.query ?? {});
-
-    const where: Prisma.JobLeadWhereInput = { profileId: profile.id };
-    if (query.status !== 'ALL') where.status = query.status as Prisma.JobLeadWhereInput['status'];
-    if (query.remote !== 'any') where.remote = query.remote === 'yes';
-    if (query.minScore !== undefined) where.score = { gte: query.minScore };
-    if (query.depth !== 'any') where.deepScored = query.depth === 'deep';
-    if (query.q) {
-      where.OR = [
-        { title: { contains: query.q, mode: 'insensitive' } },
-        { companyName: { contains: query.q, mode: 'insensitive' } },
-        { location: { contains: query.q, mode: 'insensitive' } },
-      ];
-    }
-    
-    // Filter out staff-level and above seniority jobs if requested
-    if (query.excludeStaff) {
-      // Filter in memory since Prisma doesn't support multiple NOT conditions well
-      const seniorityPatterns = ['staff', 'principal', 'director', 'vp', 'head of', 'chief', 'cto', 'manager'];
-    }
-
-    // Every sort ends in a stable tiebreak. Without one, two leads with the
-    // same score can swap places between page 1 and page 2 and the same job
-    // shows up twice - or not at all.
-    const orderBy: Prisma.JobLeadOrderByWithRelationInput[] =
-      query.sort === 'discovered'
-        ? [{ discoveredAt: query.dir }]
-        : query.sort === 'company'
-          ? [{ companyName: query.dir }, { title: 'asc' }]
-          : query.sort === 'title'
-            ? [{ title: query.dir }, { companyName: 'asc' }]
-            : [{ score: query.dir }, { discoveredAt: 'desc' }];
-    orderBy.push({ id: 'asc' });
-
-    const [total, counts, strong] = await Promise.all([
-      prisma.jobLead.count({ where }),
-      prisma.jobLead.groupBy({ by: ['status'], where: { profileId: profile.id }, _count: true }),
-      prisma.jobLead.count({ where: { profileId: profile.id, status: 'NEW', score: { gte: 70 } } }),
-    ]);
-
-    // Clamp rather than 404: deciding on the last lead of the last page would
-    // otherwise land you on an empty one, which reads as "everything is gone".
-    const pages = Math.max(1, Math.ceil(total / query.limit));
-    const page = Math.min(query.page, pages);
-
-    const leads = await prisma.jobLead.findMany({
-      where,
-      orderBy,
-      skip: (page - 1) * query.limit,
-      take: query.limit,
-    });
-
-    // Filter out staff-level and above seniority jobs if requested
-    let filteredLeads = leads;
-    if (query.excludeStaff) {
-      const seniorityPatterns = ['staff', 'principal', 'director', 'vp', 'head of', 'chief', 'cto', 'manager'];
-      filteredLeads = leads.filter(lead => {
-        const titleLower = lead.title.toLowerCase();
-        // Filter by title patterns
-        if (seniorityPatterns.some(pattern => titleLower.includes(pattern))) {
-          return false;
-        }
-        // Filter by experience requirements in description
-        if (lead.descriptionText) {
-          const descLower = lead.descriptionText.toLowerCase();
-          const experiencePatterns = [
-            /(\d+)\+?\s*years?\s*(of\s*)?(experience|work)/i,
-            /(\d+)\s*years?\s*\+\s*(of\s*)?(experience|work)/i,
-          ];
-          for (const pattern of experiencePatterns) {
-            const match = descLower.match(pattern);
-            if (match && match[1]) {
-              const years = parseInt(match[1], 10);
-              if (years > 5) return false;
-            }
-          }
-        }
-        return true;
-      });
-    }
-
+    const result = await listLeads(profile.id, { ...query, city: query.city || undefined, company: query.company || undefined, tier: query.tier || undefined });
     return {
-      // The description is large and the list view never shows it in full.
-      leads: filteredLeads.map((l) => ({ ...l, descriptionText: l.descriptionText?.slice(0, 600) ?? null })),
-      counts: Object.fromEntries(counts.map((c) => [c.status, c._count])),
-      total,
-      page,
-      pages,
-      limit: query.limit,
-      /** New leads at or above the "start here" threshold, across every page. */
-      strong,
+      ...result,
       maxRescoreBatch: MAX_RESCORE_BATCH,
       // The same numbers under the shape the first paginated build returned,
       // so nothing that already reads `pagination` breaks on the way past.
-      pagination: { page, pageSize: query.limit, total, totalPages: pages },
+      pagination: { page: result.page, pageSize: result.limit, total: result.total, totalPages: result.pages },
     };
   });
 
@@ -383,13 +308,23 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
         const resumeText = base?.text ?? full.resumeText;
 
         if (resumeText && resumeText.trim().length >= 100) {
-          const result = await tailorResume({
-            candidateContext: renderCandidateContext(full, resumeText),
-            resumeText,
-            jobTitle: lead.title,
-            companyName: lead.companyName,
-            jobDescription: lead.descriptionText,
-          });
+          // The run does not start until this is done, so say so - otherwise
+          // the page just reads "waiting" for as long as the model takes.
+          await bus.emitEvent(application.id, 'LOG', 'Tailoring your resume for this job before starting…');
+          // A slow or rate-limited model must not hold the application hostage:
+          // after this long, apply with the resume you already have.
+          const result = await Promise.race([
+            tailorResume({
+              candidateContext: renderCandidateContext(full, resumeText),
+              resumeText,
+              jobTitle: lead.title,
+              companyName: lead.companyName,
+              jobDescription: lead.descriptionText,
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('took longer than 90 seconds')), TAILOR_TIMEOUT_MS),
+            ),
+          ]);
 
           const rendered = await renderResume(result.text, {
             profileName: full.fullName,
@@ -421,8 +356,13 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
           tailoredResumeId = tailored.id;
         }
       } catch (err) {
-        // Don't fail the application if tailoring fails, just log it
+        // Don't fail the application if tailoring fails; say so and carry on.
         console.error('Auto-tailor resume failed:', err);
+        await bus.emitEvent(
+          application.id,
+          'LOG',
+          `Resume tailoring skipped (${(err as Error).message}). Applying with your default resume.`,
+        );
       }
     }
 

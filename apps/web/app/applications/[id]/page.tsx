@@ -45,13 +45,17 @@ interface Evt { type: string; message: string; at: string }
 export default function RunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [detail, setDetail] = useState<AppDetail | null>(null);
+  const [atWall, setAtWall] = useState(false);
   const [events, setEvents] = useState<Evt[]>([]);
   const [error, setError] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(
-    () => api<{ application: AppDetail }>(`/api/applications/${id}`)
-      .then((d) => setDetail(d.application))
+    () => api<{ application: AppDetail; atWall?: boolean }>(`/api/applications/${id}`)
+      .then((d) => {
+        setDetail(d.application);
+        setAtWall(Boolean(d.atWall));
+      })
       .catch((e) => setError(e.message)),
     [id],
   );
@@ -81,7 +85,6 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   if (!detail) return <Loading />;
 
   const open = detail.pending.filter((q) => !q.answeredAt);
-  const shots = detail.artifacts.filter((a) => a.kind === 'screenshot');
 
   return (
     <>
@@ -113,7 +116,8 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             )}
           </div>
         </div>
-        {detail.blockedReason && (
+        {/* NEEDS_HUMAN explains itself in its own panel below; saying it twice is noise. */}
+        {detail.blockedReason && detail.status !== 'NEEDS_HUMAN' && (
           <div
             className={`notice ${detail.status === 'FAILED' ? 'bad' : detail.status === 'SUBMITTED' ? 'good' : ''}`}
             style={{ marginTop: '.9rem' }}
@@ -123,9 +127,17 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
         )}
       </div>
 
-      {detail.status === 'NEEDS_HUMAN' && <WallPanel applicationId={id} detail={detail} onDone={refresh} />}
+      {detail.status === 'NEEDS_HUMAN' &&
+        (atWall ? (
+          <WallPanel applicationId={id} detail={detail} onDone={refresh} />
+        ) : events.some((e) => e.message.startsWith('Submitting')) ? (
+          <OutcomePanel applicationId={id} detail={detail} onDone={refresh} />
+        ) : (
+          <StoppedPanel applicationId={id} detail={detail} onDone={refresh} />
+        ))}
 
-      {open.length > 0 && <QuestionModal applicationId={id} questions={open} onDone={refresh} />}
+      {/* Questions from a run that has since ended are stale: a restart re-asks them. */}
+      {open.length > 0 && detail.status === 'NEEDS_INPUT' && <QuestionModal applicationId={id} questions={open} onDone={refresh} />}
 
       {detail.status === 'REVIEW' && <ReviewPanel applicationId={id} detail={detail} onDone={refresh} />}
 
@@ -152,18 +164,6 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
         </div>
       </div>
 
-      {shots.length > 0 && (
-        <div className="panel">
-          <h2>What the browser saw</h2>
-          <p className="sub">Screenshots captured at each step — your record of what was submitted.</p>
-          {shots.slice(-3).reverse().map((a) => (
-            <figure key={a.id} style={{ margin: '0 0 1rem' }}>
-              <img className="shot" src={`${API}/artifacts/${a.path}`} alt={a.label} />
-              <figcaption className="muted small">{a.label}</figcaption>
-            </figure>
-          ))}
-        </div>
-      )}
     </>
   );
 }
@@ -256,8 +256,9 @@ function QuestionModal({
         {err && <div className="notice bad" style={{ margin: '.8rem 0' }}>{err}</div>}
         <div className="row" style={{ marginTop: '1rem' }}>
           <button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Continue'}</button>
-          <button 
-            className="ghost" 
+          <button
+            type="button"
+            className="ghost"
             disabled={busy}
             onClick={() => onDone()}
             style={{ marginLeft: '.5rem' }}
@@ -311,6 +312,21 @@ function renderInput(
           <option key={o.label} value={o.label}>{o.label}</option>
         ))}
       </select>
+    );
+  }
+  // A lone checkbox is a yes/no, usually consent. The filler ticks it for
+  // "yes"; asking you to type that into a text box was the old behaviour.
+  if (q.fieldKind === 'CHECKBOX') {
+    return (
+      <label className="row small" style={{ gap: '.5rem', marginTop: '.3rem' }}>
+        <input
+          type="checkbox"
+          style={{ width: 'auto' }}
+          checked={value === 'yes'}
+          onChange={(e) => onChange(e.target.checked ? 'yes' : 'no')}
+        />
+        <span>Tick the box</span>
+      </label>
     );
   }
   if (q.fieldKind === 'TEXTAREA') {
@@ -387,6 +403,134 @@ function WallPanel({
         </button>
         <button className="danger" disabled={busy !== null} onClick={() => send(false)}>
           Cancel this application
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The run is over and nobody could see whether the submit landed.
+ *
+ * "Carry on" means nothing here - there is no paused run to carry on. The
+ * only useful thing is for you to look, and tell us which it was.
+ */
+function OutcomePanel({
+  applicationId,
+  detail,
+  onDone,
+}: {
+  applicationId: string;
+  detail: AppDetail;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState<'yes' | 'no' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function record(submitted: boolean) {
+    setBusy(submitted ? 'yes' : 'no');
+    setError(null);
+    try {
+      await api(`/api/applications/${applicationId}/outcome`, {
+        method: 'POST',
+        body: JSON.stringify({ submitted }),
+      });
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Older runs stored the whole page's text here; show only the first sentence.
+  const reason = (detail.blockedReason ?? '').startsWith('Could not confirm')
+    ? 'Submit was pressed but no confirmation appeared.'
+    : detail.blockedReason;
+
+  return (
+    <div className="panel" style={{ borderColor: 'var(--warn-border)', background: 'var(--warn-soft)' }}>
+      <h2>Did this application go through?</h2>
+      <p className="sub" style={{ maxWidth: '44rem' }}>
+        {reason ?? 'We could not tell whether the submit worked.'}
+      </p>
+      <p className="small muted" style={{ maxWidth: '44rem' }}>
+        Look at the browser window, or check your email for a confirmation from{' '}
+        {detail.job.company}. Then tell us which it was.{' '}
+        <a href={detail.job.url} target="_blank" rel="noreferrer">Open the job page</a>
+      </p>
+      {error && <div className="notice bad">{error}</div>}
+      <div className="row" style={{ gap: '.5rem', marginTop: '.6rem' }}>
+        <button className="primary" disabled={busy !== null} onClick={() => record(true)}>
+          {busy === 'yes' ? 'Saving…' : 'Yes, it was submitted'}
+        </button>
+        <button className="ghost" disabled={busy !== null} onClick={() => record(false)}>
+          {busy === 'no' ? 'Saving…' : 'No, it didn’t go through'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** First sentence of a long diagnosis, with the rest behind a disclosure. */
+function Reason({ text }: { text: string | null }) {
+  if (!text) return null;
+  const first = /^.{20,220}?[.!?](\s|$)/.exec(text)?.[0]?.trim() ?? text.slice(0, 220);
+  const rest = text.slice(first.length).trim();
+  return (
+    <>
+      <p className="sub" style={{ maxWidth: '44rem' }}>{first}</p>
+      {rest && (
+        <details className="small muted" style={{ maxWidth: '44rem', marginBottom: '.6rem' }}>
+          <summary>Details</summary>
+          <p style={{ wordBreak: 'break-word' }}>{rest}</p>
+        </details>
+      )}
+    </>
+  );
+}
+
+/**
+ * The run gave up before submitting and is no longer waiting on anything.
+ * Nothing was sent, so the only questions are: try again, or look yourself.
+ */
+function StoppedPanel({
+  applicationId,
+  detail,
+  onDone,
+}: {
+  applicationId: string;
+  detail: AppDetail;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function retry() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/applications/${applicationId}/start`, { method: 'POST' });
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="panel" style={{ borderColor: 'var(--warn-border)', background: 'var(--warn-soft)' }}>
+      <h2>This application stopped before submitting</h2>
+      <Reason text={detail.blockedReason?.replace(/^UNKNOWN:\s*/, '') ?? null} />
+      <p className="small muted" style={{ maxWidth: '44rem' }}>
+        Nothing was sent to {detail.job.company}.{' '}
+        <a href={detail.job.url} target="_blank" rel="noreferrer">Open the job page</a>
+      </p>
+      {error && <div className="notice bad">{error}</div>}
+      <div className="row" style={{ gap: '.5rem', marginTop: '.6rem' }}>
+        <button className="primary" disabled={busy} onClick={retry}>
+          {busy ? 'Starting…' : 'Try again'}
         </button>
       </div>
     </div>

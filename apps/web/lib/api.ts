@@ -9,6 +9,16 @@ export function setRateLimitModalHandler(handler: (provider: 'anthropic' | 'gemi
   showRateLimitModal = handler;
 }
 
+/** An error from our API, carrying its machine-readable `code` when it has one. */
+export class ApiError extends Error {
+  constructor(message: string, readonly code?: string, readonly status?: number) {
+    super(message);
+  }
+}
+
+/** No profile yet: a page should offer to set one up, not report a failure. */
+export const needsProfile = (err: unknown) => err instanceof ApiError && err.code === 'PROFILE_REQUIRED';
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   /**
    * Only declare a JSON body when there is one.
@@ -86,7 +96,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     // `error` is ours; `message` is what the framework produces for things
     // like a malformed body. Falling back to the status alone loses the only
     // sentence that says what went wrong.
-    throw new Error(body.error ?? body.message ?? `${res.status} ${res.statusText}`);
+    throw new ApiError(body.error ?? body.message ?? `${res.status} ${res.statusText}`, body.code, res.status);
   }
   return raw as T;
 }

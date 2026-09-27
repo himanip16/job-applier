@@ -3,13 +3,14 @@ import { getCanonical, type FormField, type ResolvedAnswer } from '@ja/shared';
 import { prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
-import { screenshot, saveDom } from '../browser/session.js';
+import { screenshot, saveDom, unlessClosed } from '../browser/session.js';
 import { detectBlockers, detectSubmissionOutcome } from '../browser/blockers.js';
 import type { AdvanceControl } from '../browser/steps.js';
 import type { AtsAdapter } from '../ats/types.js';
 import { rememberAnswer } from './answerBank.js';
 import { park, reviewKey } from './waiters.js';
 import { artifact, setStatus } from './runLog.js';
+import { markLeadApplied } from './leadSync.js';
 import type { FieldPlanEntry } from './fieldPlan.js';
 
 /**
@@ -50,6 +51,7 @@ export async function finishApplication(args: {
     app.requiresReview ||
     config.requireReview ||
     adapter.id === 'generic' ||
+    !!adapter.alwaysReview ||
     !!captcha ||
     plan.some((p) => p.error) ||
     plan.some((p) => p.confidence < 0.9 && p.filled);
@@ -59,6 +61,8 @@ export async function finishApplication(args: {
       ? `${captcha.detail} The form is filled and waiting; solve the challenge in the browser, then approve here.`
       : adapter.id === 'generic'
         ? 'Unrecognised site, so this always goes through review.'
+        : adapter.alwaysReview
+          ? `The ${adapter.id} final step has not been mapped yet, so this always goes through review.`
         : 'Filled and ready. Check it over, then approve.';
     // Register the waiter BEFORE announcing the status. Anything watching the
     // run - the UI, the CLI, a test - can observe REVIEW and answer within
@@ -66,7 +70,7 @@ export async function finishApplication(args: {
     // is dropped and the run waits forever.
     const decisionPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
     await setStatus(applicationId, 'REVIEW', reason, { blockers, plan });
-    const decision = await decisionPromise;
+    const decision = await unlessClosed(page, decisionPromise, 'while waiting for your review');
     if (!decision.approved) {
       await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
       return;
@@ -104,6 +108,7 @@ export async function finishApplication(args: {
       data: { status: 'SUBMITTED', submittedAt: new Date(), confirmation: outcome.detail, blockedReason: null },
     });
     await bus.emitEvent(applicationId, 'STATUS', 'Submitted.', { status: 'SUBMITTED' });
+    await markLeadApplied(applicationId);
     await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, companyKey);
     return;
   }
@@ -115,7 +120,7 @@ export async function finishApplication(args: {
       'REVIEW',
       `The form rejected the submission: ${outcome.detail}. It is still open in the browser - fix it there and approve, or cancel.`,
     );
-    const retry = await retryPromise;
+    const retry = await unlessClosed(page, retryPromise, 'while waiting for your review');
     if (!retry.approved) {
       await setStatus(applicationId, 'CANCELLED', retry.note ?? 'Cancelled after a validation error.');
       return;
@@ -131,6 +136,7 @@ export async function finishApplication(args: {
     });
     await bus.emitEvent(applicationId, 'STATUS', second.outcome, { status: second.outcome });
     if (second.outcome === 'SUBMITTED') {
+      await markLeadApplied(applicationId);
       await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, companyKey);
     }
     return;

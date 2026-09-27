@@ -1,16 +1,12 @@
-import { prisma, type Prisma } from '../lib/db.js';
+import type { Country } from '@ja/shared';
+import { prisma } from '../lib/db.js';
 import { bus } from '../lib/events.js';
 import { newPage } from '../browser/session.js';
-import { type DiscoveredJob } from './sources.js';
-import {
-  loadScoringContext,
-  scoreLexically,
-  serialiseReasons,
-} from './scoring.js';
+import { loadScoringContext } from './scoring.js';
 import { rescoreLeads, rescoreLexically } from './rescoreLeads.js';
-import { isSeniorLevel, requiresMoreThan5YearsExperience } from './jobFilters.js';
 import { crawlCompany } from './crawlCompany.js';
 import { deepScoreLeads } from './deepScore.js';
+import { admit, emptyTally, openIntake } from './leadIntake.js';
 
 export interface CrawlReport {
   companiesCrawled: number;
@@ -18,6 +14,10 @@ export interface CrawlReport {
   newLeads: number;
   skippedAlreadyDecided: number;
   skippedTooSenior: number;
+  /** Posted more than MAX_POSTING_AGE_DAYS ago. */
+  skippedTooOld: number;
+  /** Outside the country you chose, and not remote. */
+  skippedOtherCountry: number;
   deepScored: number;
   /** Leads already in the queue whose cheap score was recomputed afterwards. */
   rerankedExisting: number;
@@ -27,13 +27,16 @@ export interface CrawlReport {
 /**
  * Crawl every enabled company, score what comes back, and store the leads.
  *
+ * Postings go through the same intake as search (leadIntake.ts), so the
+ * country you chose is honoured here too.
+ *
  * Scoring is two-pass and the split matters for cost: every job gets the free
  * lexical score, and only the top slice gets a model read. A 400-job crawl
  * therefore costs a handful of model calls rather than 400.
  */
 export async function crawlAll(
   profileId: string,
-  opts: { deepScoreTop?: number; onlyCompanyId?: string } = {},
+  opts: { deepScoreTop?: number; onlyCompanyId?: string; country?: Country } = {},
 ): Promise<CrawlReport> {
   const deepScoreTop = opts.deepScoreTop ?? 15;
 
@@ -47,13 +50,15 @@ export async function crawlAll(
     newLeads: 0,
     skippedAlreadyDecided: 0,
     skippedTooSenior: 0,
+    skippedTooOld: 0,
+    skippedOtherCountry: 0,
     deepScored: 0,
     rerankedExisting: 0,
     errors: [],
   };
 
-  const scoring = await loadScoringContext(profileId);
-  const fresh: { id: string; job: DiscoveredJob; lexScore: number }[] = [];
+  const intake = await openIntake(profileId, { country: opts.country }, await loadScoringContext(profileId));
+  const tally = emptyTally();
 
   // A page is only created if a careers-page crawl actually needs one; the API
   // sources are plain HTTP.
@@ -74,66 +79,26 @@ export async function crawlAll(
       }
 
       report.companiesCrawled++;
-      report.jobsSeen += jobs.length;
-
       await prisma.company.update({
         where: { id: company.id },
         data: { lastCrawledAt: new Date(), lastCrawlNote: `${jobs.length} postings` },
       });
-
-      for (const job of jobs) {
-        // Filter out senior-level positions
-        if (isSeniorLevel(job.title)) {
-          report.skippedTooSenior++;
-          continue;
-        }
-
-        // Filter out jobs requiring more than 5 years of experience
-        if (requiresMoreThan5YearsExperience(job.descriptionText)) {
-          report.skippedTooSenior++;
-          continue;
-        }
-
-        const existing = await prisma.jobLead.findUnique({
-          where: { profileId_url: { profileId, url: job.url } },
-        });
-        // Never resurrect something already decided. Re-showing a job the
-        // candidate rejected last week is the fastest way to make a triage
-        // queue unusable.
-        if (existing) {
-          report.skippedAlreadyDecided++;
-          continue;
-        }
-
-        const lex = scoreLexically(job, scoring);
-        const lead = await prisma.jobLead.create({
-          data: {
-            profileId,
-            companyId: company.id,
-            url: job.url,
-            ats: job.ats,
-            title: job.title,
-            companyName: job.companyName,
-            location: job.location ?? null,
-            remote: job.remote,
-            descriptionText: job.descriptionText,
-            postedAt: job.postedAt ?? null,
-            score: lex.score,
-            scoreReasons: serialiseReasons(lex, null),
-            scoredAt: new Date(),
-            deepScored: false,
-          },
-        });
-        report.newLeads++;
-        fresh.push({ id: lead.id, job, lexScore: lex.score });
-      }
+      await admit(intake, company, jobs, tally);
     }
   } finally {
     await page?.close().catch(() => {});
   }
 
+  report.jobsSeen = tally.relevant;
+  report.newLeads = tally.saved;
+  report.skippedAlreadyDecided = tally.rejected.alreadySeen;
+  report.skippedTooSenior = tally.rejected.tooSenior;
+  report.skippedTooOld = tally.rejected.tooOld;
+  report.skippedOtherCountry = tally.rejected.otherCountry;
+  report.errors.push(...tally.errors.map((e) => ({ company: e.where, error: e.error })));
+
   // ---- model pass over the most promising ---------------------------------
-  const deepScoreResult = await deepScoreLeads(profileId, fresh, deepScoreTop);
+  const deepScoreResult = await deepScoreLeads(profileId, tally.fresh, deepScoreTop);
   report.deepScored = deepScoreResult.deepScored;
   report.errors.push(...deepScoreResult.errors);
 

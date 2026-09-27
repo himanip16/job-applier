@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import type { BlockerKind } from '@ja/shared';
 import { detectBlockers } from './blockers.js';
+import { isNavigationRace } from './steps.js';
 
 /**
  * Getting from a job URL to a form you can actually fill.
@@ -311,7 +312,13 @@ async function formReady(
         if (await page.locator(sel).first().isVisible().catch(() => false)) return true;
       }
     }
-    if ((await countFillableInputs(page)) >= minInputs) return true;
+    // Apply links that bounce through a sign-in (Google Careers) navigate
+    // twice; a read landing between them is no answer, not a failure.
+    const inputs = await countFillableInputs(page).catch((err: unknown) => {
+      if (isNavigationRace(err)) return 0;
+      throw err;
+    });
+    if (inputs >= minInputs) return true;
     await page.waitForTimeout(400);
   } while (Date.now() < deadline);
   return false;

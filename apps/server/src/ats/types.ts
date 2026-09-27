@@ -28,10 +28,26 @@ export interface AtsAdapter {
   submit(page: Page): Promise<void>;
   /** Human-readable notes shown in the UI: known quirks, captcha, etc. */
   notes: string[];
+  /**
+   * Always stop for review before submitting, whatever the settings say. For
+   * sites whose final step has not been seen in a real run yet.
+   */
+  alwaysReview?: boolean;
 }
 
 export async function textOf(page: Page, selector: string): Promise<string> {
   const el = page.locator(selector).first();
   if (!(await el.count())) return '';
   return (await el.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * What a file input is for, from everything that might say so.
+ *
+ * Greenhouse labels both of its upload inputs "Attach"; only the id says
+ * `resume` or `cover_letter`. Matching on the label alone found neither, and
+ * applications went out with no resume.
+ */
+export function fileHint(f: Pick<FormField, 'label' | 'name' | 'selector'>): string {
+  return `${f.label} ${f.name ?? ''} ${f.selector}`;
 }

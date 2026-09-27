@@ -1,52 +1,6 @@
 import { type BoardRef, boardKey, parseBoardUrl } from './boardUrls.js';
 import { type SearchHit } from './firecrawl.js';
-import { type DiscoveredJob } from './sources.js';
-
-/**
- * Senior-level job title patterns to filter out.
- */
-export const SENIORITY_PATTERNS = [
-  'staff',
-  'principal',
-  'director',
-  'vp',
-  'head of',
-  'chief',
-  'cto',
-  'manager',
-];
-
-/**
- * Check if a job title indicates a senior-level position.
- */
-export function isSeniorLevel(title: string): boolean {
-  const titleLower = title.toLowerCase();
-  return SENIORITY_PATTERNS.some(pattern => titleLower.includes(pattern));
-}
-
-/**
- * Check if a job description requires more than 5 years of experience.
- */
-export function requiresMoreThan5YearsExperience(description: string | null | undefined): boolean {
-  if (!description) return false;
-  const descLower = description.toLowerCase();
-  
-  // Match patterns like "5+ years", "5+ years experience", "6 years", "10+ years", etc.
-  const experiencePatterns = [
-    /(\d+)\+?\s*years?\s*(of\s*)?(experience|work)/i,
-    /(\d+)\s*years?\s*\+\s*(of\s*)?(experience|work)/i,
-  ];
-  
-  for (const pattern of experiencePatterns) {
-    const match = descLower.match(pattern);
-    if (match && match[1]) {
-      const years = parseInt(match[1], 10);
-      if (years > 5) return true;
-    }
-  }
-  
-  return false;
-}
+import { type DiscoveredJob } from './sources/index.js';
 
 /**
  * ATS page titles are wrapped in boilerplate that would end up in the queue.
@@ -68,13 +22,22 @@ export function cleanHitTitle(title: string): string {
  * tracking parameter and sometimes a trailing slash. Compared raw, those are
  * four different jobs, and the queue fills up with the same posting.
  */
+/**
+ * Query parameters that identify the posting itself. Everything else in a
+ * query string is tracking and is dropped - but not these: every Stripe job
+ * lives at stripe.com/jobs/search?gh_jid=<id>, and dropping the id made them
+ * all one URL, so only the first was ever saved.
+ */
+const POSTING_ID_PARAMS = ['gh_jid', 'jobid', 'job_id', 'jid', 'jk', 'currentjobid', 'positionid', 'pid'];
+
 export function canonicalUrl(raw: string): string {
   try {
     const url = new URL(raw);
     url.protocol = 'https:';
     url.hostname = url.hostname.toLowerCase().replace(/^www\./, '');
     url.hash = '';
-    url.search = '';
+    const kept = [...url.searchParams].filter(([k]) => POSTING_ID_PARAMS.includes(k.toLowerCase()));
+    url.search = kept.length ? `?${new URLSearchParams(kept.sort(([a], [b]) => a.localeCompare(b)))}` : '';
     url.pathname = url.pathname.replace(/\/+$/, '');
     return url.toString();
   } catch {

@@ -3,7 +3,7 @@ import {
   crawlCareersPage,
   sourceById,
   type DiscoveredJob,
-} from './sources.js';
+} from './sources/index.js';
 
 /**
  * Crawl a single company, deciding whether to use careers-page or an ATS source.

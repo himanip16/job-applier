@@ -40,9 +40,9 @@ export async function sendPasswordResetEmail({
   const resend = getResendClient();
   const isDevelopment = process.env.NODE_ENV !== 'production';
   
-  // Check for required email configuration
+  // Check for required email configuration (only in production)
   const fromEmail = process.env.RESEND_FROM_EMAIL;
-  if (!fromEmail) {
+  if (!fromEmail && !isDevelopment) {
     console.error('[Email] RESEND_FROM_EMAIL is not configured.');
     return false;
   }
@@ -59,6 +59,15 @@ export async function sendPasswordResetEmail({
       resetUrl,
     });
 
+    return true;
+  }
+
+  // In development with API key but no from email, log and return success
+  if (!fromEmail) {
+    console.log('[Email] Development mode - RESEND_FROM_EMAIL not configured, would send password reset email:', {
+      to: email,
+      resetUrl,
+    });
     return true;
   }
 

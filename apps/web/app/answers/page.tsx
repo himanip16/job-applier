@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
+import { Icon } from '../../components/Icon';
+import { CommonQuestions } from '../../components/CommonQuestions';
+import s from '../profile/profile.module.css';
 
 interface Answer {
   id: string;
@@ -45,80 +48,77 @@ export default function AnswersPage() {
     await load();
   }
 
-  async function remove(id: string) {
+  async function remove(id: string, label: string) {
+    if (!confirm(`Forget your answer to "${label}"? You will be asked again next time.`)) return;
     await api(`/api/answers/${id}`, { method: 'DELETE' });
     await load();
   }
 
   return (
-    <div className="panel">
-      <h2>Answer bank</h2>
-      <p className="sub">
-        Every answer learned so far. These are reused automatically when the same question comes up
-        again, however it is worded. Edit anything that has gone stale.
-      </p>
-      {error && <div className="notice bad">{error}</div>}
-      {answers.length === 0 ? (
-        <div className="empty-state">
-          Empty. It fills itself in as you answer questions during applications.
+    <div className={s.page}>
+      <header className={s.header}>
+        <div>
+          <span className={s.eyebrow}>Your answers</span>
+          <h1>Answers</h1>
+          <p>How you answer the questions application forms ask. Everything here is filled in for you, however a form words the question.</p>
         </div>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Question</th>
-              <th>Answer</th>
-              <th>Source</th>
-              <th>Used</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
+      </header>
+
+      <CommonQuestions />
+
+      <section className={s.section}>
+        <div className={s.sectionHead}>
+          <div className={s.sectionTitle}>
+            <span className={s.sectionIcon}><Icon name="message" size={18} /></span>
+            <div>
+              <h2>Remembered from your applications</h2>
+              <p>Answers you gave when a form asked something new. Reused automatically next time; edit anything that has gone stale.</p>
+            </div>
+          </div>
+          {answers.length > 0 && <span className={s.counter}><strong>{answers.length}</strong> remembered</span>}
+        </div>
+        {error && <div className="notice bad">{error}</div>}
+        {answers.length === 0 ? (
+          <div className={s.locked}>Nothing yet. When a form asks something new, your answer is kept here.</div>
+        ) : (
+          <div className={s.answers}>
             {answers.map((a) => (
-              <tr key={a.id}>
-                <td style={{ maxWidth: '24rem' }}>
-                  {a.rawLabel}
-                  {a.canonicalKey && <div className="muted small">{a.canonicalKey}</div>}
-                </td>
-                <td style={{ maxWidth: '18rem' }}>
-                  {editing === a.id ? (
-                    <div className="row">
-                      <input value={draft} onChange={(e) => setDraft(e.target.value)} />
-                      <button className="primary" onClick={() => save(a.id)}>
-                        Save
-                      </button>
-                    </div>
-                  ) : (
-                    a.displayValue
-                  )}
-                </td>
-                <td>
-                  <span className={`src ${a.source}`}>{a.source}</span>
-                  {a.source === 'INFERRED' && (
-                    <div className="muted small">{Math.round(a.confidence * 100)}% confident</div>
-                  )}
-                </td>
-                <td className="small muted">{a.timesUsed}&times;</td>
-                <td>
-                  <div className="row">
-                    <button
-                      onClick={() => {
-                        setEditing(a.id);
-                        setDraft(a.displayValue);
-                      }}
-                    >
-                      Edit
-                    </button>
-                    <button className="danger" onClick={() => remove(a.id)}>
-                      Delete
-                    </button>
+              <div className={s.answer} key={a.id} style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) auto' }}>
+                <div>
+                  <div style={{ fontSize: 'var(--fs-sm)' }}>{a.rawLabel}</div>
+                  <div className="muted small" style={{ marginTop: '.15rem' }}>
+                    {a.source === 'USER' ? 'You answered' : a.source === 'INFERRED' ? `Worked out from your resume · ${Math.round(a.confidence * 100)}% sure` : 'From your profile'}
+                    {a.timesUsed > 0 && ` · used ${a.timesUsed}×`}
                   </div>
-                </td>
-              </tr>
+                </div>
+                {editing === a.id ? (
+                  <input
+                    autoFocus
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void save(a.id); if (e.key === 'Escape') setEditing(null); }}
+                  />
+                ) : (
+                  <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600 }}>{a.displayValue}</div>
+                )}
+                <div className="row" style={{ gap: '.3rem', flexWrap: 'nowrap' }}>
+                  {editing === a.id ? (
+                    <>
+                      <button className={`primary ${s.ghostBtn}`} onClick={() => save(a.id)}>Save</button>
+                      <button className={s.ghostBtn} onClick={() => setEditing(null)}>Cancel</button>
+                    </>
+                  ) : (
+                    <>
+                      <button className={s.ghostBtn} onClick={() => { setEditing(a.id); setDraft(a.displayValue); }}>Edit</button>
+                      <button className={`ghost ${s.ghostBtn}`} style={{ color: 'var(--muted)' }} onClick={() => remove(a.id, a.rawLabel)}>Forget</button>
+                    </>
+                  )}
+                </div>
+              </div>
             ))}
-          </tbody>
-        </table>
-      )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

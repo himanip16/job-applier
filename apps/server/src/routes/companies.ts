@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/db.js';
-import { API_SOURCES } from '../discovery/sources.js';
+import { API_SOURCES, SHARED_PLATFORM_SOURCES } from '../discovery/sources/index.js';
+
 import { isFirecrawlConfigured } from '../discovery/firecrawl.js';
 import type { RequireProfile } from './types.js';
 
@@ -27,7 +28,9 @@ export const REJECT_CATEGORIES = [
 
 export function registerCompanyRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   app.get('/api/sources', async () => ({
-    sources: API_SOURCES.map((s) => ({ id: s.id, handleHint: s.handleHint })).concat([
+    // The careers-site platforms many companies share can be added by hand too;
+    // the rest are one company's own site, reached via search.
+    sources: [...API_SOURCES, ...SHARED_PLATFORM_SOURCES].map((s) => ({ id: s.id, handleHint: s.handleHint })).concat([
       { id: 'careers-page', handleHint: 'full URL of the careers page to crawl' },
     ]),
     rejectCategories: REJECT_CATEGORIES,
@@ -42,7 +45,7 @@ export function registerCompanyRoutes(app: FastifyInstance, requireProfile: Requ
     const body = z
       .object({
         name: z.string().min(1),
-        source: z.enum(['greenhouse', 'lever', 'ashby', 'workable', 'careers-page']),
+        source: z.enum(['greenhouse', 'lever', 'ashby', 'workable', 'workday', 'smartrecruiters', 'eightfold', 'careers-page']),
         handle: z.string().min(1),
       })
       .parse(req.body);

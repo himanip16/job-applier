@@ -2,6 +2,7 @@ import type { Page } from 'playwright';
 import type { FormField } from '@ja/shared';
 import { extractFields } from '../../browser/extract.js';
 import { openApplicationForm } from '../../browser/openForm.js';
+import { fileHint } from '../types.js';
 import type { AtsAdapter, JobMeta } from '../types.js';
 
 /**
@@ -70,8 +71,8 @@ export const greenhouseAdapter: AtsAdapter = {
 
   fileInputs(fields) {
     return {
-      resume: fields.find((f) => f.kind === 'FILE' && /resume|cv/i.test(f.label + f.selector)),
-      coverLetter: fields.find((f) => f.kind === 'FILE' && /cover/i.test(f.label + f.selector)),
+      resume: fields.find((f) => f.kind === 'FILE' && /resume|cv/i.test(fileHint(f))),
+      coverLetter: fields.find((f) => f.kind === 'FILE' && /cover/i.test(fileHint(f))),
     };
   },
 

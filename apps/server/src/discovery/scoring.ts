@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import { normalizeLabel, tokenize } from '@ja/shared';
+import { candidateRejections } from './decisionHistory.js';
 import { prisma, type Prisma } from '../lib/db.js';
 import { generate, describeLlmError } from '../llm/client.js';
-import type { DiscoveredJob } from './sources.js';
+import type { DiscoveredJob } from './sources/index.js';
+import { wrongDomain } from './leadCleanup.js';
 
 /**
  * Ranking leads, and learning to rank them better.
@@ -63,7 +65,38 @@ const STOP_TERMS = new Set([
   'style', 'class', 'rsquo', 'lsquo', 'ldquo', 'rdquo', 'amp', 'quot', 'apos',
   'font', 'color', 'align', 'width', 'height', 'padding', 'margin', 'border',
   'props', 'data', 'html', 'body', 'src', 'alt', 'utm', 'gh', 'jid',
+  // Connective filler every posting and every resume share. They matched
+  // anything to anything - "across", "other" and "high" were among the terms
+  // that put a management-consulting role at 83% for a backend engineer.
+  'across', 'other', 'others', 'high', 'highly', 'through', 'within', 'including', 'include',
+  'ensure', 'also', 'well', 'based', 'related', 'using', 'use', 'used', 'make', 'able',
+  'ability', 'may', 'must', 'will', 'can', 'our', 'your', 'their', 'etc', 'via', 'per',
+  'more', 'most', 'best', 'great', 'good', 'key', 'level', 'low', 'every', 'each', 'into',
+  // Words every tech posting and every tech resume share. They put "Workday
+  // Extend Developer" at 99% and "People Technology Delivery Lead" at 98% for
+  // a backend engineer, on "application, architecture, apis, services,
+  // technology, management" - agreement about nothing.
+  'application', 'applications', 'architecture', 'api', 'apis', 'service', 'services',
+  'technology', 'technologies', 'technical', 'management', 'manage', 'business', 'solution',
+  'solutions', 'customer', 'customers', 'teams', 'skills', 'skill', 'operations', 'while',
+  'environment', 'requirements', 'responsibilities', 'knowledge', 'understanding', 'support',
+  'development', 'develop', 'process', 'processes', 'product', 'products', 'quality', 'tools',
+  'project', 'projects', 'global', 'world', 'people', 'opportunity', 'position', 'candidate',
+  'qualifications', 'preferred', 'plus', 'excellent', 'communication', 'collaborate',
+  'collaboration', 'stakeholders', 'deliver', 'delivery', 'drive', 'impact', 'problems',
+  'solve', 'systems', 'system', 'design', 'implementation', 'implement', 'features', 'feature',
 ]);
+
+/**
+ * A title that names a technical role. An engineer's resume shares plenty of
+ * ordinary business words with a consulting or HR posting, so without this a
+ * "Management Consultant - Financial Risk" scored 83%.
+ */
+const TECH_TITLE =
+  /engineer|developer|software|\bsde\b|back[- ]?end|front[- ]?end|full[- ]?stack|platform|devops|\bsre\b|reliability|infrastructure|\bdata\b|machine learning|\bml\b|\bai\b|architect|programmer|technical|technology|security|cloud|mobile|\bios\b|android|\bqa\b|\btest|automation|systems|kubernetes|golang|java|python|scientist/i;
+
+/** The most a non-technical title can score for a technical candidate. */
+const OFF_ROLE_CAP = 20;
 
 /** Terms that characterise a posting, split by where they came from. */
 function jobTermWeights(
@@ -78,7 +111,8 @@ function jobTermWeights(
 
   // Title terms count for far more than body terms.
   for (const t of tokenize(normalizeLabel(job.title))) add(title, t, 4);
-  for (const t of tokenize(normalizeLabel(job.location ?? ''))) add(body, t, 2);
+  // The location is not counted: "India" on a posting matching "India" on a
+  // resume says where, not what, and the country filter already handles where.
   // The first chunk of a description is where the role is actually defined;
   // the tail is benefits boilerplate and EEO statements.
   for (const t of tokenize(normalizeLabel((job.descriptionText ?? '').slice(0, 3000)))) {
@@ -133,6 +167,8 @@ export interface ScoringContext {
   signals: Map<string, number>;
   /** Every word that appears in the candidate's resume, summary or facts. */
   vocabulary: Set<string>;
+  /** The resume is an engineer's: non-technical titles are capped, not ranked on shared words. */
+  technical?: boolean;
 }
 
 export async function loadScoringContext(profileId: string): Promise<ScoringContext> {
@@ -140,7 +176,12 @@ export async function loadScoringContext(profileId: string): Promise<ScoringCont
     loadSignals(profileId),
     prisma.profile.findUnique({ where: { id: profileId }, include: { facts: true } }),
   ]);
-  return { signals, vocabulary: profile ? profileVocabulary(profile) : new Set() };
+  const text = `${profile?.resumeText ?? ''}\n${profile?.summary ?? ''}`;
+  return {
+    signals,
+    vocabulary: profile ? profileVocabulary(profile) : new Set(),
+    technical: /\b(software|backend|back-end|frontend|full[- ]?stack|engineer|developer|sde)\b/i.test(text),
+  };
 }
 
 export interface LexicalScore {
@@ -243,7 +284,11 @@ export function scoreLexically(job: ScorableJob, ctx: ScoringContext): LexicalSc
   // zero and the job lands mid-pack, which is the honest answer when nothing
   // is known - but now it is the rare case rather than every row.
   const drive = (known ? AFFINITY_GAIN * (affinity - AFFINITY_NEUTRAL) : 0) + learned / 3;
-  const score = 100 / (1 + Math.exp(-drive));
+  const raw = 100 / (1 + Math.exp(-drive));
+  // A sales engineer or a Workday configurator is off-role however many
+  // words the description shares with the resume.
+  const offRole = (ctx.technical && !TECH_TITLE.test(job.title)) || wrongDomain(job.title) !== null;
+  const score = offRole ? Math.min(raw, OFF_ROLE_CAP) : raw;
 
   const hits = positives.length + negatives.length;
   const confidence = Math.min(1, (known ? 0.7 : 0) + Math.min(0.3, hits * 0.075));
@@ -422,7 +467,7 @@ Assess the fit.`,
  */
 export async function buildRejectionHistory(profileId: string, limit = 25): Promise<string> {
   const rejected = await prisma.jobLead.findMany({
-    where: { profileId, status: 'REJECTED' },
+    where: { profileId, ...candidateRejections },
     orderBy: { decidedAt: 'desc' },
     take: limit,
     select: { title: true, companyName: true, location: true, rejectReason: true, rejectCategory: true },

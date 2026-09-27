@@ -3,7 +3,7 @@ import type { AnswerGap, FormField, ResolvedAnswer } from '@ja/shared';
 import { prisma, type Prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
-import { screenshot } from '../browser/session.js';
+import { screenshot, unlessClosed } from '../browser/session.js';
 import { detectBlockers, type Blocker } from '../browser/blockers.js';
 import { abandon, park, questionsKey, blockerKey } from './waiters.js';
 import { NeedsHumanError, NoFormError, describeDiagnosis } from '../browser/openForm.js';
@@ -32,6 +32,7 @@ import { setStatus, artifact } from './runLog.js';
  */
 export async function askHuman(
   applicationId: string,
+  page: Page,
   fields: FormField[],
   gaps: AnswerGap[],
 ): Promise<Map<string, ResolvedAnswer>> {
@@ -44,7 +45,8 @@ export async function askHuman(
     questionsKey(applicationId),
   );
 
-  await prisma.pendingQuestion.createMany({
+  const asked = await prisma.pendingQuestion.createManyAndReturn({
+    select: { id: true },
     data: gaps.map((g) => {
       const f = byId.get(g.fieldId)!;
       return {
@@ -79,7 +81,28 @@ export async function askHuman(
     })),
   });
 
-  const replies = await replyPromise;
+  // A closed tab ends the wait. The answers already given are on the pending
+  // questions, so a fresh run picks them up rather than asking again.
+  //
+  // The in-memory release only works when the answer arrives in this process.
+  // A run started from the terminal is answered in the web app, and the other
+  // way round, so the database is watched as well: once every question asked
+  // here has an answer, whoever wrote it, the run carries on.
+  const answeredElsewhere = new AbortController();
+  let replies: Awaited<typeof replyPromise>;
+  try {
+    replies = await unlessClosed(
+      page,
+      Promise.race([
+        replyPromise,
+        watchForAnswers(asked.map((q) => q.id), answeredElsewhere.signal),
+      ]),
+      'while waiting for your answers',
+    );
+  } finally {
+    answeredElsewhere.abort();
+    abandon(questionsKey(applicationId));
+  }
 
   const out = new Map<string, ResolvedAnswer>();
   for (const reply of replies) {
@@ -100,6 +123,31 @@ export async function askHuman(
   await setStatus(applicationId, 'FILLING', 'Got your answers, carrying on.');
   return out;
 }
+
+/** How often a parked run looks for answers written by another process. */
+export const ANSWER_POLL_MS = 1500;
+
+/**
+ * Resolve once every one of these questions has an answer in the database.
+ * Never resolves if `signal` fires first - the caller has its answers already.
+ */
+async function watchForAnswers(
+  questionIds: string[],
+  signal: AbortSignal,
+): Promise<Array<{ fieldId: string; value: string | string[]; remember: boolean }>> {
+  for (;;) {
+    await new Promise((r) => setTimeout(r, ANSWER_POLL_MS));
+    if (signal.aborted) return new Promise(() => {});
+    const rows = await prisma.pendingQuestion.findMany({ where: { id: { in: questionIds } } });
+    if (rows.length && rows.every((q) => q.answeredAt)) {
+      return rows.map((q) => ({
+        fieldId: q.fieldId,
+        value: q.answerValue as string | string[],
+        remember: q.remember,
+      }));
+    }
+  }
+}
 export async function pauseForHuman(
   applicationId: string,
   page: Page,
@@ -116,8 +164,16 @@ export async function pauseForHuman(
   // Whichever comes first: you press the button, or the wall simply goes away
   // because you dealt with it. The second is the common case and it should not
   // require coming back to this app to say so.
-  const decision = await Promise.race([manual, watchForClearance(applicationId, page, blocker)]);
-  abandon(key);
+  let decision: { carryOn: boolean; note?: string };
+  try {
+    decision = await unlessClosed(
+      page,
+      Promise.race([manual, watchForClearance(applicationId, page, blocker)]),
+      'while waiting for you in the browser',
+    );
+  } finally {
+    abandon(key);
+  }
 
   if (!decision.carryOn) {
     await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
@@ -177,6 +233,12 @@ function watchForClearance(
   return new Promise((resolve) => {
     let clearReads = 0;
     let announced = false;
+
+    // "Could not fill these fields" is not something detectBlockers can see,
+    // so it always read as cleared and the run looped: fail every dropdown,
+    // pause, "looks dealt with" four seconds later, fail them all again. Only
+    // walls the page can show clear themselves; the rest wait for your click.
+    if (blocker.autoClears === false) return;
 
     const tick = async () => {
       if (page.isClosed()) return;
