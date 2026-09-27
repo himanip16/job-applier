@@ -121,7 +121,10 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
         has(/log ?in to your account/) ||
         // Google's first sign-in screen is an email box and this sentence.
         has(/use your google account/) ||
-        has(/sign in with your (work|school|microsoft|google) account/),
+        has(/sign in with your (work|school|microsoft|google) account/) ||
+        // Eightfold's candidate modal (Microsoft Careers): a row of
+        // "Sign in using Microsoft / LinkedIn / Google" buttons, no password box.
+        has(/select a method below to sign in/),
       createAccount:
         has(/create (an )?account to apply/) ||
         has(/register to (continue|apply)/) ||

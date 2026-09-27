@@ -14,8 +14,11 @@ import { RejectDialog } from './components/RejectDialog';
 import { SearchReportPanel } from './components/SearchReportPanel';
 import { SelectionBar } from './components/SelectionBar';
 import type { Company, Lead, LeadPage, RescoreResult, SearchReport } from './types';
-import { DEFAULT_VIEW, FILTER_KEYS, isDefault, queryString, viewFromQuery, type View } from './view';
+import { DEFAULT_VIEW, FILTER_KEYS, isDefault, pageFromQuery, queryString, viewFromQuery, type View } from './view';
 import styles from './discover.module.css';
+
+/** Where the last view is kept, for the nav link's bare /discover. */
+const VIEW_KEY = 'discover.view';
 
 const TABS: { status: string; label: string; icon: IconName }[] = [
   { status: 'NEW', label: 'For you', icon: 'sparkles' },
@@ -62,10 +65,20 @@ export default function DiscoverPage() {
   // two on the next page, then rescoring all five, is the point.
   const [picked, setPicked] = useState<string[]>([]);
 
+  // The address bar wins; a bare /discover (the nav link) falls back to the
+  // last view, so opening a job or another page and coming back keeps the
+  // filters and the page you were on.
   useEffect(() => {
-    const fromUrl = viewFromQuery(window.location.search);
+    let search = window.location.search;
+    if (!new URLSearchParams(search).has('status')) {
+      try {
+        search = localStorage.getItem(VIEW_KEY) ?? search;
+      } catch {}
+    }
+    const fromUrl = viewFromQuery(search);
     setView((v) => ({ ...v, ...fromUrl }));
     setTyped(fromUrl.q ?? '');
+    setPage(pageFromQuery(search));
     setReady(true);
   }, []);
 
@@ -73,6 +86,9 @@ export default function DiscoverPage() {
     if (!ready) return;
     const qs = queryString(view, page);
     window.history.replaceState(null, '', `${window.location.pathname}?${qs}`);
+    try {
+      localStorage.setItem(VIEW_KEY, `?${qs}`);
+    } catch {}
   }, [view, page, ready]);
 
   useEffect(() => {

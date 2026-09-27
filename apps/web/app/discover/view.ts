@@ -131,3 +131,9 @@ export function viewFromQuery(search: string): Partial<View> {
   if ([10, 25, 50, 100].includes(limit)) out.limit = limit;
   return out;
 }
+
+/** The page number in the address bar; 1 when absent or malformed. The server clamps one past the end. */
+export function pageFromQuery(search: string): number {
+  const page = Number(new URLSearchParams(search).get('page'));
+  return Number.isInteger(page) && page >= 1 ? page : 1;
+}

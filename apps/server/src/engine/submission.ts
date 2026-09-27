@@ -10,6 +10,7 @@ import type { AtsAdapter } from '../ats/types.js';
 import { rememberAnswer } from './answerBank.js';
 import { park, reviewKey } from './waiters.js';
 import { artifact, setStatus } from './runLog.js';
+import { markLeadApplied } from './leadSync.js';
 import type { FieldPlanEntry } from './fieldPlan.js';
 
 /**
@@ -50,6 +51,7 @@ export async function finishApplication(args: {
     app.requiresReview ||
     config.requireReview ||
     adapter.id === 'generic' ||
+    !!adapter.alwaysReview ||
     !!captcha ||
     plan.some((p) => p.error) ||
     plan.some((p) => p.confidence < 0.9 && p.filled);
@@ -59,6 +61,8 @@ export async function finishApplication(args: {
       ? `${captcha.detail} The form is filled and waiting; solve the challenge in the browser, then approve here.`
       : adapter.id === 'generic'
         ? 'Unrecognised site, so this always goes through review.'
+        : adapter.alwaysReview
+          ? `The ${adapter.id} final step has not been mapped yet, so this always goes through review.`
         : 'Filled and ready. Check it over, then approve.';
     // Register the waiter BEFORE announcing the status. Anything watching the
     // run - the UI, the CLI, a test - can observe REVIEW and answer within
@@ -104,6 +108,7 @@ export async function finishApplication(args: {
       data: { status: 'SUBMITTED', submittedAt: new Date(), confirmation: outcome.detail, blockedReason: null },
     });
     await bus.emitEvent(applicationId, 'STATUS', 'Submitted.', { status: 'SUBMITTED' });
+    await markLeadApplied(applicationId);
     await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, companyKey);
     return;
   }
@@ -131,6 +136,7 @@ export async function finishApplication(args: {
     });
     await bus.emitEvent(applicationId, 'STATUS', second.outcome, { status: second.outcome });
     if (second.outcome === 'SUBMITTED') {
+      await markLeadApplied(applicationId);
       await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, companyKey);
     }
     return;

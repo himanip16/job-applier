@@ -6,6 +6,7 @@ import { submitAnswers, decideReview, continueRun } from '../engine/runner.js';
 import { rememberAnswer } from '../engine/answerBank.js';
 import { ANSWER_POLL_MS } from '../engine/humanGate.js';
 import { isParked, blockerKey } from '../engine/waiters.js';
+import { markLeadApplied } from '../engine/leadSync.js';
 import { adapterFor } from '../ats/registry.js';
 import { matchCanonical, normalizeLabel } from '@ja/shared';
 import { NOT_YOURS, ownedApplication } from '../auth/ownership.js';
@@ -204,6 +205,7 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
         ? { status: 'SUBMITTED', submittedAt: new Date(), confirmation: 'You confirmed it went through.', blockedReason: null }
         : { status: 'FAILED', blockedReason: 'Not submitted - you checked. Resume to fill it in again.' },
     });
+    if (submitted) await markLeadApplied(req.params.id);
     return { ok: true };
   });
 

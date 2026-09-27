@@ -28,6 +28,11 @@ export interface AtsAdapter {
   submit(page: Page): Promise<void>;
   /** Human-readable notes shown in the UI: known quirks, captcha, etc. */
   notes: string[];
+  /**
+   * Always stop for review before submitting, whatever the settings say. For
+   * sites whose final step has not been seen in a real run yet.
+   */
+  alwaysReview?: boolean;
 }
 
 export async function textOf(page: Page, selector: string): Promise<string> {

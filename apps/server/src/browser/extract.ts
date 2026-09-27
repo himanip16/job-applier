@@ -173,6 +173,8 @@ const EXTRACTOR = () => {
 
   const isRequired = (el: HTMLElement): boolean => {
     if (el.hasAttribute('required') || el.getAttribute('aria-required') === 'true') return true;
+    // Google Careers marks the group, not each radio in it.
+    if (el.closest('[role="radiogroup"][aria-required="true"], [role="group"][aria-required="true"]')) return true;
     // A marker glyph in the label is the near-universal convention for forms
     // that do not set the attribute. Ashby draws its asterisk with CSS from a
     // `_required_xxxx` class on the question title, so there is no glyph in
@@ -223,11 +225,38 @@ const EXTRACTOR = () => {
       const text = textOf(legend);
       if (text) return text;
     }
+    // An ARIA group that names itself, or whose question sits as plain text
+    // in the element just before it - Google Careers' qualification
+    // questions, which have no <label> or <legend> at all.
+    const group = container.closest<HTMLElement>('[role="radiogroup"], [role="group"]');
+    if (group) {
+      const labelledBy = group.getAttribute('aria-labelledby');
+      const named = labelledBy
+        ? labelledBy.split(/\s+/).map((id) => textOf(document.getElementById(id))).filter(Boolean).join(' ')
+        : '';
+      if (named) return named;
+      // Step over a validation message ("The answer is required") that
+      // Google renders between the question and its options.
+      let prev = group.previousElementSibling;
+      for (let hops = 0; prev && hops < 2; hops++, prev = prev.previousElementSibling) {
+        if (prev.querySelector('input, select, textarea, button')) break;
+        const text = textOf(prev);
+        if (!text || /^(the answer is required|this (field|question) is required|required|error\b.*|please .*)$/i.test(text)) continue;
+        if (text.length <= 300) return text;
+        break;
+      }
+      const aria = group.getAttribute('aria-label')?.trim();
+      if (aria && !/radio input$/i.test(aria)) return aria;
+    }
     let node: HTMLElement | null = container.parentElement;
     for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
       for (const l of Array.from(node.querySelectorAll(CAPTION_SELECTOR))) {
         if (container.contains(l) || l.contains(container)) continue;
         if (optionIds.has(l.getAttribute('for') ?? '')) continue;
+        // Another group's option ("Yes" of the question above) is never this
+        // group's question. Google Careers' questions all came out as "Yes".
+        const target = l.getAttribute('for') ? document.getElementById(l.getAttribute('for')!) : null;
+        if (target && /^(radio|checkbox)$/i.test(target.getAttribute('type') ?? '')) continue;
         const text = textOf(l);
         if (text) return text;
       }

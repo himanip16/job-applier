@@ -5,6 +5,7 @@ import { bus } from '../lib/events.js';
 import { getContextSync, newPage, PageClosedError, screenshot } from '../browser/session.js';
 import { NeedsHumanError } from '../browser/openForm.js';
 import { findEmbeddedAts } from '../ats/embedded.js';
+import { resolveKnownAts } from '../ats/resolve.js';
 import { adapterFor } from '../ats/registry.js';
 import { handleOpenFailure, pauseForHuman } from './humanGate.js';
 import { artifact, setStatus } from './runLog.js';
@@ -51,6 +52,18 @@ export async function runApplication(applicationId: string): Promise<void> {
     // ---- 1. Reach the form --------------------------------------------------
     // A careers page on the company's own domain is often a known ATS in an
     // iframe. Drive that ATS directly rather than the page around it.
+    if (adapter.id === 'generic') {
+      const known = await resolveKnownAts(app.job.url, app.profileId);
+      if (known) {
+        adapter = known.adapter;
+        formUrl = known.url;
+        await bus.emitEvent(
+          applicationId,
+          'LOG',
+          `This posting is a ${adapter.id} application; opening its form directly.`,
+        );
+      }
+    }
     if (adapter.id === 'generic') {
       const embedded = await findEmbeddedAts(page, app.job.url);
       if (embedded) {
