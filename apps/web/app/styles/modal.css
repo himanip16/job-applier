@@ -1,0 +1,22 @@
+/* -------------------------------------------------------------------- modal */
+
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(6, 8, 12, 0.65);
+  backdrop-filter: blur(3px);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 3rem 1rem; overflow: auto; z-index: 50;
+  animation: fadein var(--fast) var(--ease);
+}
+.modal {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 1.4rem; width: min(680px, 100%);
+  box-shadow: var(--shadow-lg);
+  animation: modalIn 180ms var(--ease);
+}
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modalIn { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+.q { border-top: 1px solid var(--border); padding: 0.9rem 0; }
+.q:first-of-type { border-top: 0; }
+.q .why { font-size: var(--fs-sm); color: var(--muted); margin: 0.2rem 0 0.5rem; }
+.q .why.policy { color: var(--warn); }
