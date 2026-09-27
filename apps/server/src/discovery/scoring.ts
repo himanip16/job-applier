@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { normalizeLabel, tokenize } from '@ja/shared';
+import { candidateRejections } from './decisionHistory.js';
 import { prisma, type Prisma } from '../lib/db.js';
 import { generate, describeLlmError } from '../llm/client.js';
 import type { DiscoveredJob } from './sources/index.js';
@@ -466,7 +467,7 @@ Assess the fit.`,
  */
 export async function buildRejectionHistory(profileId: string, limit = 25): Promise<string> {
   const rejected = await prisma.jobLead.findMany({
-    where: { profileId, status: 'REJECTED' },
+    where: { profileId, ...candidateRejections },
     orderBy: { decidedAt: 'desc' },
     take: limit,
     select: { title: true, companyName: true, location: true, rejectReason: true, rejectCategory: true },

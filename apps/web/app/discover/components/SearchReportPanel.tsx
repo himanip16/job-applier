@@ -18,9 +18,17 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
   // Older servers did not send these; treat them as nothing dropped.
   const offPlan = report.skippedOffPlan ?? 0;
   const wrongDomain = report.skippedWrongDomain ?? 0;
+  const fetched = report.jobsFetched ?? report.boards.reduce((sum, b) => sum + b.openings, 0);
+  const failed = report.boards.filter((b) => b.error).length;
+  const partial = report.boards.filter((b) => !b.error && b.warnings?.length).length;
+  const noSource = report.noSource ?? [];
+  const unknownLocation = report.keptUnknownLocation ?? 0;
   const dropped = [
     { label: 'not in plan', count: offPlan, examples: report.droppedExamples?.offPlan ?? [] },
     { label: 'not engineering', count: wrongDomain, examples: report.droppedExamples?.wrongDomain ?? [] },
+    { label: 'above the experience or seniority limit', count: report.skippedTooSenior ?? 0, examples: report.droppedExamples?.tooSenior ?? [] },
+    { label: 'outside the chosen country', count: report.skippedOtherCountry ?? 0, examples: report.droppedExamples?.otherCountry ?? [] },
+    { label: 'older than 90 days', count: report.skippedTooOld ?? 0, examples: report.droppedExamples?.tooOld ?? [] },
   ].filter((d) => d.count > 0);
 
   return (
@@ -36,10 +44,11 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
       </strong>{' '}
       {!dryRun && (
         <span className="muted small">
-          Read {report.boards.filter((b) => !b.error).length} of {report.boards.length} top-paying companies ·{' '}
-          {report.jobsSeen} posting{report.jobsSeen === 1 ? '' : 's'} considered ·{' '}
-          {report.skippedAlreadySeen} already seen · {offPlan} not in plan · {wrongDomain} not engineering ·{' '}
-          {report.deepScored} read in full
+          {report.boards.length} companies checked · {failed} failed · {partial} with limited coverage ·{' '}
+          {fetched} postings fetched · {report.jobsSeen} passed filters ·{' '}
+          {report.skippedAlreadySeen} already seen · {report.deepScored} assessed by the model
+          {noSource.length > 0 && ` · ${noSource.length} with no careers source set up`}
+          {unknownLocation > 0 && ` · ${unknownLocation} kept with location unknown`}
           {report.companiesRegistered > 0 &&
             ` · ${report.companiesRegistered} new board${
               report.companiesRegistered === 1 ? '' : 's'
@@ -73,16 +82,18 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
         )}
       </details>
 
-      {boards.length > 0 && (
+      {!dryRun && report.boards.length > 0 && (
         <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
           <summary className="small">
-            Companies it found
+            Source coverage
           </summary>
           <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
-            {boards.map((b) => (
+            {report.boards.map((b) => (
               <li key={`${b.ats}:${b.slug}`}>
-                {b.company} <span className="src">{b.ats}</span> — {b.kept} of {b.openings} opening
-                {b.openings === 1 ? '' : 's'} kept
+                {b.company} <span className="src">{b.ats}</span> — {b.error
+                  ? `failed: ${b.error}`
+                  : `${b.openings} postings fetched, ${b.kept} new jobs saved`}
+                {b.warnings?.map((warning) => <p key={warning} style={{ margin: '.2rem 0' }}>{warning}</p>)}
               </li>
             ))}
           </ul>
@@ -101,6 +112,18 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
               </li>
             ))}
           </ul>
+        </details>
+      )}
+
+      {/* Not an error: these companies are listed but nobody has pointed them at a careers API or page yet. */}
+      {noSource.length > 0 && (
+        <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
+          <summary className="small">
+            {noSource.length} compan{noSource.length === 1 ? 'y' : 'ies'} with no careers source set up
+          </summary>
+          <p className="small muted" style={{ margin: '.4rem 0 0' }}>
+            {noSource.join(', ')}.
+          </p>
         </details>
       )}
 

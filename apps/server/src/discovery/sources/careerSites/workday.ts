@@ -66,6 +66,6 @@ export const workdaySource: Source = {
         descriptionText: description,
         postedAt: toDate(d.startDate),
       };
-    });
+    }, hints);
   },
 };

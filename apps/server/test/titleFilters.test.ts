@@ -10,7 +10,7 @@ import { isSeniorLevel } from '../src/discovery/jobFilters.js';
 
 // searchQueries imports the Prisma client; under vitest that refuses anything
 // but a _test database, and building it runs no query.
-const { titleMatchesPlan, normalizeTitle } = await import('../src/discovery/searchQueries.js');
+const { titleMatchesPlan, normalizeTitle, jobMatchesPlan } = await import('../src/discovery/searchQueries.js');
 
 describe('one vocabulary for titles', () => {
   it('reads SDE, MTS and Developer as the engineer titles they are', () => {
@@ -34,6 +34,26 @@ describe('one vocabulary for titles', () => {
     expect(titleMatchesPlan('SDET', ['Software Engineer'])).toBe(false);
     expect(titleMatchesPlan('Frontend Developer', ['Backend Engineer'])).toBe(false);
     expect(titleMatchesPlan('Technical Recruiter', ['Software Engineer'])).toBe(false);
+  });
+
+  it('matches spelling variants and generic engineering levels', () => {
+    expect(titleMatchesPlan('Back-end Developer II', ['Backend Engineer'])).toBe(true);
+    expect(titleMatchesPlan('Full Stack Engineer', ['Fullstack Developer'])).toBe(true);
+    expect(titleMatchesPlan('SDE II', ['Senior Software Engineer'])).toBe(true);
+    expect(titleMatchesPlan('Recruiter', ['Senior'])).toBe(false);
+  });
+
+  it('uses responsibilities when a software title does not name its speciality', () => {
+    expect(jobMatchesPlan({ title: 'Software Engineer II', descriptionText: 'Build server-side services in Go.' }, ['Backend Engineer'])).toBe(true);
+    expect(jobMatchesPlan({ title: 'MTS 2', descriptionText: 'Own our backend payment services.' }, ['Backend Engineer'])).toBe(true);
+    expect(jobMatchesPlan({ title: 'Software Engineer II', descriptionText: 'Build user interfaces in React.' }, ['Backend Engineer'])).toBe(false);
+    expect(jobMatchesPlan({ title: 'Software Engineer II' }, ['Backend Engineer'])).toBe(false);
+  });
+
+  it('does not let incidental description keywords override a different role', () => {
+    for (const title of ['Frontend Engineer', 'Technical Recruiter', 'Sales Engineer', 'Counsel, Payments']) {
+      expect(jobMatchesPlan({ title, descriptionText: 'Work alongside backend software engineers.' }, ['Backend Engineer'])).toBe(false);
+    }
   });
 });
 

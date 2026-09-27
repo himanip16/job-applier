@@ -6,8 +6,9 @@ import {
   blendScores,
   buildPreferences,
   buildRejectionHistory,
+  loadScoringContext,
+  scoreLexically,
   serialiseReasons,
-  type LexicalScore,
 } from './scoring.js';
 import { applyHardRules, candidateConstraints } from './hardRules.js';
 
@@ -61,6 +62,7 @@ export async function deepScoreLeads(
   const constraints = candidateConstraints(profile);
   const preferences = await buildPreferences(profileId);
   const rejectionHistory = await buildRejectionHistory(profileId);
+  const scoring = await loadScoringContext(profileId);
 
   const shortlist = fresh.sort((a, b) => b.lexScore - a.lexScore).slice(0, deepScoreTop);
   
@@ -83,25 +85,13 @@ export async function deepScoreLeads(
         job: entry.job 
       });
       
-      // Use the pre-calculated lexScore instead of recalculating
-      // Reconstruct a minimal LexicalScore object for blending
-      const lex: LexicalScore = {
-        score: entry.lexScore,
-        positives: [],
-        negatives: [],
-        affinity: 0,
-        shared: [],
-        missing: [],
-        confidence: 0,
-      };
+      const lex = scoreLexically(entry.job, scoring);
       
       // Blend, weighted toward the model - it read the description, the
       // lexical prior only saw word counts. A hard blocker overrides both.
       const blended = blendScores(fit, lex);
       
-      // Auto-reject leads with deep score below 55
-      const shouldAutoReject = blended < 55;
-      
+      // Ranking never changes a candidate decision. Low scores remain reviewable.
       await prisma.jobLead.update({
         where: { id: entry.id },
         data: {
@@ -109,11 +99,6 @@ export async function deepScoreLeads(
           scoreReasons: serialiseReasons(lex, fit) as Prisma.InputJsonValue,
           deepScored: true,
           scoredAt: new Date(),
-          ...(shouldAutoReject && {
-            status: 'REJECTED',
-            decidedAt: new Date(),
-            rejectReason: 'Auto-rejected: deep score below 55',
-          }),
         },
       });
       

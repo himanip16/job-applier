@@ -37,6 +37,6 @@ export const ripplingSource: Source = {
         remote: looksRemote(location),
         descriptionText: Object.values(detail.description ?? {}).map(stripHtml).join('\n\n'),
       };
-    });
+    }, hints);
   },
 };

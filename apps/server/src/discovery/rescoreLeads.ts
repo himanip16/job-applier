@@ -10,7 +10,6 @@ import {
   serialiseReasons,
 } from './scoring.js';
 import { applyHardRules, candidateConstraints } from './hardRules.js';
-import { wrongDomain } from './leadCleanup.js';
 
 
 /**
@@ -47,15 +46,6 @@ export const NO_DESCRIPTION_MESSAGE =
   'whose API would not answer; open the posting itself.';
 
 export const DECLINED_MESSAGE = 'The model declined to assess this one.';
-
-/**
- * Below this, a lead is deleted rather than kept and ranked last.
- *
- * Deleting on a cheap keyword score is a strong action taken on weak
- * evidence, so the bar is set at the bottom of the observed distribution
- * rather than at the midpoint - see the note at the call site.
- */
-const PRUNE_BELOW = 40;
 
 type Lead = Awaited<ReturnType<typeof prisma.jobLead.findFirstOrThrow>>;
 
@@ -119,9 +109,7 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
       const lex = scoreLexically(job, scoring);
       const blended = blendScores(fit, lex);
       
-      // Auto-reject leads with deep score below 55
-      const shouldAutoReject = blended < 55;
-      
+      // Ranking never changes a candidate decision. Low scores remain reviewable.
       await prisma.jobLead.update({
         where: { id: lead.id },
         data: {
@@ -129,11 +117,6 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
           scoreReasons: serialiseReasons(lex, fit) as Prisma.InputJsonValue,
           deepScored: true,
           scoredAt: new Date(),
-          ...(shouldAutoReject && {
-            status: 'REJECTED',
-            decidedAt: new Date(),
-            rejectReason: 'Auto-rejected: deep score below 55',
-          }),
         },
       });
       outcomes.push({ id: lead.id, ok: true, score: blended });
@@ -191,7 +174,6 @@ export async function rescoreByIds(profileId: string, ids: string[]): Promise<Re
  */
 export async function rescoreLexically(profileId: string): Promise<number> {
   const scoring = await loadScoringContext(profileId);
-  let pruned = 0;
   const leads = await prisma.jobLead.findMany({
     where: { profileId, status: 'NEW', deepScored: false },
   });
@@ -207,42 +189,6 @@ export async function rescoreLexically(profileId: string): Promise<number> {
       scoring,
     );
 
-    // Drop the genuinely hopeless so the queue stays a queue.
-    //
-    // This threshold arrived as 45, which was safe only while every
-    // lexical score was 50: nothing was ever below it, so nothing was ever
-    // deleted. Now that the score actually reflects the resume, a real
-    // backend job with a terse title lands in the twenties - Mercury's own
-    // "Senior Software Engineer - Mercury Command" scores 27 - and 45 would
-    // permanently delete most of a healthy queue on every crawl. Fifteen is
-    // where the honest bottom of the distribution sits: marketing, support
-    // and compliance postings for a backend engineer.
-    //
-    // Moved to Dismissed, never deleted: nothing in the app removes your data
-    // on its own. A lead you disagree with is one tab away.
-    //
-    // And only a role the rules already say is not engineering. A keyword
-    // score alone must never dismiss a real engineering job: "Senior Data
-    // Engineer" scored 8 once the filler words stopped counting.
-    if (lex.score < PRUNE_BELOW && wrongDomain(lead.title)) {
-      await prisma.jobLead
-        .update({
-          where: { id: lead.id },
-          data: {
-            status: 'REJECTED',
-            score: lex.score,
-            scoreReasons: serialiseReasons(lex, null),
-            scoredAt: new Date(),
-            decidedAt: new Date(),
-            rejectCategory: 'Wrong domain',
-            rejectReason: `Auto-dismissed: not a software engineering role (${wrongDomain(lead.title)}).`,
-          },
-        })
-        .catch(() => {});
-      pruned++;
-      continue;
-    }
-
     await prisma.jobLead.update({
       where: { id: lead.id },
       data: {
@@ -253,6 +199,5 @@ export async function rescoreLexically(profileId: string): Promise<number> {
     });
     updated++;
   }
-  if (pruned) process.stdout.write(`[discovery] moved ${pruned} hopeless lead(s) to Dismissed\n`);
   return updated;
 }

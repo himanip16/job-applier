@@ -3,6 +3,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Planning fallback tests must not call a paid model, including when a key is
+// present in the test database's saved settings.
+vi.mock('../src/llm/client.js', () => ({
+  isConfigured: () => false,
+  generate: vi.fn(),
+  describeLlmError: (error: unknown) => String(error),
+}));
+
 /**
  * The search path, end to end, without a network.
  *
@@ -198,7 +206,7 @@ describe('the Firecrawl client', () => {
   it('says what to do when there is no key, instead of failing at the socket', async () => {
     await withKey('');
     try {
-      await expect(firecrawlSearch('backend engineer')).rejects.toThrow(/FIRECRAWL_API_KEY/);
+      await expect(firecrawlSearch('backend engineer')).rejects.toThrow(/No Firecrawl key configured/i);
     } finally {
       await restore();
     }
@@ -286,7 +294,7 @@ describe('the Firecrawl client', () => {
     ) as unknown as typeof fetch;
     try {
       const err = await firecrawlSearch('x').catch((e: unknown) => e);
-      expect((err as Error).message).toMatch(/FIRECRAWL_API_KEY/);
+      expect((err as Error).message).toMatch(/Firecrawl rejected the API key/i);
       expect((err as InstanceType<typeof FirecrawlError>).transient).toBe(false);
     } finally {
       await restore();
@@ -384,6 +392,10 @@ describe('a full search run', () => {
 
     expect(report.newLeads).toBe(2);
     expect(report.creditsUsed).toBe(0);
+    expect(report.jobsFetched).toBe(4);
+    expect(report.jobsSeen).toBe(2);
+    expect(report.skippedWrongDomain + report.skippedOffPlan).toBe(2);
+    expect([...report.droppedExamples.wrongDomain, ...report.droppedExamples.offPlan]).toContain('Technical Recruiter');
 
     const leads = await prisma.jobLead.findMany({ where: { profileId }, orderBy: { title: 'asc' } });
     expect(leads.map((l) => l.title)).toEqual([
@@ -504,7 +516,30 @@ describe('a full search run', () => {
       deps: { plan, companies: acmeOnly, fetchCompany: async () => [] },
     });
     expect(report.newLeads).toBe(0);
-    expect(report.notes.join(' ')).toMatch(/none of the 1 companies/i);
+    expect(report.notes.join(' ')).toMatch(/no matching openings were returned by the 1 companies/i);
+  });
+
+  it('reports source limits and every filtering stage without losing surviving jobs', async () => {
+    const base = (await acmeBoard())[0]!;
+    const report = await findJobs(profileId, {
+      country: 'IN', deepScoreTop: 0,
+      deps: { plan, companies: acmeOnly, fetchCompany: async (_company, hints) => {
+        hints.onWarning?.('Only the first page could be read.');
+        return [
+          { ...base, location: 'Bengaluru, India', title: 'SDE II', descriptionText: 'Build backend services in Go.' },
+          { ...base, url: `${base.url}1`, title: 'Frontend Engineer', location: 'Bengaluru, India' },
+          { ...base, url: `${base.url}2`, title: 'Staff Backend Engineer', location: 'Bengaluru, India' },
+          { ...base, url: `${base.url}3`, postedAt: new Date('2000-01-01') },
+          { ...base, url: `${base.url}4`, location: 'San Francisco, CA' },
+        ];
+      } },
+    });
+    expect(report).toMatchObject({ jobsFetched: 5, jobsSeen: 1, newLeads: 1,
+      skippedOffPlan: 1, skippedTooSenior: 1, skippedTooOld: 1, skippedOtherCountry: 1 });
+    expect(report.boards[0]?.warnings).toContain('Only the first page could be read.');
+    expect(report.queries[0]?.hits).toBe(1);
+    expect(report.droppedExamples.offPlan).toEqual(['Frontend Engineer']);
+    expect(report.droppedExamples.tooSenior).toEqual(['Staff Backend Engineer']);
   });
 
   it('reads nothing on a dry run, and lists the companies it would read', async () => {

@@ -52,6 +52,6 @@ export const smartRecruitersSource: Source = {
           .join('\n\n'),
         postedAt: toDate(p.releasedDate),
       };
-    });
+    }, hints);
   },
 };

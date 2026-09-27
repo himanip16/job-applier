@@ -2,7 +2,7 @@ import { countryByCode, type Country } from '@ja/shared';
 import { newPage } from '../browser/session.js';
 import { crawlCareersPage, sourceById, type DiscoveredJob, type FetchHints } from './sources/index.js';
 import { admit, emptyTally, openIntake, screen } from './leadIntake.js';
-import { buildSearchPlan, titleMatchesPlan, type SearchPlan } from './searchQueries.js';
+import { buildSearchPlan, jobMatchesPlan, type SearchPlan } from './searchQueries.js';
 import { rescoreLexically } from './rescoreLeads.js';
 import { loadScoringContext } from './scoring.js';
 import { deepScoreLeads } from './deepScore.js';
@@ -43,6 +43,7 @@ export interface BoardOutcome {
   /** How many became leads. */
   kept: number;
   error?: string;
+  warnings?: string[];
 }
 
 export interface JobSearchReport {
@@ -54,6 +55,8 @@ export interface JobSearchReport {
   creditsUsed: number;
   boards: BoardOutcome[];
   jobsSeen: number;
+  /** All postings returned by sources, before intake filters. */
+  jobsFetched: number;
   newLeads: number;
   skippedAlreadySeen: number;
   skippedTooSenior: number;
@@ -66,7 +69,14 @@ export interface JobSearchReport {
   /** Sales, recruiting, legal and the like - not engineering, whatever the keywords. */
   skippedWrongDomain: number;
   /** A few titles behind each of those two counts, so a filter that is too strict is visible. */
-  droppedExamples: { offPlan: string[]; wrongDomain: string[] };
+  droppedExamples: { offPlan: string[]; wrongDomain: string[]; tooOld: string[]; tooSenior: string[]; otherCountry: string[] };
+  /** Kept postings that did not say where they are: in the queue as "Location unknown". */
+  keptUnknownLocation: number;
+  /**
+   * Listed companies with nothing to read: a bare domain instead of a careers
+   * API or page. Not an error - nobody has set their source up yet.
+   */
+  noSource: string[];
   deepScored: number;
   companiesRegistered: number;
   /** Leads already in the queue whose cheap score was recomputed afterwards. */
@@ -121,6 +131,13 @@ export interface FindJobsOptions {
   deps?: Partial<FindJobsDeps>;
 }
 
+/**
+ * Whether a listed company has anything to read. A careers-page entry needs a
+ * real URL; a bare domain like "amazon.com" is a placeholder, and crawling it
+ * only fails.
+ */
+const hasSource = (c: TargetCompany): boolean => c.source !== 'careers-page' || /^https?:\/\//i.test(c.handle);
+
 /** Companies read at once. Each site is still read politely, one request at a time. */
 const CONCURRENCY = 6;
 
@@ -130,7 +147,8 @@ export async function findJobs(
 ): Promise<JobSearchReport> {
   const deps: FindJobsDeps = { ...defaultDeps, ...opts.deps };
   const maxQueries = opts.maxQueries ?? 6;
-  const maxCompanies = opts.maxBoards ?? 50;
+  // The whole list: the API sources answer in a second or two each.
+  const maxCompanies = opts.maxBoards ?? 100;
   const deepScoreTop = opts.deepScoreTop ?? 15;
 
   const report: JobSearchReport = {
@@ -141,6 +159,7 @@ export async function findJobs(
     rerankedExisting: 0,
     boards: [],
     jobsSeen: 0,
+    jobsFetched: 0,
     newLeads: 0,
     skippedAlreadySeen: 0,
     skippedTooSenior: 0,
@@ -148,7 +167,9 @@ export async function findJobs(
     skippedOtherCountry: 0,
     skippedOffPlan: 0,
     skippedWrongDomain: 0,
-    droppedExamples: { offPlan: [], wrongDomain: [] },
+    droppedExamples: { offPlan: [], wrongDomain: [], tooOld: [], tooSenior: [], otherCountry: [] },
+    keptUnknownLocation: 0,
+    noSource: [],
     deepScored: 0,
     companiesRegistered: 0,
     notes: [],
@@ -162,7 +183,9 @@ export async function findJobs(
   report.notes.push(...plan.notes);
   report.queries = plan.roleTitles.map((query) => ({ query, hits: 0 }));
 
-  const companies = deps.companies(maxCompanies);
+  const listed = deps.companies(maxCompanies);
+  const companies = listed.filter(hasSource);
+  report.noSource = listed.filter((c) => !hasSource(c)).map((c) => c.company);
 
   if (opts.dryRun) {
     report.boards = companies.map((c) => ({ ats: c.source, slug: c.handle, company: c.company, openings: 0, kept: 0 }));
@@ -183,7 +206,6 @@ export async function findJobs(
   log(`reading ${companies.length} companies for ${plan.roleTitles.map((t) => `"${t}"`).join(', ')}`);
 
   // ---- 1. read every company ------------------------------------------------
-  const hints: FetchHints = { queries: plan.roleTitles, country: target };
   const fetched: { company: TargetCompany; outcome: BoardOutcome; jobs: DiscoveredJob[] }[] = [];
 
   let next = 0;
@@ -193,8 +215,18 @@ export async function findJobs(
       const outcome: BoardOutcome = { ats: company.source, slug: company.handle, company: company.company, openings: 0, kept: 0 };
       report.boards.push(outcome);
       try {
+        const hints: FetchHints = {
+          queries: plan.roleTitles,
+          country: target,
+          onWarning: (message) => {
+            outcome.warnings ??= [];
+            if (!outcome.warnings.includes(message)) outcome.warnings.push(message);
+          },
+        };
         const jobs = await deps.fetchCompany(company, hints);
         outcome.openings = jobs.length;
+        const missingDescriptions = jobs.filter((j) => !j.descriptionText.trim()).length;
+        if (missingDescriptions) hints.onWarning?.(`${missingDescriptions} posting(s) have no description; matching and scoring have less evidence.`);
         fetched.push({ company, outcome, jobs });
         log(`  ${company.company} (${company.source}): ${jobs.length} opening(s)`);
       } catch (err) {
@@ -231,18 +263,23 @@ export async function findJobs(
     outcome.kept = await admit(intake, { id: registered.id, name: company.company }, jobs, tally);
     for (const job of jobs) {
       if (screen(job, intake.rules)) continue;
-      for (const q of report.queries) if (titleMatchesPlan(job.title, [q.query])) q.hits++;
+      for (const q of report.queries) if (jobMatchesPlan(job, [q.query])) q.hits++;
     }
   }
   report.jobsSeen = tally.relevant;
+  report.jobsFetched = report.boards.reduce((sum, b) => sum + b.openings, 0);
   report.newLeads = tally.saved;
+  report.keptUnknownLocation = tally.unknownLocation;
   report.skippedAlreadySeen = tally.rejected.alreadySeen;
   report.skippedTooSenior = tally.rejected.tooSenior;
   report.skippedTooOld = tally.rejected.tooOld;
   report.skippedOtherCountry = tally.rejected.otherCountry;
   report.skippedOffPlan = tally.rejected.offPlan;
   report.skippedWrongDomain = tally.rejected.wrongDomain;
-  report.droppedExamples = { offPlan: tally.examples.offPlan, wrongDomain: tally.examples.wrongDomain };
+  report.droppedExamples = {
+    offPlan: tally.examples.offPlan, wrongDomain: tally.examples.wrongDomain,
+    tooOld: tally.examples.tooOld, tooSenior: tally.examples.tooSenior, otherCountry: tally.examples.otherCountry,
+  };
   report.errors.push(...tally.errors);
   const fresh = tally.fresh;
 
@@ -254,9 +291,9 @@ export async function findJobs(
 
   if (!report.jobsSeen && !report.errors.length) {
     report.notes.push(
-      `None of the ${companies.length} companies has an opening matching these roles${
+      `No matching openings were returned by the ${companies.length} companies for these roles${
         target ? ` in ${target.name}` : ''
-      } right now. Try again in a few days, or broaden the roles on your profile.`,
+      }. Check source coverage and filter exclusions below before broadening the roles on your profile.`,
     );
   }
 

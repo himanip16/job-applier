@@ -4,6 +4,7 @@ import { normalizeLabel, tokenize } from '@ja/shared';
 import { prisma } from '../lib/db.js';
 import { generate, isConfigured } from '../llm/client.js';
 import { MAX_QUERY_LENGTH } from './firecrawl.js';
+import { candidateRejections } from './decisionHistory.js';
 
 /**
  * Turning "who am I" into "what to search for".
@@ -82,7 +83,7 @@ export async function buildSearchPlan(
       select: { title: true, companyName: true, location: true },
     }),
     prisma.jobLead.findMany({
-      where: { profileId, status: 'REJECTED' },
+      where: { profileId, ...candidateRejections },
       orderBy: { decidedAt: 'desc' },
       take: 15,
       select: { title: true, rejectReason: true, rejectCategory: true },
@@ -117,7 +118,7 @@ export async function buildSearchPlan(
       });
       const queries = cleanQueries(plan?.queries ?? [], maxQueries);
       const roleTitles = (plan?.roleTitles ?? []).map((t) => t.trim()).filter(Boolean).slice(0, 8);
-      if (queries.length) {
+      if (queries.length && roleTitles.length) {
         return { roleTitles, queries, country, source: 'model', notes };
       }
       notes.push('The model returned no usable queries, so these were derived from your profile.');
@@ -336,7 +337,10 @@ export function titleMatchesPlan(title: string, roleTitles: string[]): boolean {
 
     // Every token was generic ("Software Engineer"), so token matching would
     // wave through the entire company. Fall back to the phrase itself.
-    if (!distinctive.length) return normalisedTitle.includes(normalisedRole);
+    if (!distinctive.length) {
+      const roleKind = withoutLevel(normalisedRole);
+      return !!roleKind && withoutLevel(normalisedTitle).includes(roleKind);
+    }
 
     // The distinctive words all have to be there...
     if (!distinctive.every((t) => titleTokens.has(t))) return false;
@@ -361,6 +365,9 @@ export function titleMatchesPlan(title: string, roleTitles: string[]): boolean {
  * order, to text already through normalizeLabel.
  */
 const TITLE_VOCABULARY: [RegExp, string][] = [
+  [/\b(back[ -]end|server[ -]side)\b/g, 'backend'],
+  [/\bfront[ -]end\b/g, 'frontend'],
+  [/\bfull[ -]stack\b/g, 'fullstack'],
   [/\b(smts|senior member of technical staff)\b/g, 'senior software engineer'],
   [/\b(mts|member of technical staff)\b/g, 'software engineer'],
   [/\b(software development engineer|sde)(?:[- ]?(?:iii|ii|i|[1-3]))?\b/g, 'software engineer'],
@@ -371,6 +378,24 @@ export function normalizeTitle(title: string): string {
   let s = normalizeLabel(title);
   for (const [pattern, replacement] of TITLE_VOCABULARY) s = s.replace(pattern, replacement);
   return s.replace(/\s+/g, ' ').trim();
+}
+
+const withoutLevel = (title: string) => title
+  .replace(/\b(senior|junior|staff|principal|lead|associate|mid|level|i|ii|iii|iv|[1-5])\b/g, ' ')
+  .replace(/\s+/g, ' ').trim();
+
+/** Generic software titles can describe a speciality in the actual job text. */
+export function jobMatchesPlan(job: { title: string; descriptionText?: string | null }, roles: string[]): boolean {
+  if (titleMatchesPlan(job.title, roles)) return true;
+  // A sales role mentioning backend teams, or an explicitly frontend title,
+  // must not pass just because the description contains a matching keyword.
+  if (withoutLevel(normalizeTitle(job.title)) !== 'software engineer') return false;
+  const description = normalizeTitle((job.descriptionText ?? '').slice(0, 12000));
+  return roles.some((role) => {
+    const normalized = normalizeTitle(role);
+    if (!/\b(?:software|backend|frontend|fullstack|platform) engineer\b/.test(normalized)) return false;
+    return titleMatchesPlan(`software engineer ${description}`, [normalized]);
+  });
 }
 
 /**

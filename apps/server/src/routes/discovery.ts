@@ -38,7 +38,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       .object({
         dryRun: z.boolean().default(false),
         maxQueries: z.number().min(1).max(12).optional(),
-        maxBoards: z.number().min(1).max(60).optional(),
+        maxBoards: z.number().min(1).max(100).optional(),
         deepScoreTop: z.number().min(0).max(60).default(15),
         country: z.string().length(2).optional(),
       })

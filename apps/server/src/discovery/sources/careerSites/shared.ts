@@ -38,12 +38,17 @@ export async function searchPaged<T>(
   pauseMs = 200,
 ): Promise<T[]> {
   const all: T[] = [];
+  const requested = (hints?.queries ?? []).map((q) => q.trim()).filter(Boolean);
+  if (requested.length > 3) hints?.onWarning?.(`Searched 3 of ${requested.length} planned roles on this source.`);
   for (const query of queriesFrom(hints)) {
     for (let offset = 0; offset < MAX_PER_SITE; offset += pageSize) {
       if (offset > 0) await sleep(pauseMs);
       const { items, total } = await fetchPage(query, offset);
       all.push(...items);
       if (items.length < pageSize || (total !== undefined && offset + pageSize >= total)) break;
+      if (offset + pageSize >= MAX_PER_SITE) {
+        hints?.onWarning?.(`Stopped after ${offset + items.length} results for "${query || 'all roles'}"; more postings may exist.`);
+      }
     }
   }
   return all;
@@ -63,13 +68,17 @@ export const dedupe = (jobs: DiscoveredJob[]): DiscoveredJob[] => uniqueBy(jobs,
  * MAX_DETAILS. An item whose read fails is dropped (`null`), so one dead
  * posting does not cost the rest.
  */
-export async function hydrate<T>(items: T[], read: (item: T) => Promise<DiscoveredJob | null>): Promise<DiscoveredJob[]> {
+export async function hydrate<T>(items: T[], read: (item: T) => Promise<DiscoveredJob | null>, hints?: FetchHints): Promise<DiscoveredJob[]> {
   const out: DiscoveredJob[] = [];
+  if (items.length > MAX_DETAILS) hints?.onWarning?.(`Reading details for ${MAX_DETAILS} of ${items.length} discovered postings; coverage is partial.`);
+  let failed = 0;
   for (const [i, item] of items.slice(0, MAX_DETAILS).entries()) {
     if (i > 0) await sleep(150);
     const job = await read(item).catch(() => null);
     if (job) out.push(job);
+    else failed++;
   }
+  if (failed) hints?.onWarning?.(`${failed} posting detail page(s) could not be read.`);
   return dedupe(out);
 }
 

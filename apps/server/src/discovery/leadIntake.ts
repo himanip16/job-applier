@@ -5,7 +5,7 @@ import { isSeniorLevel, isStale, requiresMoreThan5YearsExperience } from './jobF
 import { wrongDomain } from './leadCleanup.js';
 import { canonicalUrl } from './jobSearchUtils.js';
 import { type ScoringContext, scoreLexically, serialiseReasons } from './scoring.js';
-import { titleMatchesPlan } from './searchQueries.js';
+import { jobMatchesPlan } from './searchQueries.js';
 import type { DiscoveredJob } from './sources/index.js';
 
 /**
@@ -33,7 +33,7 @@ export function screen(job: DiscoveredJob, rules: IntakeRules): Exclude<Rejectio
   // Sales engineers, recruiters, Workday configurators: not this job, whatever the keywords say.
   if (wrongDomain(job.title)) return 'wrongDomain';
   if (isSeniorLevel(job.title) || requiresMoreThan5YearsExperience(job.descriptionText)) return 'tooSenior';
-  if (rules.roleTitles && !titleMatchesPlan(job.title, rules.roleTitles)) return 'offPlan';
+  if (rules.roleTitles && !jobMatchesPlan(job, rules.roleTitles)) return 'offPlan';
   // A board lists every office. You asked for one country.
   if (rules.country && !locatedIn(job.location, job.remote, rules.country)) return 'otherCountry';
   return null;
@@ -43,6 +43,8 @@ export interface IntakeTally {
   saved: number;
   /** Postings that passed every rule, whether new or already known. */
   relevant: number;
+  /** Of those, how many said nothing about where the job is, and were kept unplaced. */
+  unknownLocation: number;
   rejected: Record<Rejection, number>;
   /** A few distinct titles behind each rejection, so an over-strict rule shows itself. */
   examples: Record<Rejection, string[]>;
@@ -54,6 +56,7 @@ export interface IntakeTally {
 export const emptyTally = (): IntakeTally => ({
   saved: 0,
   relevant: 0,
+  unknownLocation: 0,
   rejected: { tooOld: 0, wrongDomain: 0, tooSenior: 0, otherCountry: 0, offPlan: 0, alreadySeen: 0 },
   examples: { tooOld: [], wrongDomain: [], tooSenior: [], otherCountry: [], offPlan: [], alreadySeen: [] },
   errors: [],
@@ -107,6 +110,9 @@ export async function admit(
       continue;
     }
     tally.relevant++;
+    // No location passes the country rule because it cannot be ruled out, not
+    // because it matched. Counted, so the report can say how many.
+    if (!job.remote && !job.location?.trim()) tally.unknownLocation++;
 
     const canonical = canonicalUrl(job.url);
     if (intake.known.has(canonical)) {

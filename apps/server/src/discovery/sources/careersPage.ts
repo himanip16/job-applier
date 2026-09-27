@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { jobPostingsFromLd, type LdJobPosting } from './jobPostingLd.js';
 import { looksRemote } from './text.js';
 import type { DiscoveredJob } from './types.js';
 
@@ -13,6 +14,11 @@ const NON_JOB = /\.(pdf|png|jpe?g|gif|svg|zip|css|js)(\?|$)|\/(privacy|cookie|le
  * Deliberately conservative: same origin only (plus the three ATS hosts a
  * careers page commonly links out to), a hard page budget, a depth limit, and
  * a pause between fetches. This is someone's website, not a dataset.
+ *
+ * A page's schema.org JobPosting block, when it has one, is read first: it
+ * states the location and posting date the rendered page buries or leaves
+ * out. Without it a posting has no location at all, and the queue says so
+ * rather than assuming it is in the country you searched.
  */
 export async function crawlCareersPage(
   page: Page,
@@ -58,6 +64,7 @@ export async function crawlCareersPage(
         ),
         bodyText: clean(document.querySelector('main, article, body')?.textContent).slice(0, 20000),
         links: Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]')).map((a) => a.href),
+        ld: Array.from(document.querySelectorAll('script[type="application/ld+json"]')).map((s) => s.textContent ?? ''),
         siteName:
           clean(document.querySelector('meta[property="og:site_name"]')?.getAttribute('content')) ||
           location.hostname.replace(/^(www|jobs|careers|apply)\./, '').split('.')[0] ||
@@ -65,16 +72,29 @@ export async function crawlCareersPage(
       };
     });
 
+    const company = info.siteName || start.hostname;
+    const ld = jobPostingsFromLd(info.ld);
+
+    if (ld.length > 1) {
+      // An index page describing each of its postings: keep the ones that say where they live.
+      for (const posting of ld) {
+        const at = resolve(posting.url, url);
+        if (at && posting.title && !found.has(at)) found.set(at, fromLd(posting, at, company));
+      }
+    }
+
+    const own = ld.length === 1 ? ld[0] : undefined;
     const isPosting =
+      !!own?.title ||
       info.hasApplyForm ||
       (JOB_URL_HINTS.test(url) && info.title.length > 0 && info.bodyText.length > 400);
 
-    if (isPosting && info.title) {
-      found.set(url, {
+    if (isPosting && (own?.title || info.title)) {
+      found.set(url, own ? fromLd(own, url, company, info) : {
         url,
         ats: detectAts(url),
         title: info.title,
-        companyName: info.siteName || start.hostname,
+        companyName: company,
         remote: looksRemote(`${info.title} ${info.bodyText.slice(0, 1500)}`),
         descriptionText: info.bodyText,
       });
@@ -104,6 +124,41 @@ export async function crawlCareersPage(
 
   return [...found.values()];
 }
+
+/**
+ * A posting from its JSON-LD, with the rendered page filling only what the
+ * block left out. Location and date come from the block or not at all.
+ */
+function fromLd(
+  ld: LdJobPosting,
+  url: string,
+  company: string,
+  page?: { title: string; bodyText: string },
+): DiscoveredJob {
+  const title = ld.title || page?.title || '';
+  const descriptionText = ld.descriptionText || page?.bodyText || '';
+  return {
+    url,
+    ats: detectAts(url),
+    title,
+    companyName: ld.companyName || company,
+    location: ld.location,
+    remote: ld.remote || (!ld.location && looksRemote(`${title} ${descriptionText.slice(0, 1500)}`)),
+    descriptionText,
+    postedAt: ld.postedAt,
+  };
+}
+
+const resolve = (href: string | undefined, base: string): string | undefined => {
+  if (!href) return undefined;
+  try {
+    const u = new URL(href, base);
+    u.hash = '';
+    return u.toString();
+  } catch {
+    return undefined;
+  }
+};
 
 function detectAts(url: string): string {
   if (/greenhouse\.io/.test(url)) return 'greenhouse';

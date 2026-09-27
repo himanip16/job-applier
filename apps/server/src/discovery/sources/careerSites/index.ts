@@ -9,8 +9,8 @@
  * descriptions, no DOM parsing.
  *
  * Workday, SmartRecruiters, Eightfold, Jibe and Radancy are platforms many
- * companies share, so their handle names the tenant. Google, Apple, LinkedIn
- * and Atlassian are one company's own site. Each lives in its own file and
+ * companies share, so their handle names the tenant. Google, Apple, Amazon,
+ * LinkedIn and Atlassian are one company's own site. Each lives in its own file and
  * shares the paging, hydration and dedupe logic in shared.ts.
  *
  * Every source searches server-side with the caller's role titles and country
@@ -19,6 +19,7 @@
  * test on someone else's website.
  */
 import type { Source } from '../types.js';
+import { amazonSource } from './amazon.js';
 import { appleSource } from './apple.js';
 import { atlassianSource } from './atlassian.js';
 import { eightfoldSource } from './eightfold.js';
@@ -40,6 +41,7 @@ export const CAREER_SITE_SOURCES: Source[] = [
   ripplingSource,
   googleSource,
   appleSource,
+  amazonSource,
   linkedinCompanySource,
   atlassianSource,
 ];

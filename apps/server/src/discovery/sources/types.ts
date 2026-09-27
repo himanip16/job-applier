@@ -23,6 +23,8 @@ export interface FetchHints {
   /** Role titles to search for, e.g. ["Software Engineer", "Backend Engineer"]. */
   queries?: string[];
   country?: Country;
+  /** Reports incomplete results without discarding the postings that were read. */
+  onWarning?: (message: string) => void;
 }
 
 export interface Source {

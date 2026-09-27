@@ -44,7 +44,7 @@ export const linkedinCompanySource: Source = {
       // The card alone is still a lead if the description will not load.
       descriptionText: await orElse(readDescription(c.id), ''),
       postedAt: toDate(c.posted),
-    }));
+    }), hints);
   },
 };
 

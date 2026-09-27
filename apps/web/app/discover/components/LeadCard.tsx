@@ -53,7 +53,15 @@ export function LeadCard({
           </a>
           <div className="jc-meta">
             <span className="jc-company"><Icon name="building" size={14} />{lead.companyName}</span>
-            {lead.location && <span><Icon name="pin" size={14} />{lead.location}</span>}
+            {lead.location ? (
+              <span><Icon name="pin" size={14} />{lead.location}</span>
+            ) : (
+              !lead.remote && (
+                <span className="muted" title="The posting does not say where it is, so it may not be in the country you searched">
+                  <Icon name="pin" size={14} />Location unknown
+                </span>
+              )
+            )}
             {lead.remote && <span className="jc-chip"><Icon name="globe" size={12} />Remote</span>}
             {lead.experience && (
               <span className="jc-chip" title={`From the description: “${lead.experience.quote}”`}>

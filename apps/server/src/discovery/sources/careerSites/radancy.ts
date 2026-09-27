@@ -50,7 +50,7 @@ export const radancySource: Source = {
       location: c.location || undefined,
       remote: looksRemote(c.location),
       descriptionText: await orElse(readDescription(`https://${handle}${c.path}`), ''),
-    }));
+    }), hints);
   },
 };
 

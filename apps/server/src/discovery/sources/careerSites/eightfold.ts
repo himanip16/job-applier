@@ -88,6 +88,7 @@ async function crawl(api: EightfoldApi, host: string, domain: string, hints?: Fe
   // The list carries at most a stub of the description; the detail has all of it.
   return hydrate(uniqueBy(positions, (p) => p.id), async (p) =>
     toJob(host, domain, { ...p, job_description: (await orElse(api.description(host, domain, p), undefined)) ?? p.job_description }),
+    hints,
   );
 }
 
