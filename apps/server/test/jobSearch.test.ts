@@ -437,6 +437,21 @@ describe('a full search run', () => {
     expect(report.boards.map((b) => b.company)).toEqual(['A', 'B']);
   });
 
+  it('requests all 100 companies by default and reports unset sources separately from failures', async () => {
+    const companies = vi.fn(() => [
+      acmeOnly()[0]!,
+      { ...acmeOnly()[0]!, company: 'Unset Co', source: 'careers-page', handle: 'unset.example.com' },
+    ]);
+    const fetchCompany = vi.fn(acmeBoard);
+    const report = await findJobs(profileId, { deepScoreTop: 0, deps: { plan, companies, fetchCompany } });
+    expect(companies).toHaveBeenCalledWith(100);
+    expect(fetchCompany).toHaveBeenCalledTimes(1);
+    expect(report.noSource).toEqual(['Unset Co']);
+    expect(report.boards.map((b) => b.company)).toEqual(['Acme Corp']);
+    expect(report.errors).toEqual([]);
+    expect(report.newLeads).toBe(2);
+  });
+
   it('shows the company by its name from the target list, not the board slug', async () => {
     await findJobs(profileId, { deepScoreTop: 0, deps: { plan, companies: acmeOnly, fetchCompany: acmeBoard } });
     const lead = await prisma.jobLead.findFirst({ where: { profileId } });

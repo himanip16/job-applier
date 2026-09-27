@@ -31,7 +31,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (profileId) await prisma.profile.delete({ where: { id: profileId } });
+  if (profileId) {
+    await prisma.jobLead.deleteMany({ where: { profileId } });
+    await prisma.profile.delete({ where: { id: profileId } });
+  }
 });
 
 const makeLead = (data: { title?: string; status?: 'NEW' | 'SHORTLISTED' | 'APPLIED' | 'REJECTED'; rejectReason?: string | null; decidedAt?: Date }) =>
