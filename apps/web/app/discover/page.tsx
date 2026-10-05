@@ -68,6 +68,7 @@ export default function DiscoverPage() {
   // two on the next page, then rescoring all five, is the point.
   const [picked, setPicked] = useState<string[]>([]);
   const [applying, setApplying] = useState<string | null>(null);
+  const [confirmAuto, setConfirmAuto] = useState<{ ids: string[]; which: string } | null>(null);
 
   // The address bar wins; a bare /discover (the nav link) falls back to the
   // last view, so opening a job or another page and coming back keeps the
@@ -263,7 +264,7 @@ export default function DiscoverPage() {
    * tailoring the resume before it returns.
    */
   async function autoApplyPicked() {
-    await autoApply([...picked], 'the ticked');
+    await autoApply([...picked], (n) => `${n} ticked job${n === 1 ? '' : 's'}`);
   }
 
   /**
@@ -295,15 +296,20 @@ export default function DiscoverPage() {
       setFlash(`No jobs at ${AUTO_APPLY_MIN_MATCH}%+ match waiting to be applied to.`);
       return;
     }
-    await autoApply(ids, `${AUTO_APPLY_MIN_MATCH}%+ match`);
+    await autoApply(ids, (n) => `${n} job${n === 1 ? '' : 's'} at ${AUTO_APPLY_MIN_MATCH}%+ match`);
   }
 
-  async function autoApply(ids: string[], which: string) {
-    if (!ids.length) return;
-    if (!window.confirm(
-      `Apply to ${ids.length} ${which} job${ids.length === 1 ? '' : 's'} and submit each one without asking you first?\n\n` +
-        'Anything that needs you - a question it cannot answer, a captcha, a sign-in - is set aside and the rest carry on.',
-    )) return;
+  /**
+   * Ask first, in the page. window.confirm is not used: embedded browsers and
+   * "block dialogs from this page" make it return false without showing
+   * anything, and the button then silently does nothing.
+   */
+  async function autoApply(ids: string[], describe: (n: number) => string) {
+    if (ids.length) setConfirmAuto({ ids, which: describe(ids.length) });
+  }
+
+  async function runAutoApply(ids: string[]) {
+    setConfirmAuto(null);
     setError(null);
     setFlash(null);
     setLeadErrors({});
@@ -498,6 +504,27 @@ export default function DiscoverPage() {
       {asking && (
         <CountryDialog value={country} action={asking} onChange={setCountry} onCancel={() => setAsking(null)} onConfirm={() => run(asking)} />
       )}
+      {confirmAuto && (
+        <div className="modal-backdrop" onClick={() => setConfirmAuto(null)}>
+          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ margin: '0 0 .2rem' }}>
+              Auto-apply to {confirmAuto.which}?
+            </h2>
+            <p className="sub">
+              Each one is filled in and submitted without asking you first. Anything that needs you — a
+              question it cannot answer from your profile, a captcha, a sign-in — is set aside and the rest
+              carry on.
+            </p>
+            <div className="row">
+              <button className="primary" onClick={() => void runAutoApply(confirmAuto.ids)}>
+                Apply and submit
+              </button>
+              <button onClick={() => setConfirmAuto(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {rejecting && (
         <RejectDialog
           lead={rejecting}

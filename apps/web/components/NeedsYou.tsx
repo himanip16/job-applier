@@ -3,6 +3,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useOverview } from '../lib/overview';
+import { AllQuestions } from './AllQuestions';
+
+/** How many runs were waiting on questions when the popup last opened, this tab session. */
+const SEEN_KEY = 'ja.questionsSeen';
 
 /**
  * The nudge.
@@ -24,9 +28,35 @@ export function NeedsYou() {
   const pathname = usePathname();
   const [dismissed, setDismissed] = useState<string | null>(null);
   const notifiedFor = useRef<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [autoOpened, setAutoOpened] = useState(false);
 
   const first = data?.needsYou.first ?? null;
   const total = data?.needsYou.total ?? 0;
+  const needsInput = data?.needsYou.needsInput ?? 0;
+  const onRunPage = pathname?.startsWith('/applications/') ?? false;
+
+  // Pop the questions up by themselves when a new run starts waiting on them,
+  // rather than waiting for you to notice the bar. Remembered per tab session,
+  // so moving between pages does not reopen it for the same questions.
+  useEffect(() => {
+    if (onRunPage) return;
+    let seen = 0;
+    try {
+      seen = Number(window.sessionStorage.getItem(SEEN_KEY) ?? 0);
+    } catch {
+      // Blocked storage: it may reopen on navigation, which is the lesser problem.
+    }
+    if (needsInput > seen) {
+      setAsking(true);
+      setAutoOpened(true);
+    }
+    try {
+      window.sessionStorage.setItem(SEEN_KEY, String(needsInput));
+    } catch {
+      // As above.
+    }
+  }, [needsInput, onRunPage]);
 
   // Notify on a *new* item, not on every poll. Keyed by id so a second run
   // needing you still gets through while the first is unresolved.
@@ -46,12 +76,16 @@ export function NeedsYou() {
     };
   }, [first]);
 
-  if (!first || total === 0) return null;
-  if (dismissed === first.id) return null;
+  const popup = asking && !onRunPage ? <AllQuestions auto={autoOpened} onClose={() => { setAsking(false); setAutoOpened(false); }} /> : null;
+
+  if (!first || total === 0) return popup;
+  if (dismissed === first.id) return popup;
   // Already looking at it.
-  if (pathname === `/applications/${first.id}`) return null;
+  if (pathname === `/applications/${first.id}`) return popup;
 
   return (
+    <>
+    {popup}
     <div
       role="status"
       style={{
@@ -112,6 +146,11 @@ export function NeedsYou() {
         </div>
         <div className="row" style={{ gap: '.4rem', flex: 'none' }}>
           <NotifyOptIn />
+          {needsInput > 0 && !onRunPage && (
+            <button className="primary" onClick={() => { setAutoOpened(false); setAsking(true); }}>
+              Answer all questions
+            </button>
+          )}
           <a href={`/applications/${first.id}`}>
             <button className="primary">Take the action</button>
           </a>
@@ -121,6 +160,7 @@ export function NeedsYou() {
         </div>
       </div>
     </div>
+    </>
   );
 }
 

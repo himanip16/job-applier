@@ -58,9 +58,26 @@ export async function recoverInterruptedRuns(): Promise<number> {
     // QUEUED too: the queue is in memory, so a run waiting its turn when the
     // process died is as orphaned as one that was mid-fill.
     where: { status: { in: ['QUEUED', 'PREPARING', 'FILLING', 'NEEDS_INPUT', 'REVIEW', 'SUBMITTING'] } },
-    select: { id: true, status: true },
+    select: { id: true, status: true, requiresReview: true },
   });
   for (const app of stuck) {
+    // Auto-apply submits without asking, so it never resumes unattended after
+    // a restart: review goes back on and it waits for you to start it again.
+    if (!app.requiresReview) {
+      await prisma.application.update({
+        where: { id: app.id },
+        data: {
+          status: 'NEEDS_HUMAN',
+          requiresReview: true,
+          blockedReason:
+            app.status === 'SUBMITTING'
+              ? 'The server restarted mid-submit. Check the job board before retrying - it may have gone through.'
+              : 'Auto-apply was interrupted by a server restart. Review is back on; start it again if you still want it.',
+        },
+      });
+      await prisma.pendingQuestion.deleteMany({ where: { applicationId: app.id, answeredAt: null } });
+      continue;
+    }
     // SUBMITTING is the dangerous one: the click may have landed. Never retry
     // it automatically - a duplicate application is worse than a stalled one.
     const status = app.status === 'SUBMITTING' ? 'NEEDS_HUMAN' : 'QUEUED';

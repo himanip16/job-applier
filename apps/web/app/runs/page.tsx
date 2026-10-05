@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
+import { AllQuestions } from '../../components/AllQuestions';
+import { Icon } from '../../components/Icon';
 
 interface AppRow {
   id: string;
@@ -15,20 +17,41 @@ interface AppRow {
 
 export default function RunsPage() {
   const [rows, setRows] = useState<AppRow[]>([]);
+  // Runs this server is driving right now, parked ones included.
+  const [active, setActive] = useState<string[]>([]);
   const [url, setUrl] = useState('');
   const [review, setReview] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [retrying, setRetrying] = useState<string | null>(null);
+
+  /** Start a failed run again. Answers already given are kept and reused. */
+  async function retry(id: string) {
+    setRetrying(id);
+    setError(null);
+    try {
+      await api(`/api/applications/${id}/start`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRetrying(null);
+    }
+  }
   const [error, setError] = useState<string | null>(null);
   const [health, setHealth] = useState<{ llmConfigured: boolean; headless: boolean } | null>(null);
 
   const load = () =>
-    api<{ applications: AppRow[] }>('/api/applications')
-      .then((d) => setRows(d.applications))
+    api<{ applications: AppRow[]; active?: string[] }>('/api/applications')
+      .then((d) => {
+        setRows(d.applications);
+        setActive(d.active ?? []);
+      })
       .catch((e) => setError(e.message));
 
   useEffect(() => {
     load();
-    api<typeof health>('/api/health').then(setHealth).catch(() => {});
+    api<typeof health>('/api/system').then(setHealth).catch(() => {});
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
   }, []);
@@ -107,7 +130,15 @@ export default function RunsPage() {
       </div>
 
       <div className="panel">
-        <h2>Applications</h2>
+        <div className="spread">
+          <h2>Applications</h2>
+          {rows.some((r) => r._count.pending > 0 && !['SUBMITTED', 'CANCELLED'].includes(r.status)) && (
+            <button className="primary" onClick={() => setAsking(true)}>
+              Answer all questions
+            </button>
+          )}
+        </div>
+        {asking && <AllQuestions onClose={() => { setAsking(false); load(); }} />}
         {rows.length === 0 ? (
           <div className="empty-state">Nothing yet. Paste a job URL above to start one.</div>
         ) : (
@@ -115,20 +146,26 @@ export default function RunsPage() {
             <thead>
               <tr>
                 <th>Role</th>
-                <th>ATS</th>
                 <th>Status</th>
                 <th>Needs you</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id}>
+                <tr
+                  key={r.id}
+                  // The whole row opens the run; the links inside still work on their own.
+                  onClick={(e) => {
+                    if (!(e.target as HTMLElement).closest('a, button')) window.location.href = `/applications/${r.id}`;
+                  }}
+                  style={{ cursor: 'pointer' }}
+                >
                   <td style={{ overflowWrap: 'anywhere' }}>
-                    <a href={`/jobs/${r.id}`}>
+                    <a href={`/applications/${r.id}`} title="Open this run">
                       {r.job.title === 'pending' ? r.job.url : `${r.job.title} — ${r.job.company}`}
                     </a>{' '}
-                    <a href={`/applications/${r.id}`} className="small muted" title="The live run log">
-                      run log
+                    <a href={r.job.url} target="_blank" rel="noreferrer" className="small muted" title="The job posting">
+                      posting
                     </a>
                     {r.blockedReason && (
                       <div
@@ -145,8 +182,26 @@ export default function RunsPage() {
                       </div>
                     )}
                   </td>
-                  <td className="small muted">{r.job.ats}</td>
-                  <td><span className={`pill ${r.status}`}>{r.status.replace('_', ' ')}</span></td>
+                  <td>
+                    <span className="row" style={{ gap: '.4rem', flexWrap: 'nowrap' }}>
+                      <span className={`pill ${r.status}`}>{r.status.replace('_', ' ')}</span>
+                      {canRetry(r, active) && (
+                        <button
+                          className="ghost small"
+                          disabled={retrying !== null}
+                          onClick={() => retry(r.id)}
+                          title={
+                            r.requiresReview
+                              ? 'Retry this application. It stops for your review before submitting.'
+                              : 'Retry this application. Auto-apply is on for it: it submits without asking.'
+                          }
+                          aria-label="Retry"
+                        >
+                          <Icon name="refresh" size={14} className={retrying === r.id ? 'spin' : undefined} />
+                        </button>
+                      )}
+                    </span>
+                  </td>
                   <td className="small">
                     {r._count.pending > 0 ? (
                       <span style={{ color: 'var(--warn)', fontWeight: 600 }}>
@@ -166,6 +221,20 @@ export default function RunsPage() {
       </div>
     </>
   );
+}
+
+/**
+ * Stopped and nothing is driving it: failed, or "needs you" from a run that is
+ * no longer alive (a restart, a closed tab). A NEEDS_HUMAN run that is still
+ * active is waiting at a wall in an open browser - starting it again there
+ * would race the live one, so it gets no button. Nor does one whose submit
+ * may already have landed: a duplicate application is worse than a stalled one.
+ */
+function canRetry(r: AppRow, active: string[]): boolean {
+  if (r.status === 'FAILED') return true;
+  if (r.status !== 'NEEDS_HUMAN' || active.includes(r.id)) return false;
+  // Submit may already have gone through: check the job board, never resend blind.
+  return !/Submit was pressed|mid-submit/i.test(r.blockedReason ?? '');
 }
 
 /**

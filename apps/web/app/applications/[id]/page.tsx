@@ -3,20 +3,13 @@
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { API, api } from '../../../lib/api';
 import { Loading } from '../../../components/Loading';
+import {
+  QuestionField,
+  initialRemember,
+  initialValue,
+  type PendingQuestion,
+} from '../../../components/QuestionField';
 
-interface PendingQuestion {
-  id: string;
-  fieldId: string;
-  rawLabel: string;
-  helpText: string | null;
-  fieldKind: string;
-  options: { label: string; value?: string }[] | null;
-  required: boolean;
-  reason: 'NO_MATCH' | 'LOW_CONFIDENCE' | 'POLICY';
-  suggestion: string | string[] | null;
-  suggestionRationale: string | null;
-  answeredAt: string | null;
-}
 
 interface PlanRow {
   label: string;
@@ -183,10 +176,10 @@ function QuestionModal({
   onDone: () => void;
 }) {
   const [values, setValues] = useState<Record<string, string | string[]>>(() =>
-    Object.fromEntries(questions.map((q) => [q.id, q.suggestion ?? (isMulti(q) ? [] : '')])),
+    Object.fromEntries(questions.map((q) => [q.id, initialValue(q)])),
   );
   const [remember, setRemember] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(questions.map((q) => [q.id, q.reason !== 'POLICY'])),
+    Object.fromEntries(questions.map((q) => [q.id, initialRemember(q)])),
   );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -227,30 +220,14 @@ function QuestionModal({
         </p>
 
         {questions.map((q) => (
-          <div className="q" key={q.id}>
-            <strong>{q.rawLabel}{q.required && <span style={{ color: 'var(--bad)' }}> *</span>}</strong>
-            {q.helpText && <div className="why">{q.helpText}</div>}
-            <div className={`why ${q.reason === 'POLICY' ? 'policy' : ''}`}>
-              {q.reason === 'POLICY'
-                ? 'Never answered automatically.'
-                : q.reason === 'LOW_CONFIDENCE'
-                  ? 'A guess was possible but not certain enough to submit under your name.'
-                  : 'Not derivable from what we know about you.'}
-              {q.suggestionRationale ? ` ${q.suggestionRationale}` : ''}
-            </div>
-
-            {renderInput(q, values[q.id], (v) => setValues((s) => ({ ...s, [q.id]: v })))}
-
-            <label className="row small" style={{ marginTop: '.45rem' }}>
-              <input
-                type="checkbox"
-                style={{ width: 'auto' }}
-                checked={remember[q.id] ?? false}
-                onChange={(e) => setRemember((s) => ({ ...s, [q.id]: e.target.checked }))}
-              />
-              <span className="muted">Remember this answer for future applications</span>
-            </label>
-          </div>
+          <QuestionField
+            key={q.id}
+            q={q}
+            value={values[q.id]}
+            remember={remember[q.id] ?? false}
+            onValue={(v) => setValues((s) => ({ ...s, [q.id]: v }))}
+            onRemember={(r) => setRemember((s) => ({ ...s, [q.id]: r }))}
+          />
         ))}
 
         {err && <div className="notice bad" style={{ margin: '.8rem 0' }}>{err}</div>}
@@ -268,81 +245,6 @@ function QuestionModal({
         </div>
       </form>
     </div>
-  );
-}
-
-function isMulti(q: PendingQuestion) {
-  return q.fieldKind === 'MULTISELECT' || q.fieldKind === 'CHECKBOX_GROUP';
-}
-
-function renderInput(
-  q: PendingQuestion,
-  value: string | string[] | undefined,
-  onChange: (v: string | string[]) => void,
-) {
-  if (q.options?.length) {
-    if (isMulti(q)) {
-      const chosen = Array.isArray(value) ? value : [];
-      return (
-        <div>
-          {q.options.map((o) => (
-            <label className="row small" key={o.label}>
-              <input
-                type="checkbox"
-                style={{ width: 'auto' }}
-                checked={chosen.includes(o.label)}
-                onChange={(e) =>
-                  onChange(
-                    e.target.checked
-                      ? [...chosen, o.label]
-                      : chosen.filter((c) => c !== o.label),
-                  )
-                }
-              />
-              <span>{o.label}</span>
-            </label>
-          ))}
-        </div>
-      );
-    }
-    return (
-      <select value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Select…</option>
-        {q.options.map((o) => (
-          <option key={o.label} value={o.label}>{o.label}</option>
-        ))}
-      </select>
-    );
-  }
-  // A lone checkbox is a yes/no, usually consent. The filler ticks it for
-  // "yes"; asking you to type that into a text box was the old behaviour.
-  if (q.fieldKind === 'CHECKBOX') {
-    return (
-      <label className="row small" style={{ gap: '.5rem', marginTop: '.3rem' }}>
-        <input
-          type="checkbox"
-          style={{ width: 'auto' }}
-          checked={value === 'yes'}
-          onChange={(e) => onChange(e.target.checked ? 'yes' : 'no')}
-        />
-        <span>Tick the box</span>
-      </label>
-    );
-  }
-  if (q.fieldKind === 'TEXTAREA') {
-    return (
-      <textarea
-        value={typeof value === 'string' ? value : ''}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    );
-  }
-  return (
-    <input
-      type="text"
-      value={typeof value === 'string' ? value : ''}
-      onChange={(e) => onChange(e.target.value)}
-    />
   );
 }
 
