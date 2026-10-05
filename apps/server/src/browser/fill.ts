@@ -65,6 +65,9 @@ export async function fillField(page: Page, field: FormField, value: string | st
     case 'combobox-intl-tel':
       await fillNative(page, field, asOne(value, field));
       break;
+    case 'select2':
+      await fillSelect2(page, field, asOne(value, field));
+      break;
     case 'file':
       throw new FillError('File fields must be filled with attachFile()', field, false);
     default:
@@ -293,6 +296,54 @@ export function bestOption(
     if (hit) return hit;
   }
   return null;
+}
+
+/**
+ * select2 (Amazon's applicant forms): a hidden <select> with a drawn box
+ * beside it and a results list appended to <body> when it opens.
+ *
+ * Picked through the drawn box, as a person would. Setting the hidden
+ * <select> directly changes its value but not the page's own state - Amazon
+ * listens for select2's events and kept saying "This field is required".
+ * The jQuery route is only the fallback for a list that would not open.
+ */
+async function fillSelect2(page: Page, field: FormField, want: string): Promise<void> {
+  const option = bestOption(field.options, want);
+  if (!option) throw new FillError(`No option "${want}" on ${field.label}`, field);
+
+  const select = page.locator(field.selector).first();
+  await select.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
+  if ((await select.inputValue().catch(() => '')) === option.value) return;
+
+  const box = select.locator(
+    'xpath=following-sibling::span[contains(concat(" ", @class, " "), " select2 ")][1]//*[@role="combobox"]',
+  );
+  await box.scrollIntoViewIfNeeded().catch(() => {});
+  await box.click({ timeout: FIELD_TIMEOUT_MS }).catch(() => {});
+
+  const exact = new RegExp(`^\\s*${option.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i');
+  const choice = page.locator('.select2-container--open .select2-results__option').filter({ hasText: exact }).first();
+  const opened = await choice
+    .waitFor({ state: 'visible', timeout: OPTION_TIMEOUT_MS })
+    .then(() => true)
+    .catch(() => false);
+  if (opened) {
+    await choice.click({ timeout: OPTION_TIMEOUT_MS });
+  } else {
+    await page.keyboard.press('Escape').catch(() => {});
+    await select.evaluate((el, value) => {
+      const $ = (window as unknown as { jQuery?: (e: Element) => { val(v: string): { trigger(e: string): void } } }).jQuery;
+      if ($) $(el).val(value).trigger('change');
+      else {
+        (el as HTMLSelectElement).value = value;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }, option.value);
+  }
+  await page.waitForTimeout(150);
+  if ((await select.inputValue().catch(() => '')) !== option.value) {
+    throw new FillError(`Picked "${option.label}" on ${field.label}, but the dropdown did not take it`, field);
+  }
 }
 
 async function fillReactSelect(page: Page, field: FormField, value: string | string[]): Promise<void> {

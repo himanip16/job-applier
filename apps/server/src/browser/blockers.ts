@@ -132,7 +132,16 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
         has(/sign in with your (work|school|microsoft|google) account/) ||
         // Eightfold's candidate modal (Microsoft Careers): a row of
         // "Sign in using Microsoft / LinkedIn / Google" buttons, no password box.
-        has(/select a method below to sign in/),
+        has(/select a method below to sign in/) ||
+        // Workday's sign-in chooser: Google / LinkedIn / "Sign in with email",
+        // no password box until one is picked.
+        Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '[data-automation-id="signInContent"], [data-automation-id="SignInWithEmailButton"]',
+          ),
+        ).some((el) =>
+          typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null,
+        ),
       createAccount:
         has(/create (an )?account to apply/) ||
         has(/register to (continue|apply)/) ||

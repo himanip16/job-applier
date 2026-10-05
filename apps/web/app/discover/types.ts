@@ -67,7 +67,9 @@ export interface SearchReport {
   roleTitles: string[];
   queries: { query: string; hits: number }[];
   creditsUsed: number;
-  boards: { ats: string; slug: string; company: string; openings: number; kept: number; error?: string; warnings?: string[] }[];
+  boards: { ats: string; slug: string; company: string; openings: number; kept: number; error?: string; warnings?: string[]; via?: 'list' | 'search' }[];
+  /** The web search for companies not on the list. Older servers did not send it. */
+  openSearch?: { ran: boolean; queries: { query: string; hits: number }[]; companiesFound: number };
   jobsSeen: number;
   jobsFetched?: number;
   newLeads: number;

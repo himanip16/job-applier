@@ -28,6 +28,14 @@ import { artifact, setStatus, truncate, writeCoverLetterFile } from './runLog.js
 import type { FieldPlanEntry } from './fieldPlan.js';
 import { fillApplicationFields } from './wizardFields.js';
 import { readAnswerCache, reuseCachedAnswers, saveToAnswerCache } from './answerCache.js';
+import {
+  expandRepeatableSections,
+  hasRepeatableSections,
+  historyFromFacts,
+  labelRepeatableFields,
+  readResumeHistory,
+  type ResumeHistory,
+} from './repeatableSections.js';
 
 /**
  * Walking an application from its first screen to its last.
@@ -78,6 +86,8 @@ interface WalkContext extends WalkArgs {
   earlierReplies: Awaited<ReturnType<typeof answersFromEarlierRuns>>;
   earlierDerived: Awaited<ReturnType<typeof readAnswerCache>>;
   ctx: ResolveContext;
+  /** Jobs and schools to lay out in "Add another" sections; read on first need. */
+  history?: ResumeHistory | null;
 }
 
 interface WalkState {
@@ -227,9 +237,10 @@ async function handleAutofillPrompt(
 }
 
 async function readStepFields(
-  { applicationId, page, adapter, earlierReplies, earlierDerived, ctx }: WalkContext,
+  context: WalkContext,
   state: WalkState,
 ): Promise<FormField[]> {
+  const { applicationId, page, adapter, earlierReplies, earlierDerived, ctx } = context;
   const { sessionAnswers } = ctx;
   const progress = await readStepProgress(page);
   await setStatus(applicationId, 'FILLING', describeStep(state.step, progress), { progress });
@@ -240,7 +251,21 @@ async function readStepFields(
     // Handles restart at f0 on every extraction, so they are namespaced by
     // step before anything stores them - otherwise step 2's "f0" would
     // overwrite step 1's answer and its pending question.
+    const sections = await hasRepeatableSections(page);
+    const history = sections ? await workHistory(context) : null;
+    if (history) {
+      for (const r of await expandRepeatableSections(page, history)) {
+        if (r.after === r.before) continue;
+        await bus.emitEvent(
+          applicationId,
+          'LOG',
+          `Added ${r.kind} rows: ${r.before} -> ${r.after} (you have ${r.wanted} on record).`,
+        );
+      }
+    }
     fields = (await adapter.extractForm(page)).map((f) => ({ ...f, id: `s${state.step}:${f.id}` }));
+    // Every row repeats the same labels; name each after the entry it is for.
+    if (sections) fields = await labelRepeatableFields(page, fields, history);
     rekeyRereadStep(fields, state, sessionAnswers);
     state.allFields.push(...fields);
     carryOverEarlierReplies(fields, earlierReplies, sessionAnswers);
@@ -259,6 +284,16 @@ async function readStepFields(
     );
   }
   return fields;
+}
+
+/** Saved employment.N / education.N facts first; the resume only when there are none. */
+async function workHistory(context: WalkContext): Promise<ResumeHistory | null> {
+  if (context.history === undefined) {
+    context.history =
+      historyFromFacts(context.app.profile.facts) ??
+      (await readResumeHistory(context.ctx.candidateContext).catch(() => null));
+  }
+  return context.history;
 }
 
 /** Generate only when requested or required, before resolving text fields. */

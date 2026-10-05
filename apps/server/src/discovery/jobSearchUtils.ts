@@ -29,13 +29,16 @@ export function cleanHitTitle(title: string): string {
  * all one URL, so only the first was ever saved.
  */
 const POSTING_ID_PARAMS = ['gh_jid', 'jobid', 'job_id', 'jid', 'jk', 'currentjobid', 'positionid', 'pid'];
+const HASH_ROUTED_HOSTS = /\.mynexthire\.com$/;
 
 export function canonicalUrl(raw: string): string {
   try {
     const url = new URL(raw);
     url.protocol = 'https:';
     url.hostname = url.hostname.toLowerCase().replace(/^www\./, '');
-    url.hash = '';
+    // MyNextHire boards route in the hash and break on any added query, so
+    // there the hash is the only thing telling one posting from another.
+    if (!HASH_ROUTED_HOSTS.test(url.hostname)) url.hash = '';
     const kept = [...url.searchParams].filter(([k]) => POSTING_ID_PARAMS.includes(k.toLowerCase()));
     url.search = kept.length ? `?${new URLSearchParams(kept.sort(([a], [b]) => a.localeCompare(b)))}` : '';
     url.pathname = url.pathname.replace(/\/+$/, '');

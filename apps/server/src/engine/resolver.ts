@@ -11,6 +11,7 @@ import { findAnswer, noteAnswerUsed } from './answerBank.js';
 import { matchOption, findDeclineOption } from './optionMatch.js';
 import { inferAnswers, type Inference } from '../llm/inferAnswer.js';
 import { generateEssayAnswer } from '../llm/coverLetter.js';
+import { answerFromHistory, degreeLevel } from './repeatableSections.js';
 
 export type Resolution =
   | { kind: 'answer'; answer: ResolvedAnswer }
@@ -81,6 +82,11 @@ async function resolveWithoutModel(field: FormField, ctx: ResolveContext): Promi
   // 0. Something the human answered a moment ago in this very run.
   const fromSession = ctx.sessionAnswers.get(field.id);
   if (fromSession) return { kind: 'answer', answer: fromSession };
+
+  // 0b. A row of an Employment / Education section, from the matching
+  //     employment.N / education.N fact the candidate saved.
+  const historical = fromHistory(field, ctx);
+  if (historical) return historical;
 
   const canonical = field.canonicalKey
     ? getCanonical(field.canonicalKey)
@@ -408,4 +414,47 @@ function shapeForField(
   return multi
     ? { value: picked, display: picked.join(', ') }
     : { value: picked[0]!, display: picked[0]! };
+}
+
+/**
+ * "Employment 2: Company name" and friends, answered from the candidate's
+ * own saved work history. Null sends the field down the ordinary path.
+ */
+function fromHistory(field: FormField, ctx: ResolveContext): Resolution | null {
+  const raw = answerFromHistory(field, ctx.profile.facts);
+  if (raw === null) return null;
+  const answer = (value: string | string[] | null, display: string, rationale: string): Resolution => ({
+    kind: 'answer',
+    answer: {
+      fieldId: field.id,
+      value,
+      displayValue: display,
+      source: value === null ? 'SKIPPED' : 'PROFILE',
+      confidence: 1,
+      rationale,
+      remember: false,
+    },
+  });
+  const row = field.label.replace(/:.*$/, '');
+
+  if (raw === '') return answer(null, '', `${row} is your current role, so it has no end date.`);
+  if (typeof raw === 'boolean') {
+    if (field.kind === 'CHECKBOX_GROUP') {
+      const box = field.options?.[0]?.label;
+      return raw && box ? answer([box], box, `From your saved ${row}.`) : answer(null, '', `${row} is not your current role.`);
+    }
+    return answer(raw ? 'true' : 'false', raw ? 'Yes' : 'No', `From your saved ${row}.`);
+  }
+
+  const shaped =
+    shapeForField(raw, field) ??
+    (/degree/i.test(field.label) && degreeLevel(raw) ? shapeForField(degreeLevel(raw), field) : null);
+  if (shaped) return answer(shaped.value, shaped.display, `From your saved ${row}.`);
+  // A searchable dropdown (Greenhouse's School) only shows a slice of its
+  // options until you type, so a miss in the harvested list is not a miss.
+  // Typing the name either finds it or fails the fill, which then asks you.
+  if (field.widget === 'react-select' && /school|university|college|institution/i.test(field.label)) {
+    return answer(raw, raw, `From your saved ${row}.`);
+  }
+  return null;
 }

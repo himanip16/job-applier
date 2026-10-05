@@ -381,6 +381,37 @@ const EXTRACTOR = () => {
       const id = el.getAttribute('id') ?? '';
 
       if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'image') continue;
+
+      // ---- select2 (Amazon's applicant forms, jQuery-era boards) ----------
+      // The real <select> is aria-hidden and clipped to 1px; the box a person
+      // sees is a <span role="combobox"> drawn beside it. The span carries the
+      // label and the required flag, the <select> carries the options - so
+      // this is read before the aria-hidden skip below, which would drop it.
+      if (tag === 'select' && el.classList.contains('select2-hidden-accessible')) {
+        const box = el.nextElementSibling?.querySelector<HTMLElement>('[role="combobox"]');
+        if (!box || !visible(box)) continue;
+        const sel = el as unknown as HTMLSelectElement;
+        const labelledBy = (box.getAttribute('aria-labelledby') ?? '')
+          .split(/\s+/)
+          .map((ref) => document.getElementById(ref)?.textContent?.trim() ?? '')
+          .filter(Boolean)
+          .join(' ');
+        results.push({
+          handle: mark(el),
+          name: el.getAttribute('name') || el.getAttribute('id') || '',
+          tag, type,
+          kind: sel.multiple ? 'MULTISELECT' : 'SELECT',
+          widget: 'select2',
+          label: labelledBy || labelFor(el),
+          helpText: helpFor(el),
+          required: box.getAttribute('aria-required') === 'true' || isRequired(el),
+          options: Array.from(sel.options)
+            .map((o) => ({ label: (o.textContent ?? '').trim(), value: o.value }))
+            .filter((o) => o.value !== '' && o.label && !/^(select\.*|choose\.*|please select)/i.test(o.label)),
+        });
+        continue;
+      }
+
       // react-select renders a second, aria-hidden input under each dropdown
       // purely for form validation. It is not a question; reading it asked
       // every Greenhouse dropdown twice, once as a text box.

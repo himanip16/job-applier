@@ -49,6 +49,8 @@ const SITE_ERROR =
   '[data-automation-id="errorMessage"]:visible, [data-automation-id="inputAlert"]:visible, [role="alert"]:visible';
 const SIGN_IN_LINK ='[data-automation-id="signInLink"]';
 const CREATE_LINK = '[data-automation-id="createAccountLink"]';
+/** Workday's sign-in chooser: Google / LinkedIn buttons, then "Sign in with email". */
+const EMAIL_SIGN_IN_BUTTON = '[data-automation-id="SignInWithEmailButton"]';
 
 const ALREADY_EXISTS = /already (exists|registered|in use|have an account)|account with this email/i;
 const REJECTED =
@@ -95,6 +97,9 @@ export async function signInOrRegister(page: Page, account: SiteAccount): Promis
   // application is the common case once a few have gone through.
   if (!(await visibleCount(page, VISIBLE_PASSWORD))) {
     const opened =
+      // Pick the site's own email sign-in over the Google/LinkedIn buttons.
+      (await clickFirst(page, EMAIL_SIGN_IN_BUTTON)) ||
+      (await clickByName(page, /^(sign in|log ?in|continue) with email$/i)) ||
       (await clickFirst(page, SIGN_IN_LINK)) ||
       (await clickByName(page, /^(sign in|log ?in)$/i)) ||
       (await clickFirst(page, CREATE_LINK)) ||

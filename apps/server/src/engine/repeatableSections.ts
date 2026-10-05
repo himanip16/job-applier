@@ -249,7 +249,8 @@ const isOngoing = (end: string | undefined) => !end || /present|current|now|ongo
  *
  * Null when the fact does not hold that value - Discipline when only the
  * degree was saved, a month when only a year was - so the field falls
- * through to the ordinary path instead of being guessed.
+ * through to the ordinary path instead of being guessed. An empty string
+ * means "deliberately blank": the end date of a role still held.
  */
 export function answerFromHistory(
   field: Pick<FormField, 'label' | 'kind'>,
@@ -270,14 +271,18 @@ export function answerFromHistory(
   const start = entry.start ?? '';
   const end = entry.end ?? '';
 
-  if (field.kind === 'CHECKBOX' && /current/.test(q)) return entry.current ? /^(yes|true)$/i.test(entry.current) : isOngoing(end);
+  if (field.kind === 'CHECKBOX' || field.kind === 'CHECKBOX_GROUP') {
+    // "Current role" must not fall through to the title rule below.
+    if (!/current/.test(q)) return null;
+    return entry.current ? /^(yes|true)$/i.test(entry.current) : isOngoing(end);
+  }
   if (/\b(start|from)\b/.test(q)) {
     if (/month/.test(q)) return monthOf(start);
     if (/year/.test(q)) return yearOf(start);
     return start || null;
   }
   if (/\b(end|to|until)\b/.test(q)) {
-    if (isOngoing(end)) return null;
+    if (isOngoing(end)) return '';
     if (/month/.test(q)) return monthOf(end);
     if (/year/.test(q)) return yearOf(end);
     return end;
@@ -290,5 +295,21 @@ export function answerFromHistory(
   if (/gpa|grade/.test(q)) return pick(entry.cgpa ?? entry.gpa);
   if (/location|city/.test(q)) return pick(entry.location);
   if (/title|position|role/.test(q)) return pick(entry.title);
+  return null;
+}
+
+/**
+ * The degree level a dropdown lists, from the degree as the candidate wrote
+ * it: "Bachelor of Technology" or "B.Tech" is a "Bachelor's Degree". This is
+ * a renaming, not a guess - null when the wording does not say the level.
+ */
+export function degreeLevel(degree: string): string | null {
+  const d = degree.toLowerCase().replace(/\./g, '');
+  if (/\b(phd|dphil|doctorate|doctor of philosophy)\b/.test(d)) return "Doctor of Philosophy (Ph.D.)";
+  if (/\bmba\b|master of business administration/.test(d)) return 'Master of Business Administration (M.B.A.)';
+  if (/\bmaster|\b(ms|msc|ma|mtech|me|mca|meng)\b/.test(d)) return "Master's Degree";
+  if (/\bbachelor|\b(bs|bsc|ba|btech|be|bca|beng|bba|bcom)\b/.test(d)) return "Bachelor's Degree";
+  if (/\bassociate/.test(d)) return "Associate's Degree";
+  if (/high school|secondary|\bged\b/.test(d)) return 'High School';
   return null;
 }
