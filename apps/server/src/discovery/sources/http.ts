@@ -3,8 +3,10 @@
  *
  * The board APIs are happy with an honest user agent; several big-company
  * careers sites refuse anything that is not a browser, so those calls send
- * one. A 429 or 503 is waited out once rather than failing the whole company:
- * reading fifty sites in one run is exactly when a rate limit gets hit.
+ * one. A 429 or 503 is waited out, with a growing pause, rather than failing
+ * the whole company: reading fifty sites in one run is exactly when a rate
+ * limit gets hit, and most (Microsoft's, for one) clear within half a minute
+ * but never say how long to wait.
  */
 
 export const UA = 'job-applier/0.1 (personal job search assistant)';
@@ -15,12 +17,15 @@ export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Init = { method?: string; headers?: Record<string, string>; body?: string };
 
-async function request(url: string, init: Init, retries = 1): Promise<Response> {
+/** Seconds to wait before each retry when the site does not say. */
+const BACKOFF_S = [5, 15, 30];
+
+async function request(url: string, init: Init, attempt = 0): Promise<Response> {
   const res = await fetch(url, init);
-  if ((res.status === 429 || res.status === 503) && retries > 0) {
-    const wait = Math.min(Number(res.headers.get('retry-after')) || 5, 30) * 1000;
+  if ((res.status === 429 || res.status === 503) && attempt < BACKOFF_S.length) {
+    const wait = Math.min(Number(res.headers.get('retry-after')) || BACKOFF_S[attempt]!, 60) * 1000;
     await sleep(wait);
-    return request(url, init, retries - 1);
+    return request(url, init, attempt + 1);
   }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} from ${new URL(url).host}`);
   return res;

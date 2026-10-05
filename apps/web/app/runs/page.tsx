@@ -123,14 +123,27 @@ export default function RunsPage() {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td>
+                  <td style={{ overflowWrap: 'anywhere' }}>
                     <a href={`/jobs/${r.id}`}>
                       {r.job.title === 'pending' ? r.job.url : `${r.job.title} — ${r.job.company}`}
                     </a>{' '}
                     <a href={`/applications/${r.id}`} className="small muted" title="The live run log">
                       run log
                     </a>
-                    {r.blockedReason && <div className="muted small">{r.blockedReason}</div>}
+                    {r.blockedReason && (
+                      <div
+                        className="muted small"
+                        title={r.blockedReason}
+                        style={{
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {shortReason(r.blockedReason)}
+                      </div>
+                    )}
                   </td>
                   <td className="small muted">{r.job.ats}</td>
                   <td><span className={`pill ${r.status}`}>{r.status.replace('_', ' ')}</span></td>
@@ -155,3 +168,10 @@ export default function RunsPage() {
   );
 }
 
+/**
+ * Playwright errors carry the whole browser launch log after the message.
+ * Show only the message; the full text stays in the tooltip and the run log.
+ */
+function shortReason(reason: string): string {
+  return reason.split(/\s(?:Browser logs:|Call log:|=+ logs =+)/)[0]!.trim();
+}

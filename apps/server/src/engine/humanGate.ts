@@ -23,6 +23,32 @@ import { setStatus, artifact } from './runLog.js';
  *  - the end of the road                          -> handOffToHuman
  */
 /**
+ * Autopilot hit something only you can deal with, and moved on.
+ *
+ * Not a failure: the application is left in NEEDS_INPUT or NEEDS_HUMAN with
+ * the reason, and the run ends so the queue can start the next one. An
+ * autopilot batch that parked on its first question would apply to one job.
+ */
+export class SetAsideError extends Error {
+  constructor(
+    message: string,
+    /** Whether the tab is still worth looking at. A question is answered in the app, not there. */
+    readonly keepPage: boolean,
+  ) {
+    super(message);
+  }
+}
+
+/** Autopilot is an application that does not need your go-ahead to submit. */
+export async function isAutopilot(applicationId: string): Promise<boolean> {
+  const app = await prisma.application.findUnique({
+    where: { id: applicationId },
+    select: { requiresReview: true },
+  });
+  return app ? !app.requiresReview : false;
+}
+
+/**
  * Post the open questions and park until they come back.
  *
  * The `remember` flag each reply carries is recorded on the question, not
@@ -37,13 +63,16 @@ export async function askHuman(
   gaps: AnswerGap[],
 ): Promise<Map<string, ResolvedAnswer>> {
   const byId = new Map(fields.map((f) => [f.id, f]));
+  const autopilot = await isAutopilot(applicationId);
 
   // Same ordering rule as the review gate: park first, announce second. The
   // questions are written to the database before the status changes, so a
   // client that reacts instantly still finds them.
-  const replyPromise = park<Array<{ fieldId: string; value: string | string[]; remember: boolean }>>(
-    questionsKey(applicationId),
-  );
+  const replyPromise = autopilot
+    ? null
+    : park<Array<{ fieldId: string; value: string | string[]; remember: boolean }>>(
+        questionsKey(applicationId),
+      );
 
   const asked = await prisma.pendingQuestion.createManyAndReturn({
     select: { id: true },
@@ -80,6 +109,15 @@ export async function askHuman(
       rationale: g.suggestionRationale,
     })),
   });
+
+  // Answering later restarts the run with these answers (resumeAfterAnswers
+  // in routes/applications.ts), so there is nothing to keep the page for.
+  if (!replyPromise) {
+    throw new SetAsideError(
+      'Autopilot: set aside until you answer. It restarts by itself once you do; moving on to the next job.',
+      false,
+    );
+  }
 
   // A closed tab ends the wait. The answers already given are on the pending
   // questions, so a fresh run picks them up rather than asking again.
@@ -156,6 +194,15 @@ export async function pauseForHuman(
   // Park BEFORE announcing, for the same reason as the review gate: a client
   // watching the run can see NEEDS_HUMAN and reply within microseconds, and a
   // reply that arrives before the promise exists is dropped forever.
+  if (await isAutopilot(applicationId)) {
+    await handOffToHuman(applicationId, page, blocker);
+    throw new SetAsideError(
+      'Autopilot: this needs you in the browser, so it is set aside with the tab left open. ' +
+        'Start it again once that is dealt with. Moving on to the next job.',
+      true,
+    );
+  }
+
   const key = blockerKey(applicationId);
   const manual = park<{ carryOn: boolean; note?: string }>(key);
   await handOffToHuman(applicationId, page, blocker);

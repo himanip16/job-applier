@@ -8,7 +8,7 @@
  * the same trade the board APIs make - structured data, real locations, full
  * descriptions, no DOM parsing.
  *
- * Workday, SmartRecruiters, Eightfold, Jibe and Radancy are platforms many
+ * Workday, SmartRecruiters, Eightfold, Jobvite, Jibe and Radancy are platforms many
  * companies share, so their handle names the tenant. Google, Apple, Amazon,
  * LinkedIn and Atlassian are one company's own site. Each lives in its own file and
  * shares the paging, hydration and dedupe logic in shared.ts.
@@ -25,6 +25,7 @@ import { atlassianSource } from './atlassian.js';
 import { eightfoldSource } from './eightfold.js';
 import { googleSource } from './google.js';
 import { jibeSource } from './jibe.js';
+import { jobviteSource } from './jobvite.js';
 import { linkedinCompanySource } from './linkedin.js';
 import { radancySource } from './radancy.js';
 import { ripplingSource } from './rippling.js';
@@ -32,7 +33,7 @@ import { smartRecruitersSource } from './smartRecruiters.js';
 import { workdaySource } from './workday.js';
 
 /** Platforms many companies share: offered when adding a company by hand. */
-export const SHARED_PLATFORM_SOURCES: Source[] = [workdaySource, smartRecruitersSource, eightfoldSource];
+export const SHARED_PLATFORM_SOURCES: Source[] = [workdaySource, smartRecruitersSource, eightfoldSource, jobviteSource];
 
 export const CAREER_SITE_SOURCES: Source[] = [
   ...SHARED_PLATFORM_SOURCES,

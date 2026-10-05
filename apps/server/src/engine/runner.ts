@@ -7,7 +7,7 @@ import { NeedsHumanError } from '../browser/openForm.js';
 import { findEmbeddedAts } from '../ats/embedded.js';
 import { resolveKnownAts } from '../ats/resolve.js';
 import { adapterFor } from '../ats/registry.js';
-import { handleOpenFailure, pauseForHuman } from './humanGate.js';
+import { handleOpenFailure, pauseForHuman, SetAsideError } from './humanGate.js';
 import { artifact, setStatus } from './runLog.js';
 import { walkApplication } from './wizard.js';
 import { finishApplication } from './submission.js';
@@ -40,6 +40,7 @@ export async function runApplication(applicationId: string): Promise<void> {
   let adapter = adapterFor(app.job.url);
   let formUrl = app.job.url;
   let page: Page | null = null;
+  let closePage = false;
 
   try {
     await setStatus(applicationId, 'PREPARING', `Using the ${adapter.id} adapter.`);
@@ -110,6 +111,12 @@ export async function runApplication(applicationId: string): Promise<void> {
       companyKey: walk.companyKey,
     });
   } catch (err) {
+    if (err instanceof SetAsideError) {
+      // Already recorded where it stopped and why; this is not a failure.
+      await bus.emitEvent(applicationId, 'LOG', err.message);
+      closePage = !err.keepPage;
+      return;
+    }
     const message = explainFailure(err, page);
     await prisma.application.update({
       where: { id: applicationId },
@@ -125,7 +132,7 @@ export async function runApplication(applicationId: string): Promise<void> {
     abandon(blockerKey(applicationId));
     // The page is left open on purpose while a human may still be looking at
     // it; closing here would destroy the evidence and any captcha token.
-    if (page && !page.isClosed() && !config.headless) {
+    if (page && !page.isClosed() && !config.headless && !closePage) {
       await bus.emitEvent(applicationId, 'LOG', 'Leaving the browser tab open for you.');
     } else {
       await page?.close().catch(() => {});

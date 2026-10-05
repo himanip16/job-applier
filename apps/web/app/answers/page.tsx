@@ -32,6 +32,10 @@ export default function AnswersPage() {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [draftLabel, setDraftLabel] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [newLabel, setNewLabel] = useState('');
+  const [newValue, setNewValue] = useState('');
 
   const load = () =>
     api<{ answers: Answer[] }>('/api/answers')
@@ -43,9 +47,35 @@ export default function AnswersPage() {
   }, []);
 
   async function save(id: string) {
-    await api(`/api/answers/${id}`, { method: 'PATCH', body: JSON.stringify({ displayValue: draft }) });
-    setEditing(null);
-    await load();
+    if (!draftLabel.trim() || !draft.trim()) return;
+    try {
+      await api(`/api/answers/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ rawLabel: draftLabel.trim(), displayValue: draft.trim() }),
+      });
+      setEditing(null);
+      setError(null);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function add() {
+    if (!newLabel.trim() || !newValue.trim()) return;
+    try {
+      await api('/api/answers', {
+        method: 'POST',
+        body: JSON.stringify({ rawLabel: newLabel.trim(), displayValue: newValue.trim() }),
+      });
+      setAdding(false);
+      setNewLabel('');
+      setNewValue('');
+      setError(null);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
   async function remove(id: string, label: string) {
@@ -75,17 +105,47 @@ export default function AnswersPage() {
               <p>Answers you gave when a form asked something new. Reused automatically next time; edit anything that has gone stale.</p>
             </div>
           </div>
-          {answers.length > 0 && <span className={s.counter}><strong>{answers.length}</strong> remembered</span>}
+          <div className="row" style={{ gap: '.5rem', flexWrap: 'nowrap' }}>
+            {answers.length > 0 && <span className={s.counter}><strong>{answers.length}</strong> remembered</span>}
+            {!adding && <button className={s.ghostBtn} onClick={() => setAdding(true)}>Add question</button>}
+          </div>
         </div>
         {error && <div className="notice bad">{error}</div>}
-        {answers.length === 0 ? (
-          <div className={s.locked}>Nothing yet. When a form asks something new, your answer is kept here.</div>
-        ) : (
+        {adding && (
+          <div className={s.answers} style={{ marginBottom: '.75rem' }}>
+            <div className={s.answer} style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) auto' }}>
+              <input
+                autoFocus
+                placeholder="Question, as a form would ask it"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Escape') setAdding(false); }}
+              />
+              <input
+                placeholder="Your answer"
+                value={newValue}
+                onChange={(e) => setNewValue(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void add(); if (e.key === 'Escape') setAdding(false); }}
+              />
+              <div className="row" style={{ gap: '.3rem', flexWrap: 'nowrap' }}>
+                <button className={`primary ${s.ghostBtn}`} disabled={!newLabel.trim() || !newValue.trim()} onClick={add}>Save</button>
+                <button className={s.ghostBtn} onClick={() => { setAdding(false); setNewLabel(''); setNewValue(''); }}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {answers.length === 0 && !adding ? (
+          <div className={s.locked}>Nothing yet. When a form asks something new, your answer is kept here. You can also add questions yourself.</div>
+        ) : answers.length > 0 && (
           <div className={s.answers}>
             {answers.map((a) => (
               <div className={s.answer} key={a.id} style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) auto' }}>
                 <div>
-                  <div style={{ fontSize: 'var(--fs-sm)' }}>{a.rawLabel}</div>
+                  {editing === a.id ? (
+                    <input value={draftLabel} onChange={(e) => setDraftLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setEditing(null); }} />
+                  ) : (
+                    <div style={{ fontSize: 'var(--fs-sm)' }}>{a.rawLabel}</div>
+                  )}
                   <div className="muted small" style={{ marginTop: '.15rem' }}>
                     {a.source === 'USER' ? 'You answered' : a.source === 'INFERRED' ? `Worked out from your resume · ${Math.round(a.confidence * 100)}% sure` : 'From your profile'}
                     {a.timesUsed > 0 && ` · used ${a.timesUsed}×`}
@@ -109,7 +169,7 @@ export default function AnswersPage() {
                     </>
                   ) : (
                     <>
-                      <button className={s.ghostBtn} onClick={() => { setEditing(a.id); setDraft(a.displayValue); }}>Edit</button>
+                      <button className={s.ghostBtn} onClick={() => { setEditing(a.id); setDraft(a.displayValue); setDraftLabel(a.rawLabel); }}>Edit</button>
                       <button className={`ghost ${s.ghostBtn}`} style={{ color: 'var(--muted)' }} onClick={() => remove(a.id, a.rawLabel)}>Forget</button>
                     </>
                   )}

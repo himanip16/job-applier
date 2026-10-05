@@ -18,7 +18,7 @@ import type { FieldPlanEntry } from './fieldPlan.js';
  *
  * Everything up to here is reversible. This is not, so two rules hold
  * throughout: nothing is submitted without the human's go-ahead when review is
- * on, and nothing is *recorded* as submitted without a confirmation actually
+ * on (autopilot is review switched off for that application), and nothing is *recorded* as submitted without a confirmation actually
  * visible on the page. An application that may or may not have gone through is
  * reported as needing a human, never as done.
  */
@@ -47,16 +47,26 @@ export async function finishApplication(args: {
   const captcha = blockers.find((b) => b.kind === 'CAPTCHA');
 
   // ---- Review gate ---------------------------------------------------------
-  const mustReview =
-    app.requiresReview ||
-    config.requireReview ||
-    adapter.id === 'generic' ||
-    !!adapter.alwaysReview ||
-    !!captcha ||
-    plan.some((p) => p.error) ||
-    plan.some((p) => p.confidence < 0.9 && p.filled);
+  //
+  // Autopilot (review off for this application) skips the go-ahead, but not
+  // the things only a person can do: a captcha, a field that would not fill,
+  // or a final step nobody has mapped that the walk found no button for.
+  // Those are set aside so the queue moves on instead of waiting.
+  const autopilot = !app.requiresReview;
+  const unmappedEnd = (adapter.id === 'generic' || !!adapter.alwaysReview) && !(autopilot && submitControl);
+  const needsHands = !!captcha || plan.some((p) => p.error) || unmappedEnd;
 
-  if (mustReview) {
+  if (autopilot && needsHands) {
+    const reason = captcha
+      ? `${captcha.detail} The form is filled and open in the browser.`
+      : unmappedEnd
+        ? 'Could not find the final submit button on this site. The form is filled and open in the browser.'
+        : 'Some fields would not fill. The form is open in the browser.';
+    await setAside(applicationId, reason);
+    return;
+  }
+
+  if (!autopilot) {
     const reason = captcha
       ? `${captcha.detail} The form is filled and waiting; solve the challenge in the browser, then approve here.`
       : adapter.id === 'generic'
@@ -91,7 +101,7 @@ export async function finishApplication(args: {
     await adapter.submit(page);
   };
 
-  await enforceSubmitBudget();
+  await enforceSubmitBudget(autopilot ? applicationId : null);
   await setStatus(
     applicationId,
     'SUBMITTING',
@@ -110,6 +120,11 @@ export async function finishApplication(args: {
     await bus.emitEvent(applicationId, 'STATUS', 'Submitted.', { status: 'SUBMITTED' });
     await markLeadApplied(applicationId);
     await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, companyKey);
+    return;
+  }
+
+  if (outcome.outcome === 'VALIDATION_ERROR' && autopilot) {
+    await setAside(applicationId, `The form rejected the submission: ${outcome.detail}. It is still open in the browser.`);
     return;
   }
 
@@ -155,11 +170,39 @@ export async function finishApplication(args: {
   );
 }
 
-async function enforceSubmitBudget(): Promise<void> {
-  const since = new Date(Date.now() - 60 * 60 * 1000);
-  const recent = await prisma.application.count({
-    where: { status: 'SUBMITTED', submittedAt: { gte: since } },
+/**
+ * Autopilot hands over and moves on rather than parking. The page stays open
+ * (the runner leaves it) so you can finish it there by hand.
+ */
+async function setAside(applicationId: string, reason: string): Promise<void> {
+  await prisma.application.update({
+    where: { id: applicationId },
+    data: { status: 'NEEDS_HUMAN', blockedReason: `${reason} Autopilot moved on to the next job.` },
   });
+  await bus.emitEvent(applicationId, 'STATUS', `Set aside: ${reason}`, { status: 'NEEDS_HUMAN' });
+}
+
+/**
+ * The hourly cap. A run you are watching fails when it is reached; an
+ * autopilot run waits for room, since the whole point is to keep going.
+ */
+async function enforceSubmitBudget(waitingRun: string | null): Promise<void> {
+  const recentCount = () =>
+    prisma.application.count({
+      where: { status: 'SUBMITTED', submittedAt: { gte: new Date(Date.now() - 60 * 60 * 1000) } },
+    });
+  let recent = await recentCount();
+  if (waitingRun && recent >= config.maxSubmitsPerHour) {
+    await bus.emitEvent(
+      waitingRun,
+      'LOG',
+      `Hourly limit reached (${recent}/${config.maxSubmitsPerHour}). Waiting for room, then submitting.`,
+    );
+    while (recent >= config.maxSubmitsPerHour) {
+      await new Promise((r) => setTimeout(r, 60_000));
+      recent = await recentCount();
+    }
+  }
   if (recent >= config.maxSubmitsPerHour) {
     throw new SubmissionBudgetError(
       `Submission budget reached (${recent}/${config.maxSubmitsPerHour} in the last hour). ` +

@@ -28,6 +28,9 @@ const TABS: { status: string; label: string; icon: IconName }[] = [
   { status: 'ALL', label: 'All jobs', icon: 'list' },
 ];
 
+/** The match score, in percent, that "Auto-apply" treats as good enough. */
+const AUTO_APPLY_MIN_MATCH = 70;
+
 const EMPTY_FACETS: LeadPage['facets'] = { companies: [], cities: [], tiers: [] };
 
 export default function DiscoverPage() {
@@ -64,6 +67,7 @@ export default function DiscoverPage() {
   // Ticked leads, by id. Kept across pages on purpose: picking three here and
   // two on the next page, then rescoring all five, is the point.
   const [picked, setPicked] = useState<string[]>([]);
+  const [applying, setApplying] = useState<string | null>(null);
 
   // The address bar wins; a bare /discover (the nav link) falls back to the
   // last view, so opening a job or another page and coming back keeps the
@@ -251,6 +255,93 @@ export default function DiscoverPage() {
     }
   }
 
+  /**
+   * Autopilot: apply to every ticked job and submit each without asking.
+   *
+   * The server queues them and runs one at a time, so this only has to hand
+   * them over. A few at once, because each request can spend up to a minute
+   * tailoring the resume before it returns.
+   */
+  async function autoApplyPicked() {
+    await autoApply([...picked], 'the ticked');
+  }
+
+  /**
+   * Autopilot over the whole list: every job you have not acted on (For you
+   * and Saved) whose match is at least AUTO_APPLY_MIN_MATCH, across all pages.
+   */
+  async function autoApplyGoodMatches() {
+    setBusy('collect');
+    setError(null);
+    let ids: string[] = [];
+    try {
+      for (const status of ['NEW', 'SHORTLISTED']) {
+        for (let p = 1; ; p++) {
+          const r = await api<{ leads: Lead[]; pages: number }>(
+            `/api/leads?status=${status}&minScore=${AUTO_APPLY_MIN_MATCH}&sort=score&limit=100&page=${p}`,
+          );
+          ids.push(...r.leads.map((l) => l.id));
+          if (p >= r.pages) break;
+        }
+      }
+      ids = [...new Set(ids)];
+    } catch (e) {
+      setError((e as Error).message);
+      return;
+    } finally {
+      setBusy(null);
+    }
+    if (!ids.length) {
+      setFlash(`No jobs at ${AUTO_APPLY_MIN_MATCH}%+ match waiting to be applied to.`);
+      return;
+    }
+    await autoApply(ids, `${AUTO_APPLY_MIN_MATCH}%+ match`);
+  }
+
+  async function autoApply(ids: string[], which: string) {
+    if (!ids.length) return;
+    if (!window.confirm(
+      `Apply to ${ids.length} ${which} job${ids.length === 1 ? '' : 's'} and submit each one without asking you first?\n\n` +
+        'Anything that needs you - a question it cannot answer, a captcha, a sign-in - is set aside and the rest carry on.',
+    )) return;
+    setError(null);
+    setFlash(null);
+    setLeadErrors({});
+    const failed: Record<string, string> = {};
+    let done = 0;
+    setApplying(`Queuing 0 of ${ids.length}…`);
+    const next = [...ids];
+    const worker = async () => {
+      for (let id = next.shift(); id; id = next.shift()) {
+        try {
+          await api(`/api/leads/${id}/apply`, {
+            method: 'POST',
+            body: JSON.stringify({
+              requiresReview: false,
+              writeCoverLetter: prefs.writeCoverLetter,
+              autoTailorResume: prefs.tailorResume,
+            }),
+          });
+        } catch (e) {
+          failed[id] = (e as Error).message;
+        }
+        done++;
+        setApplying(`Queuing ${done} of ${ids.length}…`);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, ids.length) }, worker));
+    setApplying(null);
+    const failedIds = Object.keys(failed);
+    setLeadErrors(failed);
+    setPicked(failedIds);
+    const ok = ids.length - failedIds.length;
+    setFlash(
+      `Auto-applying to ${ok} job${ok === 1 ? '' : 's'}. They run one after another and submit by themselves; follow along on Runs.` +
+        (failedIds.length ? ` ${failedIds.length} could not be started — see the rows below.` : ''),
+    );
+    await load();
+  }
+
   const failing = companies.filter((c) => c.lastCrawlNote?.startsWith('failed')).length;
   const pageIds = leads.map((l) => l.id);
   const allPicked = pageIds.length > 0 && pageIds.every((id) => picked.includes(id));
@@ -273,6 +364,14 @@ export default function DiscoverPage() {
             <button className="primary" disabled={busy !== null} onClick={() => setAsking('find')}>
               <Icon name="sparkles" className={busy === 'find' ? 'spin' : undefined} />
               {busy === 'find' ? 'Searching…' : 'Find new jobs'}
+            </button>
+            <button
+              disabled={busy !== null || applying !== null}
+              onClick={autoApplyGoodMatches}
+              title={`Apply to every job at ${AUTO_APPLY_MIN_MATCH}%+ match and submit each without asking. You confirm the count first.`}
+            >
+              <Icon name="send" className={busy === 'collect' ? 'spin' : undefined} />
+              {applying ?? (busy === 'collect' ? 'Finding matches…' : `Auto-apply ${AUTO_APPLY_MIN_MATCH}%+ matches`)}
             </button>
             <button disabled={busy !== null} onClick={() => setAsking('recheck')} title="Remove jobs in your list that are closed, too old, or in the wrong country">
               <Icon name="checkCircle" className={busy === 'recheck' ? 'spin' : undefined} />
@@ -327,6 +426,8 @@ export default function DiscoverPage() {
           }
           onClear={() => setPicked([])}
           onRescore={rescorePicked}
+          applying={applying}
+          onAutoApply={autoApplyPicked}
         />
 
         {loading ? (
