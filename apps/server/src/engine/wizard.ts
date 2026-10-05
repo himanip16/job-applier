@@ -166,6 +166,7 @@ function startStep(state: WalkState): void {
 /** One screen: clear walls and prompts before reading any form controls. */
 async function walkStep(context: WalkContext, state: WalkState): Promise<StepOutcome> {
   const { applicationId, page, adapter } = context;
+  await adapter.settle?.(page);
   const signature = await pageSignature(page);
   const wall = (await detectBlockers(page)).find(
     (b) =>
@@ -240,6 +241,7 @@ async function readStepFields(
     // step before anything stores them - otherwise step 2's "f0" would
     // overwrite step 1's answer and its pending question.
     fields = (await adapter.extractForm(page)).map((f) => ({ ...f, id: `s${state.step}:${f.id}` }));
+    rekeyRereadStep(fields, state, sessionAnswers);
     state.allFields.push(...fields);
     carryOverEarlierReplies(fields, earlierReplies, sessionAnswers);
     reuseCachedAnswers(fields, earlierDerived, sessionAnswers);
@@ -312,6 +314,26 @@ async function resolveStepAnswers(
         `${field.label}: ${truncate(res.answer.displayValue)} [${res.answer.source}]`,
         { fieldId: field.id, source: res.answer.source, confidence: res.answer.confidence },
       );
+    } else if (!field.required) {
+      // Questions are asked before anything is filled, so one optional box we
+      // cannot answer (ServiceNow's Facebook, X and "Message to the Hiring
+      // Team") left the whole form blank while the run waited on you. Blank
+      // is a legitimate answer to an optional question; a guess is not.
+      state.answers.set(field.id, {
+        fieldId: field.id,
+        value: null,
+        displayValue: '',
+        source: 'SKIPPED',
+        confidence: 1,
+        rationale: 'Optional, and nothing in your profile answers it, so it is left blank.',
+        remember: false,
+        canonicalKey: field.canonicalKey,
+      });
+      await bus.emitEvent(applicationId, 'FIELD_RESOLVED', `${field.label}: left blank (optional) [SKIPPED]`, {
+        fieldId: field.id,
+        source: 'SKIPPED',
+        confidence: 1,
+      });
     } else {
       gaps.push(res.gap);
     }
@@ -381,7 +403,9 @@ async function advanceStep(
   state: WalkState,
   signature: string,
 ): Promise<StepOutcome> {
-  const { applicationId, page } = context;
+  const { applicationId, page, adapter } = context;
+  // An upload or save can hold the continue button disabled for a moment.
+  await adapter.settle?.(page);
   const advance = await findAdvanceControl(page);
   if (!advance) {
     // Nothing to press. On a one-page form that is normal - the adapter
@@ -505,6 +529,43 @@ async function answersFromEarlierRuns(
     out.set(q.fieldId, { label: normalizeLabel(q.rawLabel), value: v as string | string[], remember: q.remember });
   }
   return out;
+}
+
+/**
+ * Move this step's answers onto the handles of a fresh read of the same step.
+ *
+ * A step is read again after a pause (state.step is wound back), and handles
+ * are positional: when the page re-renders with one control more or fewer,
+ * every handle after it shifts. Answers were looked up by handle alone, so on
+ * Microsoft's contact page the dial code landed in "Alternate Phone Number",
+ * the phone number in "Address" and the country in "Postal Code/Zip". Answers
+ * now follow the question, and a handle's old answer never outlives it.
+ */
+function rekeyRereadStep(
+  fields: FormField[],
+  state: WalkState,
+  sessionAnswers: Map<string, ResolvedAnswer>,
+): void {
+  const prefix = `s${state.step}:`;
+  const question = (f: FormField) => `${f.kind}:${normalizeLabel(f.label)}`;
+  // Only the latest read of each handle owns what is stored under it.
+  const byQuestion = new Map<string, ResolvedAnswer>();
+  const seen = new Set<string>();
+  for (const f of [...state.allFields].reverse()) {
+    if (!f.id.startsWith(prefix) || seen.has(f.id)) continue;
+    seen.add(f.id);
+    const answer = sessionAnswers.get(f.id);
+    if (answer && !byQuestion.has(question(f))) byQuestion.set(question(f), answer);
+  }
+  if (!seen.size) return;
+  for (const id of seen) {
+    sessionAnswers.delete(id);
+    state.answers.delete(id);
+  }
+  for (const f of fields) {
+    const answer = byQuestion.get(question(f));
+    if (answer) sessionAnswers.set(f.id, { ...answer, fieldId: f.id });
+  }
 }
 
 /**

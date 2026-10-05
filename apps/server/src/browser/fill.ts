@@ -56,6 +56,12 @@ export async function fillField(page: Page, field: FormField, value: string | st
     case 'button-group':
       await fillButtonGroup(page, field, asOne(value, field));
       break;
+    case 'workday-prompt':
+      await fillWorkdayPrompt(page, field, asOne(value, field));
+      break;
+    case 'workday-dropdown':
+      await fillWorkdayDropdown(page, field, asOne(value, field));
+      break;
     case 'combobox-intl-tel':
       await fillNative(page, field, asOne(value, field));
       break;
@@ -363,6 +369,130 @@ async function waitForOption(page: Page, field: FormField, want: string): Promis
   return matchedLocator || null;
 }
 
+/**
+ * Workday's search-and-pick box (`data-uxi-widget-type="selectinput"`): type,
+ * press Enter, click the match.
+ *
+ * Search reaches into trees, so "LinkedIn" finds the leaf under "Social
+ * Media" without anyone opening the category. When a click opens a category
+ * instead of choosing, look for the answer one level down; past that it is a
+ * question for a person, not a guess.
+ */
+async function fillWorkdayPrompt(page: Page, field: FormField, want: string): Promise<void> {
+  const input = page.locator(field.selector).first();
+  await input.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
+  if (workdayShows(want, await workdaySelection(page, field))) return;
+  await input.scrollIntoViewIfNeeded().catch(() => {});
+
+  const searches = [want, want.split(/[\s,(]/)[0] ?? want].filter((s, i, all) => s && all.indexOf(s) === i);
+  let seen: string[] = [];
+  for (const search of searches) {
+    await input.click({ timeout: FIELD_TIMEOUT_MS });
+    await input.fill('');
+    await input.type(search.slice(0, 40), { delay: 15 });
+    await input.press('Enter');
+    await page.waitForTimeout(400);
+    // Some tenants pick a sole exact hit on Enter.
+    if (workdayShows(want, await workdaySelection(page, field))) {
+      await page.keyboard.press('Escape').catch(() => {});
+      return;
+    }
+    for (let depth = 0; depth < 2; depth++) {
+      // The click that opened the box drew the top-level list; the search
+      // results replace it a moment later. Wait for a match, not a list.
+      const found = await workdayMatch(page, want);
+      seen = found.seen;
+      if (!found.option) break;
+      await page.locator(`[data-ja-opt="${seen.indexOf(found.option)}"]`).click({ timeout: FIELD_TIMEOUT_MS });
+      await page.waitForTimeout(400);
+      const shown = await workdaySelection(page, field);
+      if (workdayShows(want, shown) || workdayShows(found.option, shown)) {
+        await page.keyboard.press('Escape').catch(() => {});
+        return;
+      }
+    }
+  }
+  await page.keyboard.press('Escape').catch(() => {});
+  throw new FillError(
+    `Could not find option "${want}" for ${field.label}${seen.length ? ` (saw: ${seen.slice(0, 8).join(', ')})` : ''}`,
+    field,
+  );
+}
+
+/** Workday's button dropdown: the button shows the choice; the list opens below. */
+async function fillWorkdayDropdown(page: Page, field: FormField, want: string): Promise<void> {
+  const button = page.locator(field.selector).first();
+  await button.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
+  if (showsChosenOption(field, want, normalizeLabel(await button.innerText().catch(() => '')))) return;
+  await button.scrollIntoViewIfNeeded().catch(() => {});
+  await button.click({ timeout: FIELD_TIMEOUT_MS });
+  const option = await waitForOption(page, field, want);
+  if (!option) {
+    await page.keyboard.press('Escape').catch(() => {});
+    throw new FillError(`Could not find option "${want}" for ${field.label}`, field);
+  }
+  await option.click();
+  await page.waitForTimeout(200);
+}
+
+/** Poll the open list until it offers something matching `want`. */
+async function workdayMatch(page: Page, want: string): Promise<{ option: string | null; seen: string[] }> {
+  const deadline = Date.now() + OPTION_TIMEOUT_MS;
+  let seen: string[] = [];
+  do {
+    seen = await workdayOptions(page);
+    const option = bestOption(seen.map((label) => ({ label })), want);
+    if (option) return { option: option.label, seen };
+    await page.waitForTimeout(250);
+  } while (Date.now() < deadline);
+  return { option: null, seen };
+}
+
+/** The open list's options, stamped so the chosen one can be clicked. */
+async function workdayOptions(page: Page): Promise<string[]> {
+  const open = '[data-automation-id="promptOption"]:not([data-automation-id="selectedItemList"] *)';
+  return page
+    .evaluate((sel) => {
+      document.querySelectorAll('[data-ja-opt]').forEach((n) => n.removeAttribute('data-ja-opt'));
+      const labels: string[] = [];
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>(sel))) {
+        if (!el.checkVisibility()) continue;
+        el.setAttribute('data-ja-opt', String(labels.length));
+        labels.push((el.getAttribute('data-automation-label') ?? el.innerText).replace(/\s+/g, ' ').trim());
+      }
+      return labels;
+    }, open)
+    .catch(() => []);
+}
+
+/**
+ * What the box has chosen, as Workday tells screen readers: the status the
+ * input is described by ("0 items selected" / "1 item selected, LinkedIn"),
+ * plus any pills in the box around it.
+ */
+async function workdaySelection(page: Page, field: FormField): Promise<string> {
+  let input = page.locator(field.selector).first();
+  // Workday can redraw the input on selection, dropping our stamp; its id stays.
+  if (!(await input.count()) && field.name) input = page.locator(`[id="${cssEscape(field.name)}"]`).first();
+  const ids = ((await input.getAttribute('aria-describedby').catch(() => null)) ?? '').split(/\s+/).filter(Boolean);
+  const said: string[] = [];
+  for (const id of ids) said.push(...(await page.locator(`[id="${cssEscape(id)}"]`).allTextContents().catch(() => [])));
+  said.push(
+    ...(await input
+      .locator('xpath=ancestor::*[@data-automation-id="multiSelectContainer"][1]')
+      .locator('[data-automation-id="selectedItem"]')
+      .allTextContents()
+      .catch(() => [] as string[])),
+  );
+  return normalizeLabel(said.join(' '));
+}
+
+function workdayShows(want: string, shown: string): boolean {
+  const w = normalizeLabel(want);
+  if (!w || !shown || /^0 items? selected/.test(shown)) return false;
+  return shown.includes(w);
+}
+
 async function fillRadioGroup(page: Page, field: FormField, want: string): Promise<void> {
   const target = normalizeLabel(want);
   const scope = page.locator(field.optionContainerSelector ?? field.selector);
@@ -549,6 +679,14 @@ export async function verifyFilled(
       // A phone country picker shows "+91" for "India +91" once chosen.
       const ok = wants.every((w) => text.includes(w) || showsChosenOption(field, w, text));
       return { ok, actual: text };
+    }
+    if (field.widget === 'workday-prompt') {
+      const shown = await workdaySelection(page, field);
+      return { ok: wants.every((w) => workdayShows(w, shown)), actual: shown };
+    }
+    if (field.widget === 'workday-dropdown') {
+      const shown = normalizeLabel(await page.locator(field.selector).first().innerText().catch(() => ''));
+      return { ok: wants.every((w) => shown === w || showsChosenOption(field, w, shown)), actual: shown };
     }
     if (field.widget === 'button-group') {
       const pressed = page.locator(field.selector).first().locator(':scope > button[aria-pressed="true"]');

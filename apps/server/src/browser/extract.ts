@@ -27,9 +27,33 @@ const EXTRACTOR = () => {
   const results: RawField[] = [];
   let counter = 0;
 
+  /**
+   * querySelectorAll that also descends into open shadow roots, in reading
+   * order. SmartRecruiters' application is built from `spl-*` web components
+   * with every input inside a shadow root: a plain querySelectorAll found
+   * nothing at all on it. Playwright's CSS engine pierces open shadow roots,
+   * so the `[data-ja-field]` selectors handed back still resolve when filling.
+   */
+  const deepAll = (root: ParentNode, sel: string): HTMLElement[] => {
+    const out: HTMLElement[] = [];
+    const visit = (node: ParentNode) => {
+      for (const el of Array.from(node.children)) {
+        if (el.matches(sel)) out.push(el as HTMLElement);
+        if (el.shadowRoot) visit(el.shadowRoot);
+        visit(el);
+      }
+    };
+    visit(root);
+    return out;
+  };
+
+  /** getElementById in the control's own tree: a shadow root's ids are not the document's. */
+  const byId = (el: Element, id: string): HTMLElement | null =>
+    (el.getRootNode() as Document | ShadowRoot).getElementById?.(id) ?? document.getElementById(id);
+
   // Clear any handles from a previous extraction on this page.
-  document.querySelectorAll(`[${ATTR}]`).forEach((n) => n.removeAttribute(ATTR));
-  document.querySelectorAll('[data-ja-group]').forEach((n) => n.removeAttribute('data-ja-group'));
+  deepAll(document, `[${ATTR}]`).forEach((n) => n.removeAttribute(ATTR));
+  deepAll(document, '[data-ja-group]').forEach((n) => n.removeAttribute('data-ja-group'));
 
   const visible = (el: Element): boolean => {
     const s = getComputedStyle(el as HTMLElement);
@@ -121,14 +145,14 @@ const EXTRACTOR = () => {
     if (labelledBy) {
       const parts = labelledBy
         .split(/\s+/)
-        .map((id) => textOf(document.getElementById(id)))
+        .map((id) => textOf(byId(el, id)))
         .filter(Boolean);
       if (parts.length) return parts.join(' ');
     }
 
     const id = el.getAttribute('id');
     if (id) {
-      const l = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+      const l = (el.getRootNode() as Document | ShadowRoot).querySelector(`label[for="${CSS.escape(id)}"]`);
       if (l) return textOf(l);
     }
 
@@ -162,8 +186,9 @@ const EXTRACTOR = () => {
     if (describedBy) {
       const parts = describedBy
         .split(/\s+/)
-        .map((id) => textOf(document.getElementById(id)))
-        .filter((t) => t && !/error/i.test(t));
+        .map((id) => textOf(byId(el, id)))
+        // Workday points every prompt at its live "0 items selected" status.
+        .filter((t) => t && !/error/i.test(t) && !/^\d+ items? selected\b/i.test(t));
       if (parts.length) return parts.join(' ');
     }
     const wrapper = el.closest('.field-wrapper, fieldset, .field, .form-group');
@@ -327,9 +352,27 @@ const EXTRACTOR = () => {
       });
     }
 
-    const controls = Array.from(
-      root.querySelectorAll<HTMLElement>('input, select, textarea'),
-    );
+    // ---- Workday dropdown ---------------------------------------------------
+    // "Phone Device Type": a <button aria-haspopup="listbox"> showing the
+    // choice, with the real value in a text input beside it. Neither looks
+    // like a select, so it was never asked and Workday refused the step.
+    deepAll(root, 'button[aria-haspopup="listbox"]').forEach((b) => {
+      if (!visible(b)) return;
+      results.push({
+        handle: mark(b),
+        name: b.getAttribute('name') || b.getAttribute('id') || '',
+        tag: 'button', type: 'button',
+        kind: 'SELECT',
+        widget: 'workday-dropdown',
+        label: labelFor(b),
+        helpText: helpFor(b),
+        required: isRequired(b) || /\brequired\b/i.test(b.getAttribute('aria-label') ?? ''),
+        // Read from Node by opening it, like react-select.
+        options: [],
+      });
+    });
+
+    const controls = deepAll(root, 'input, select, textarea');
 
     for (const el of controls) {
       const tag = el.tagName.toLowerCase();
@@ -344,6 +387,8 @@ const EXTRACTOR = () => {
       if (el.getAttribute('aria-hidden') === 'true') continue;
       if (CAPTCHA_NAMES.test(name) || CAPTCHA_NAMES.test(id)) continue;
       if (!visible(el) && type !== 'file') continue;
+      // The value-holder beside a Workday dropdown; the button is the question.
+      if (el.previousElementSibling?.matches('button[aria-haspopup="listbox"]')) continue;
 
       // ---- radio / checkbox groups -------------------------------------
       if (type === 'radio' || type === 'checkbox') {
@@ -464,6 +509,28 @@ const EXTRACTOR = () => {
         continue;
       }
 
+      // ---- Workday prompt ---------------------------------------------------
+      // "How Did You Hear About Us?", "Country Phone Code": a plain text box
+      // (no role, no aria-haspopup) that searches, with the choice shown as a
+      // pill beside it. Read as a text box, it was typed into and left at
+      // "0 items selected", and Workday refused the step. Options are not
+      // harvested: many are trees ("Job Board" > "LinkedIn"), and the top
+      // level would limit the answer to a category, which is not selectable.
+      if (el.getAttribute('data-uxi-widget-type') === 'selectinput') {
+        results.push({
+          handle: mark(el),
+          name: el.getAttribute('name') || el.getAttribute('id') || '',
+          tag, type,
+          kind: 'SELECT',
+          widget: 'workday-prompt',
+          label: labelFor(el),
+          helpText: helpFor(el),
+          required: isRequired(el),
+          options: [],
+        });
+        continue;
+      }
+
       // ---- combobox (react-select and friends) -----------------------------
       const role = el.getAttribute('role');
       if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox') {
@@ -508,14 +575,11 @@ const EXTRACTOR = () => {
   }
 
   // Button groups are swept first; put everything back in the order a person
-  // reads the form, which is the order it is filled and reviewed in.
-  const at = (r: RawField) => document.querySelector(`[${ATTR}="${r.handle}"]`);
-  results.sort((a, b) => {
-    const ea = at(a);
-    const eb = at(b);
-    if (!ea || !eb) return 0;
-    return ea.compareDocumentPosition(eb) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
-  });
+  // reads the form, which is the order it is filled and reviewed in. Ranked
+  // by a deep walk rather than compareDocumentPosition, which cannot order
+  // elements in different shadow trees.
+  const rank = new Map(deepAll(document, `[${ATTR}]`).map((el, i) => [el.getAttribute(ATTR), i]));
+  results.sort((a, b) => (rank.get(a.handle) ?? 0) - (rank.get(b.handle) ?? 0));
   return results;
 };
 
@@ -539,10 +603,12 @@ export async function extractFields(
 
     let options = r.options;
     if (
-      r.widget === 'react-select' &&
+      (r.widget === 'react-select' || r.widget === 'workday-dropdown') &&
       (opts.harvestComboboxOptions ?? true)
     ) {
       options = await harvestOptions(page, `[data-ja-field="${r.handle}"]`, opts.maxOptions ?? 400);
+      // Workday lists its own placeholder as the first option.
+      options = options.filter((o) => !/^(select one|select\.*|choose\.*)$/i.test(o.label));
     }
 
     const canonical = matchCanonical(r.label);

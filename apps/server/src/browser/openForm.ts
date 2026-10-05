@@ -73,11 +73,19 @@ export interface FormDiagnosis {
  */
 export async function countFillableInputs(page: Page): Promise<number> {
   return page.evaluate(() => {
-    const controls = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        'input, textarea, select, [role="combobox"], [contenteditable="true"]',
-      ),
-    );
+    // Into open shadow roots too: SmartRecruiters' form has no light-DOM
+    // inputs at all, every one sits inside an `spl-*` web component.
+    const controls: HTMLElement[] = [];
+    const visit = (node: ParentNode) => {
+      for (const el of Array.from(node.children)) {
+        if (el.matches('input, textarea, select, [role="combobox"], [contenteditable="true"]')) {
+          controls.push(el as HTMLElement);
+        }
+        if (el.shadowRoot) visit(el.shadowRoot);
+        visit(el);
+      }
+    };
+    visit(document);
     return controls.filter((el) => {
       const type = (el.getAttribute('type') ?? '').toLowerCase();
       if (['hidden', 'submit', 'button', 'image', 'reset'].includes(type)) return false;
@@ -118,7 +126,16 @@ export async function countFillableInputs(page: Page): Promise<number> {
  */
 async function hasVisibleFileInput(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    return Array.from(document.querySelectorAll<HTMLInputElement>('input[type=file]')).some((el) =>
+    const files: HTMLInputElement[] = [];
+    const visit = (node: ParentNode) => {
+      for (const el of Array.from(node.children)) {
+        if (el.matches('input[type=file]')) files.push(el as HTMLInputElement);
+        if (el.shadowRoot) visit(el.shadowRoot);
+        visit(el);
+      }
+    };
+    visit(document);
+    return files.some((el) =>
       typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null,
     );
   });
@@ -213,6 +230,8 @@ const APPLY_PATTERNS = [
   /start (your )?application/i,
   /^apply$/i,
   /^apply\b/i,
+  // SmartRecruiters, including postings embedded on a company's own domain.
+  /^i[’']?m interested$/i,
 ];
 
 /**

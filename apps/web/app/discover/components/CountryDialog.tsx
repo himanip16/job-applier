@@ -6,6 +6,9 @@ import { COUNTRIES, countryByCode } from '@ja/shared/countries';
 /** Every action that works in one country, and how the dialog words it. */
 export type CountryAction = 'find' | 'preview' | 'crawl' | 'recheck';
 
+/** The dialog's "anywhere" choice: the request goes out with no country. */
+export const WORLDWIDE = 'WORLD';
+
 const COPY: Record<CountryAction, { sub: string; icon: IconName; verb: (country: string) => string }> = {
   find: {
     sub: 'Reads the best-paying companies for jobs in this country only. Remote roles open to it are included.',
@@ -29,6 +32,17 @@ const COPY: Record<CountryAction, { sub: string; icon: IconName; verb: (country:
   },
 };
 
+const WORLDWIDE_COPY: Record<CountryAction, { sub: string; icon: IconName; verb: (country: string) => string }> = {
+  find: { ...COPY.find, sub: 'Reads the best-paying companies for jobs in any country, remote or on-site.', verb: () => 'Search worldwide' },
+  preview: { ...COPY.preview, verb: () => 'Preview worldwide' },
+  crawl: { ...COPY.crawl, sub: 'Re-reads every company on your watch list and keeps jobs in any country.', verb: () => 'Re-check all boards' },
+  recheck: {
+    ...COPY.recheck,
+    sub: 'Goes through the jobs waiting in "For you" and removes any older than 3 months, too senior, or no longer open. Location is not checked. Saved, applied and dismissed jobs are not touched.',
+    verb: () => 'Re-check jobs',
+  },
+};
+
 export function CountryDialog({
   value,
   action,
@@ -42,8 +56,9 @@ export function CountryDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const name = countryByCode(value)?.name ?? 'this country';
-  const copy = COPY[action];
+  const worldwide = value === WORLDWIDE;
+  const name = worldwide ? 'all countries' : countryByCode(value)?.name ?? 'this country';
+  const copy = worldwide ? WORLDWIDE_COPY[action] : COPY[action];
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <form
@@ -57,6 +72,7 @@ export function CountryDialog({
         <label className="field">
           <span className="cap">Country</span>
           <select value={value} onChange={(e) => onChange(e.target.value)} autoFocus>
+            <option value={WORLDWIDE}>Anywhere (worldwide)</option>
             {COUNTRIES.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
           </select>
         </label>

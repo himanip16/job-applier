@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { API, api } from '../../lib/api';
 import { Icon, type IconName } from '../../components/Icon';
 import s from './profile.module.css';
+import { History } from './History';
 
 interface Fact { id: string; key: string; label: string; value: string }
 interface Resume { id: string; label: string; filename: string; bytes: number; isDefault: boolean }
@@ -373,6 +374,14 @@ export default function ProfilePage() {
           </div>
         </div>
       </section>
+
+      {profile.id && (
+        <History
+          key={profile.id}
+          facts={profile.facts ?? []}
+          onError={(text) => setNotice({ ok: false, text })}
+        />
+      )}
 
       <a href="/answers" className={`${s.section} ${s.linkCard}`}>
         <span className={s.sectionIcon}><Icon name="checkCircle" size={18} /></span>

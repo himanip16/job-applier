@@ -48,7 +48,7 @@ export function LeadCard({
           aria-label={`Select ${lead.title} at ${lead.companyName}`}
         />
         <div className="jc-titles">
-          <a href={`/jobs/${lead.id}`} className="jc-title">
+          <a href={`/jobs/${lead.id}`} target="_blank" rel="noopener" className="jc-title">
             {lead.title}
           </a>
           <div className="jc-meta">
@@ -144,7 +144,7 @@ export function LeadCard({
           </button>
         </div>
         <div className="jc-main">
-          <a href={`/jobs/${lead.id}`} className="btn jc-btn" title="Everything about this job on one page">
+          <a href={`/jobs/${lead.id}`} target="_blank" rel="noopener" className="btn jc-btn" title="Everything about this job on one page">
             <Icon name="eye" size={15} />View details
           </a>
           {actionable ? (

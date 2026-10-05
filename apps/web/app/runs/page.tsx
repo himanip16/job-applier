@@ -165,7 +165,7 @@ export default function RunsPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {sortNeedsYouFirst(rows).map((r) => (
                 <tr
                   key={r.id}
                   // The whole row opens the run; the links inside still work on their own.
@@ -259,6 +259,16 @@ function canRetry(r: AppRow, active: string[]): boolean {
   if (r.status !== 'NEEDS_HUMAN' || active.includes(r.id)) return false;
   // Submit may already have gone through: check the job board, never resend blind.
   return !/Submit was pressed|mid-submit/i.test(r.blockedReason ?? '');
+}
+
+/**
+ * Runs waiting on you go first: filled and awaiting approval, then ones with
+ * open questions. Everything else keeps the server's order (stable sort).
+ */
+function sortNeedsYouFirst(rows: AppRow[]): AppRow[] {
+  const rank = (r: AppRow) =>
+    r.status === 'REVIEW' ? 0 : r._count.pending > 0 && !['SUBMITTED', 'CANCELLED'].includes(r.status) ? 1 : 2;
+  return [...rows].sort((a, b) => rank(a) - rank(b));
 }
 
 /**

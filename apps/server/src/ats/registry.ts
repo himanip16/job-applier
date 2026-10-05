@@ -5,6 +5,8 @@ import { ashbyAdapter } from './adapters/ashby.js';
 import { workableAdapter } from './adapters/workable.js';
 import { googleAdapter } from './adapters/google.js';
 import { microsoftAdapter } from './adapters/microsoft.js';
+import { workdayAdapter } from './adapters/workday.js';
+import { smartRecruitersAdapter } from './adapters/smartrecruiters.js';
 import { genericAdapter } from './adapters/generic.js';
 
 /** Order matters: generic must be last, it matches everything. */
@@ -15,6 +17,8 @@ export const ADAPTERS: AtsAdapter[] = [
   workableAdapter,
   googleAdapter,
   microsoftAdapter,
+  workdayAdapter,
+  smartRecruitersAdapter,
   genericAdapter,
 ];
 

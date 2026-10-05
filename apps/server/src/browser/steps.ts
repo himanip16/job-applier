@@ -93,6 +93,20 @@ export async function pageSignature(page: Page): Promise<string> {
       typeof (el as HTMLElement).checkVisibility === 'function'
         ? (el as HTMLElement).checkVisibility()
         : (el as HTMLElement).offsetParent !== null;
+    // Into open shadow roots too: SmartRecruiters' form is all `spl-*` web
+    // components, and a light-DOM query saw no inputs on it at all.
+    const deepAll = (sel: string): HTMLElement[] => {
+      const out: HTMLElement[] = [];
+      const visit = (node: ParentNode) => {
+        for (const el of Array.from(node.children)) {
+          if (el.matches(sel)) out.push(el as HTMLElement);
+          if (el.shadowRoot) visit(el.shadowRoot);
+          visit(el);
+        }
+      };
+      visit(document);
+      return out;
+    };
 
     const heading = Array.from(document.querySelectorAll('h1, h2, [role="heading"]'))
       .filter(visible)
@@ -101,9 +115,7 @@ export async function pageSignature(page: Page): Promise<string> {
       .slice(0, 3)
       .join('|');
 
-    const names = Array.from(
-      document.querySelectorAll<HTMLElement>('input, select, textarea, [role="combobox"]'),
-    )
+    const names = deepAll('input, select, textarea, [role="combobox"]')
       .filter((el) => {
         const type = (el.getAttribute('type') ?? '').toLowerCase();
         if (type === 'hidden') return false;
@@ -354,7 +366,14 @@ export async function detectAutofillPrompt(page: Page): Promise<AutofillPrompt |
 
     const clickable = Array.from(
       document.querySelectorAll<HTMLElement>('button, a[href], a[role="button"], [role="button"], label'),
-    ).filter(visible);
+    )
+      .filter(visible)
+      // Workday's progress bar names its first step "Autofill with Resume" in
+      // a bare <label>. Clicking it does nothing, and matching it made the
+      // engine press it three times on the upload step and then give up. A
+      // label only counts when it operates a control.
+      .filter((el) => !el.closest('[data-automation-id="progressBar"], [aria-label="Application Progress"]'))
+      .filter((el) => el.tagName !== 'LABEL' || !!(el as HTMLLabelElement).control);
 
     const labelOf = (el: HTMLElement) =>
       ((el as HTMLInputElement).value || el.getAttribute('aria-label') || el.textContent || '')
@@ -435,12 +454,23 @@ export async function readValidationErrors(page: Page): Promise<string[]> {
       if (text && text.length < 300) out.add(text);
     }
 
-    // Native constraint messages, which render no markup at all.
-    for (const el of Array.from(
-      document.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
-        'input, select, textarea',
-      ),
-    )) {
+    // Native constraint messages, which render no markup at all. Read through
+    // open shadow roots, where SmartRecruiters keeps every input.
+    const deepAll = (sel: string): HTMLElement[] => {
+      const out: HTMLElement[] = [];
+      const visit = (node: ParentNode) => {
+        for (const el of Array.from(node.children)) {
+          if (el.matches(sel)) out.push(el as HTMLElement);
+          if (el.shadowRoot) visit(el.shadowRoot);
+          visit(el);
+        }
+      };
+      visit(document);
+      return out;
+    };
+    for (const el of deepAll('input, select, textarea') as Array<
+      HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+    >) {
       if (!el.willValidate || el.validity.valid) continue;
       const label =
         el.labels?.[0]?.textContent?.trim() || el.getAttribute('name') || el.getAttribute('id') || 'A field';
@@ -456,11 +486,27 @@ export async function looksLikeAGate(page: Page): Promise<boolean> {
   return read(page, () => page.evaluate(() => {
     const visible = (el: HTMLElement) =>
       typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null;
-    const inputs = Array.from(
-      document.querySelectorAll<HTMLElement>('input, select, textarea, [role="combobox"]'),
-    ).filter((el) => {
+    // Into open shadow roots too: SmartRecruiters' form is all `spl-*` web
+    // components, and a light-DOM query saw no inputs on it at all.
+    const deepAll = (sel: string): HTMLElement[] => {
+      const out: HTMLElement[] = [];
+      const visit = (node: ParentNode) => {
+        for (const el of Array.from(node.children)) {
+          if (el.matches(sel)) out.push(el as HTMLElement);
+          if (el.shadowRoot) visit(el.shadowRoot);
+          visit(el);
+        }
+      };
+      visit(document);
+      return out;
+    };
+    const inputs = deepAll('input, select, textarea, [role="combobox"]').filter((el) => {
       const type = (el.getAttribute('type') ?? '').toLowerCase();
       if (type === 'hidden' || type === 'submit' || type === 'button') return false;
+      // Upload inputs are hidden behind a styled drop zone (Workday's
+      // "Autofill with Resume" step has nothing else on it). The input being
+      // display:none says nothing; whether its drop zone is shown does.
+      if (type === 'file') return visible(el) || (!!el.parentElement && visible(el.parentElement));
       return visible(el);
     });
     return inputs.length === 0;

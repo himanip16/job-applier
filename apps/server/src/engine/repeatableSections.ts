@@ -230,3 +230,65 @@ export async function labelRepeatableFields(
     };
   });
 }
+
+// ----------------------------------------------------------------- answers
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+/** "Oct 2025" -> October; "2021" -> null. Only what the date actually says. */
+function monthOf(date: string): string | null {
+  const m = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i.exec(date);
+  return m ? MONTHS.find((name) => name.toLowerCase().startsWith(m[1]!.toLowerCase()))! : null;
+}
+const yearOf = (date: string) => /\b(19|20)\d{2}\b/.exec(date)?.[0] ?? null;
+const isOngoing = (end: string | undefined) => !end || /present|current|now|ongoing/i.test(end);
+
+/**
+ * Answer a row field ("Employment 2: Start date month") from the candidate's
+ * saved `employment.N` / `education.N` facts, with no model involved.
+ *
+ * Null when the fact does not hold that value - Discipline when only the
+ * degree was saved, a month when only a year was - so the field falls
+ * through to the ordinary path instead of being guessed.
+ */
+export function answerFromHistory(
+  field: Pick<FormField, 'label' | 'kind'>,
+  facts: { key: string; value: string }[],
+): string | boolean | null {
+  const at = /^(Employment|Education) (\d+): (.+)$/.exec(field.label);
+  if (!at) return null;
+  const kind = at[1]!.toLowerCase();
+  const fact = facts.find((f) => f.key === `${kind}.${at[2]}`);
+  if (!fact) return null;
+  const entry = Object.fromEntries(
+    fact.value.split('|').flatMap((part) => {
+      const i = part.indexOf(':');
+      return i < 0 ? [] : [[part.slice(0, i).trim().toLowerCase(), part.slice(i + 1).trim()]];
+    }),
+  ) as Record<string, string | undefined>;
+  const q = at[3]!.toLowerCase();
+  const start = entry.start ?? '';
+  const end = entry.end ?? '';
+
+  if (field.kind === 'CHECKBOX' && /current/.test(q)) return entry.current ? /^(yes|true)$/i.test(entry.current) : isOngoing(end);
+  if (/\b(start|from)\b/.test(q)) {
+    if (/month/.test(q)) return monthOf(start);
+    if (/year/.test(q)) return yearOf(start);
+    return start || null;
+  }
+  if (/\b(end|to|until)\b/.test(q)) {
+    if (isOngoing(end)) return null;
+    if (/month/.test(q)) return monthOf(end);
+    if (/year/.test(q)) return yearOf(end);
+    return end;
+  }
+  const pick = (v: string | undefined) => v || null;
+  if (/company|employer|organi[sz]ation/.test(q)) return pick(entry.company);
+  if (/school|university|college|institution/.test(q)) return pick(entry.school);
+  if (/discipline|major|field of study|specialization/.test(q)) return pick(entry.discipline);
+  if (/degree|qualification/.test(q)) return pick(entry.degree);
+  if (/gpa|grade/.test(q)) return pick(entry.cgpa ?? entry.gpa);
+  if (/location|city/.test(q)) return pick(entry.location);
+  if (/title|position|role/.test(q)) return pick(entry.title);
+  return null;
+}

@@ -48,6 +48,8 @@ export function AllQuestions({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  /** The job whose questions are showing; null shows every job as a card. */
+  const [openId, setOpenId] = useState<string | null>(null);
 
   /** Returns how many jobs still have questions. */
   async function load(): Promise<number> {
@@ -80,6 +82,7 @@ export function AllQuestions({
     setValues((v) => ({ ...Object.fromEntries(all.map((q) => [q.id, initialValue(q)])), ...v }));
     setRemember((r) => ({ ...Object.fromEntries(all.map((q) => [q.id, initialRemember(q)])), ...r }));
     setGroups(next);
+    setOpenId((id) => (id && next.some((g) => g.applicationId === id) ? id : null));
     return next.length;
   }
 
@@ -96,12 +99,15 @@ export function AllQuestions({
 
   const complete = (g: Group) => g.questions.every((q) => !q.required || isAnswered(values[q.id]));
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!groups) return;
-    const ready = groups.filter(complete);
+  const requiredLeft = (g: Group) => g.questions.filter((q) => q.required && !isAnswered(values[q.id])).length;
+
+  /** Sends every ready job in `pool`: all of them from the card grid, or just the open one. */
+  async function send(pool: Group[]) {
+    const ready = pool.filter(complete);
     if (!ready.length) {
-      setErr('Answer every required (*) question for at least one job first.');
+      setErr(pool.length === 1
+        ? 'Answer every required (*) question for this job first.'
+        : 'Answer every required (*) question for at least one job first.');
       return;
     }
     setBusy(true);
@@ -128,7 +134,7 @@ export function AllQuestions({
     );
     const sentOk = ready.filter((g) => !failed.includes(`${g.title} — ${g.company}`));
     const resumed = sentOk.length - requeued;
-    const left = groups.length - ready.length;
+    const left = groups!.length - ready.length;
     setNote(
       [
         resumed && `${resumed} job${resumed === 1 ? '' : 's'} carrying on with your answers.`,
@@ -143,11 +149,19 @@ export function AllQuestions({
     if (remaining === 0 && !failed.length) setTimeout(onClose, 2500);
   }
 
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!groups) return;
+    void send(open ? [open] : groups);
+  }
+
   const total = groups?.reduce((n, g) => n + g.questions.length, 0) ?? 0;
+  const open = groups?.find((g) => g.applicationId === openId) ?? null;
+  const readyCount = groups?.filter(complete).length ?? 0;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <form className="modal" onSubmit={submit} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <form className={`modal ${open ? '' : 'modal-wide'}`} onSubmit={submit} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <h2 style={{ margin: '0 0 .2rem' }}>
           {groups === null
             ? 'Loading questions…'
@@ -159,33 +173,27 @@ export function AllQuestions({
         </h2>
         {total > 0 && <p className="sub">
           These could not be answered from your profile or resume, so nothing was guessed. Answer what you
-          can: every job with its required (*) questions answered is sent on, and the rest wait here.
+          can: open a job, fill in its questions, and send it on. Jobs left unanswered wait here.
         </p>}
 
         {note && <div className="notice good" style={{ margin: '.6rem 0' }}>{note}</div>}
 
-        {groups?.map((g) => (
-          <section
-            key={g.applicationId}
-            style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '.2rem .9rem', margin: '.8rem 0' }}
-          >
-            <div className="spread" style={{ padding: '.6rem 0 .2rem', gap: '.6rem' }}>
-              <strong style={{ minWidth: 0 }}>
-                {g.title} <span className="muted">— {g.company}</span>
-              </strong>
+        {open ? (
+          <section>
+            <button type="button" className="ghost small" onClick={() => { setOpenId(null); setErr(null); }} style={{ marginBottom: '.6rem' }}>
+              ← All jobs
+            </button>
+            <div className="spread" style={{ gap: '.6rem', marginBottom: '.2rem' }}>
+              <div style={{ minWidth: 0 }}>
+                <strong>{open.company}</strong>
+                <div className="muted small">{open.title}</div>
+              </div>
               <span className="row small" style={{ gap: '.6rem', flex: 'none' }}>
-                {!g.live && <span className="muted" title="This run has ended. Answering puts it back in the queue.">run ended</span>}
-                {complete(g) ? (
-                  <span style={{ color: 'var(--good)' }}>ready</span>
-                ) : (
-                  <span className="muted">
-                    {g.questions.filter((q) => q.required && !isAnswered(values[q.id])).length} required left
-                  </span>
-                )}
-                <a href={`/applications/${g.applicationId}`} className="muted">open run</a>
+                <StatusChip g={open} left={requiredLeft(open)} />
+                <a href={`/applications/${open.applicationId}`} className="muted">open run</a>
               </span>
             </div>
-            {g.questions.map((q) => (
+            {open.questions.map((q) => (
               <QuestionField
                 key={q.id}
                 q={q}
@@ -196,22 +204,73 @@ export function AllQuestions({
               />
             ))}
           </section>
-        ))}
+        ) : (
+          groups && groups.length > 0 && (
+            <div className="qcards">
+              {groups.map((g) => {
+                const left = requiredLeft(g);
+                return (
+                  <button
+                    type="button"
+                    key={g.applicationId}
+                    className={`qcard ${complete(g) ? 'ready' : ''}`}
+                    onClick={() => { setOpenId(g.applicationId); setErr(null); }}
+                  >
+                    <span className="qcard-head">
+                      <strong>{g.company}</strong>
+                      <StatusChip g={g} left={left} />
+                    </span>
+                    <span className="qcard-title">{g.title}</span>
+                    <span className="qcard-labels">
+                      {g.questions.slice(0, 3).map((q) => (
+                        <span key={q.id} className={isAnswered(values[q.id]) ? 'done' : ''}>{q.rawLabel}</span>
+                      ))}
+                      {g.questions.length > 3 && <span className="more">+{g.questions.length - 3} more</span>}
+                    </span>
+                    <span className="qcard-foot">
+                      {g.questions.length} question{g.questions.length === 1 ? '' : 's'}
+                      {!g.live && <span title="This run has ended. Answering puts it back in the queue."> · run ended</span>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )
+        )}
 
         {err && <div className="notice bad" style={{ margin: '.8rem 0' }}>{err}</div>}
         <div className="row" style={{ marginTop: '1rem' }}>
-          {total > 0 && (
-            <button className="primary" disabled={busy}>
-              {busy
-                ? 'Sending…'
-                : `Send answers for ${groups!.filter(complete).length} ready job${groups!.filter(complete).length === 1 ? '' : 's'}`}
-            </button>
+          {open ? (
+            <>
+              <button className="primary" disabled={busy || !complete(open)}>
+                {busy ? 'Sending…' : 'Send answers for this job'}
+              </button>
+              <button type="button" className="ghost" disabled={busy} onClick={() => { setOpenId(null); setErr(null); }}>
+                Back to all jobs
+              </button>
+            </>
+          ) : (
+            <>
+              {total > 0 && (
+                <button className="primary" disabled={busy || readyCount === 0}>
+                  {busy ? 'Sending…' : `Send answers for ${readyCount} ready job${readyCount === 1 ? '' : 's'}`}
+                </button>
+              )}
+              <button type="button" className="ghost" disabled={busy} onClick={onClose}>
+                {total ? 'Later' : 'Close'}
+              </button>
+            </>
           )}
-          <button type="button" className="ghost" disabled={busy} onClick={onClose}>
-            {total ? 'Later' : 'Close'}
-          </button>
         </div>
       </form>
     </div>
+  );
+}
+
+function StatusChip({ g, left }: { g: Group; left: number }) {
+  return left === 0 ? (
+    <span className="qchip good">ready</span>
+  ) : (
+    <span className="qchip">{left} required left</span>
   );
 }

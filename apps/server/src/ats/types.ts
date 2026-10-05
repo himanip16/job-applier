@@ -20,6 +20,12 @@ export interface AtsAdapter {
   openApplicationForm(page: Page, url: string): Promise<void>;
   /** Read title/company/JD text for the cover letter. */
   readJobMeta(page: Page): Promise<JobMeta>;
+  /**
+   * Wait until the current step has finished drawing, before anything reads
+   * it. For client-rendered wizards (Workday) whose steps load after the URL
+   * changes. Optional; must be bounded.
+   */
+  settle?(page: Page): Promise<void>;
   /** Describe every control on the form. */
   extractForm(page: Page): Promise<FormField[]>;
   /** Point at the resume and (optional) cover-letter file inputs. */

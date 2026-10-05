@@ -114,7 +114,19 @@ export async function signInOrRegister(page: Page, account: SiteAccount): Promis
     const switched =
       (await clickFirst(page, SIGN_IN_LINK)) || (await clickByName(page, /^(sign in|log ?in)$/i));
     if (!switched) return { ok: false, detail: 'An account already exists, but there was no Sign In link to switch to.' };
-    await page.waitForTimeout(1500);
+    // Workday blanks the form while it swaps screens; a fixed pause read that
+    // gap as "no email box". Wait for the one-password Sign In form instead.
+    await page
+      .waitForFunction(
+        (sel) => Array.from(document.querySelectorAll(sel)).filter((el) => (el as HTMLElement).checkVisibility()).length === 1,
+        'input[type="password"]',
+        { timeout: 15_000, polling: 250 },
+      )
+      .catch(() => {});
+    const signedIn = await submitSignIn(page, account, emailEntered);
+    return signedIn.ok
+      ? signedIn
+      : { ...signedIn, detail: `An account with this email already exists, so switched to Sign In. ${signedIn.detail}` };
   }
   return submitSignIn(page, account, emailEntered);
 }
@@ -158,6 +170,8 @@ async function submitCreate(page: Page, account: SiteAccount, emailEntered = fal
 }
 
 async function submitSignIn(page: Page, account: SiteAccount, emailEntered = false): Promise<AccountAttempt> {
+  // The password box can draw before the email box above it.
+  if (!emailEntered) await page.locator(EMAIL_INPUT).first().waitFor({ timeout: 10_000 }).catch(() => {});
   if (!(await fillEmail(page, account.email)) && !emailEntered) {
     return { ok: false, detail: 'Found the sign-in form but not its email box.' };
   }

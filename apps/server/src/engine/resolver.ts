@@ -366,6 +366,7 @@ function fromProfile(key: string | undefined, p: Profile): string | null {
     case 'contact.github': return p.github;
     case 'contact.website': return p.website ?? p.portfolio;
     case 'location.country': return p.country;
+    case 'location.city': return p.city;
     case 'location.current':
       return [p.city, p.region, p.country].filter(Boolean).join(', ') || null;
     default: return null;

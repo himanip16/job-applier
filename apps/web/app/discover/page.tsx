@@ -6,7 +6,7 @@ import { api, needsProfile } from '../../lib/api';
 import { Icon, type IconName } from '../../components/Icon';
 import { ApplyPreferences, useApplyPrefs } from './components/ApplyPreferences';
 import { CompanyManager } from './components/CompanyManager';
-import { CountryDialog, type CountryAction } from './components/CountryDialog';
+import { CountryDialog, WORLDWIDE, type CountryAction } from './components/CountryDialog';
 import { FilterBar } from './components/FilterBar';
 import { LeadCard } from './components/LeadCard';
 import { Pager } from './components/Pager';
@@ -145,14 +145,14 @@ export default function DiscoverPage() {
 
   // ---- country-scoped actions ------------------------------------------------
   //
-  // Everything that reads or prunes jobs works in one country, asked for each
-  // time and remembered.
+  // Everything that reads or prunes jobs works in one country (or worldwide),
+  // asked for each time and remembered.
   const [asking, setAsking] = useState<CountryAction | null>(null);
   const [country, setCountry] = useState('');
   useEffect(() => {
     let saved = '';
     try { saved = window.localStorage.getItem('ja.searchCountry') ?? ''; } catch { /* default below */ }
-    if (countryByCode(saved)) { setCountry(saved); return; }
+    if (saved === WORLDWIDE || countryByCode(saved)) { setCountry(saved); return; }
     api<{ profile: { country: string | null } | null }>('/api/profile')
       .then((d) => setCountry(countryFromText(d.profile?.country)?.code ?? 'IN'))
       .catch(() => setCountry('IN'));
@@ -161,7 +161,10 @@ export default function DiscoverPage() {
   async function run(action: CountryAction) {
     setAsking(null);
     try { window.localStorage.setItem('ja.searchCountry', country); } catch { /* still used */ }
-    const name = countryByCode(country)?.name ?? country;
+    const worldwide = country === WORLDWIDE;
+    const name = worldwide ? 'worldwide' : countryByCode(country)?.name ?? country;
+    // No country means no location filter on the server.
+    const target = worldwide ? undefined : country;
     setBusy(action);
     setError(null);
     setFlash(null);
@@ -170,28 +173,30 @@ export default function DiscoverPage() {
       if (action === 'find' || action === 'preview') {
         const r = await api<{ report: SearchReport }>('/api/discovery/find', {
           method: 'POST',
-          body: JSON.stringify({ deepScoreTop: 15, dryRun: action === 'preview', country }),
+          body: JSON.stringify({ deepScoreTop: 15, dryRun: action === 'preview', country: target }),
         });
         setReport(r.report);
       } else if (action === 'crawl') {
         const { report: r } = await api<{ report: Record<string, number> & { errors: { company: string }[] } }>(
           '/api/discovery/crawl',
-          { method: 'POST', body: JSON.stringify({ deepScoreTop: 15, country }) },
+          { method: 'POST', body: JSON.stringify({ deepScoreTop: 15, country: target }) },
         );
         setFlash(
-          `Re-checked ${r.companiesCrawled} boards for ${name}: ${r.newLeads} new job${r.newLeads === 1 ? '' : 's'}. ` +
-            `Skipped ${r.skippedOtherCountry ?? 0} outside ${name} and ${r.skippedTooOld ?? 0} older than 3 months.` +
+          `Re-checked ${r.companiesCrawled} boards${worldwide ? '' : ` for ${name}`}: ${r.newLeads} new job${r.newLeads === 1 ? '' : 's'}. ` +
+            (worldwide ? 'Skipped ' : `Skipped ${r.skippedOtherCountry ?? 0} outside ${name} and `) +
+            `${r.skippedTooOld ?? 0} older than 3 months.` +
             (r.errors.length ? ` ${r.errors.length} board(s) failed.` : ''),
         );
       } else {
         const { report: r } = await api<{
           report: { checked: number; removed: number; removedBy: Record<string, number>; unreachable: string[] };
-        }>('/api/discovery/recheck-leads', { method: 'POST', body: JSON.stringify({ country }) });
+        }>('/api/discovery/recheck-leads', { method: 'POST', body: JSON.stringify({ country: target }) });
         const b = r.removedBy;
         setFlash(
           r.removed === 0
-            ? `Checked ${r.checked} jobs — all still fit ${name}.`
-            : `Checked ${r.checked} jobs and removed ${r.removed}: ${b.wrongDomain} not engineering roles, ${b.otherCountry} outside ${name}, ` +
+            ? `Checked ${r.checked} jobs — all still fit${worldwide ? '' : ` ${name}`}.`
+            : `Checked ${r.checked} jobs and removed ${r.removed}: ${b.wrongDomain} not engineering roles, ` +
+                (worldwide ? '' : `${b.otherCountry} outside ${name}, `) +
                 `${b.closed} closed, ${b.tooOld} older than 3 months, ${b.tooSenior} too senior.` +
                 (r.unreachable.length ? ` Could not reach ${r.unreachable.length} board(s), so their jobs were left alone.` : ''),
         );
