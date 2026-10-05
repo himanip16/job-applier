@@ -12,6 +12,11 @@ import { generate } from '../llm/client.js';
  *   .employment--container > .employment-form*, button.add-another-button
  *   .education--container  > .education--form*,  button.add-another-button
  *
+ * Workday's My Experience step is the same idea in different markup:
+ *
+ *   [role=group][aria-labelledby="Work-Experience-section"] > [role=group]*, div > button[add-button]
+ *   [role=group][aria-labelledby="Education-section"]       > [role=group]*, div > button[add-button]
+ *
  * Every row reuses the same labels ("Company name", "Title", ...), so without
  * help the model sees three identical questions and fills the most recent
  * role into all of them. Two things fix that: add rows until there is one per
@@ -25,9 +30,19 @@ import { generate } from '../llm/client.js';
 export type SectionKind = 'employment' | 'education';
 
 const SECTIONS: Record<SectionKind, { container: string; title: string }> = {
-  employment: { container: '.employment--container', title: 'Employment' },
-  education: { container: '.education--container', title: 'Education' },
+  employment: {
+    container: '.employment--container, [role="group"][aria-labelledby="Work-Experience-section"]',
+    title: 'Employment',
+  },
+  education: {
+    container: '.education--container, [role="group"][aria-labelledby="Education-section"]',
+    title: 'Education',
+  },
 };
+
+/** Greenhouse's trailing button, or Workday's inside its own wrapper (which holds no input). */
+const ADD_ANOTHER =
+  ':scope > button.add-another-button, :scope > :not(:has(input)) button[data-automation-id="add-button"]';
 
 /** More than this is a runaway loop, not a career. */
 const MAX_ROWS = 10;
@@ -133,7 +148,7 @@ export async function expandRepeatableSections(
     const before = await rows();
     let now = before;
     while (now < wanted) {
-      const add = container.locator(':scope > button.add-another-button').first();
+      const add = container.locator(ADD_ANOTHER).first();
       if (!(await add.count()) || !(await add.isVisible())) break;
       await add.scrollIntoViewIfNeeded().catch(() => {});
       await add.click();
@@ -276,14 +291,20 @@ export function answerFromHistory(
     if (!/current/.test(q)) return null;
     return entry.current ? /^(yes|true)$/i.test(entry.current) : isOngoing(end);
   }
+  // Workday's date boxes are typed digits ("10"), not a month dropdown.
+  const month = (date: string) => {
+    const name = monthOf(date);
+    if (!name || field.kind === 'SELECT') return name;
+    return String(MONTHS.indexOf(name) + 1).padStart(2, '0');
+  };
   if (/\b(start|from)\b/.test(q)) {
-    if (/month/.test(q)) return monthOf(start);
+    if (/month/.test(q)) return month(start);
     if (/year/.test(q)) return yearOf(start);
     return start || null;
   }
   if (/\b(end|to|until)\b/.test(q)) {
     if (isOngoing(end)) return '';
-    if (/month/.test(q)) return monthOf(end);
+    if (/month/.test(q)) return month(end);
     if (/year/.test(q)) return yearOf(end);
     return end;
   }
@@ -294,6 +315,8 @@ export function answerFromHistory(
   if (/degree|qualification/.test(q)) return pick(entry.degree);
   if (/gpa|grade/.test(q)) return pick(entry.cgpa ?? entry.gpa);
   if (/location|city/.test(q)) return pick(entry.location);
+  // Workday's "Role Description": a write-up, not the title the rule below would give.
+  if (/description|responsibilit|summary|achievement/.test(q)) return null;
   if (/title|position|role/.test(q)) return pick(entry.title);
   return null;
 }

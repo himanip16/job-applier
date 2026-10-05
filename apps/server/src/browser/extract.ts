@@ -139,7 +139,15 @@ const EXTRACTOR = () => {
    */
   const labelFor = (el: HTMLElement, grouped = false): string => {
     const aria = el.getAttribute('aria-label');
-    if (aria?.trim()) return aria.trim();
+    if (aria?.trim()) {
+      // Workday's date boxes are labelled just "Month" / "Year"; the fieldset
+      // legend says which date ("From", "To (Actual or Expected)").
+      if (/^(day|month|year)$/i.test(aria.trim())) {
+        const legend = textOf(el.closest('fieldset')?.querySelector('legend') ?? null);
+        if (legend) return `${legend} ${aria.trim()}`;
+      }
+      return aria.trim();
+    }
 
     const labelledBy = el.getAttribute('aria-labelledby');
     if (labelledBy) {
