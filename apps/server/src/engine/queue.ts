@@ -83,6 +83,9 @@ export async function recoverInterruptedRuns(): Promise<number> {
     select: { id: true, status: true, requiresReview: true },
   });
   for (const app of stuck) {
+    // Autopilot never parks on questions: it set this aside and ended the run,
+    // so nothing died with the process. Answering still restarts it.
+    if (app.status === 'NEEDS_INPUT' && !app.requiresReview) continue;
     // Auto-apply submits without asking, so it never resumes unattended after
     // a restart: review goes back on and it waits for you to start it again.
     if (!app.requiresReview) {

@@ -14,251 +14,153 @@ def patch(name, pairs):
     out.append((ROOT + name, s))
 
 
-# 1. Workday: stop "Apply Manually" being clicked as the job's Apply button,
-#    and hand the autofill choice to the wizard instead of choosing it here.
-patch('apps/server/src/browser/openForm.ts', [
-    (
-        "import { isNavigationRace } from './steps.js';",
-        "import { detectAutofillPrompt, isNavigationRace } from './steps.js';",
-    ),
-    (
-        """/** Labels that open an application, in rough order of specificity. */""",
-        """/**
- * "Apply Manually" starts with "apply" but is not the job's Apply button: it is
- * one side of the autofill choice the wizard makes (it prefers the resume).
- */
-const NOT_THE_APPLY_BUTTON = /manually|autofill|auto-fill|use my last application/i;
-
-/** Labels that open an application, in rough order of specificity. */""",
-    ),
-    (
-        """      await page.waitForLoadState('domcontentloaded').catch(() => {});
-      // An Apply link can navigate to a fresh page with its own challenge.
-      await clearInterstitial(page).catch((err: unknown) => {
-        throw err;
-      });
-      if (await formReady(page, minInputs, opts.formSelectors, 15_000)) return;""",
-        """      await page.waitForLoadState('domcontentloaded').catch(() => {});
-      // An Apply link can navigate to a fresh page with its own challenge.
-      await clearInterstitial(page).catch((err: unknown) => {
-        throw err;
-      });
-      // Workday's Apply opens "Autofill with Resume / Apply Manually". That is
-      // the start of the application, and the wizard decides it - clicking
-      // Apply again here picked "Apply Manually" every time.
-      if (await detectAutofillPrompt(page)) return;
-      if (await formReady(page, minInputs, opts.formSelectors, 15_000)) return;""",
-    ),
-    (
-        """      const control = page.getByRole(role, { name: pattern });
-      const count = await control.count().catch(() => 0);
-      for (let i = 0; i < Math.min(count, 3); i++) {
-        const nth = control.nth(i);
-        if (!(await nth.isVisible().catch(() => false))) continue;""",
-        """      const control = page.getByRole(role, { name: pattern });
-      const count = await control.count().catch(() => 0);
-      for (let i = 0; i < Math.min(count, 3); i++) {
-        const nth = control.nth(i);
-        if (!(await nth.isVisible().catch(() => false))) continue;
-        const name = (await nth.innerText().catch(() => '')) || (await nth.getAttribute('aria-label').catch(() => '')) || '';
-        if (NOT_THE_APPLY_BUTTON.test(name)) continue;""",
-    ),
-])
-
-# 2. Workday's autofill choices can be plain links.
-patch('apps/server/src/browser/steps.ts', [
-    (
-        """      document.querySelectorAll<HTMLElement>('button, a[role="button"], [role="button"], label'),""",
-        """      document.querySelectorAll<HTMLElement>('button, a[href], a[role="button"], [role="button"], label'),""",
-    ),
-])
-
-# 3. "Phone Extension" is not the phone number.
-patch('packages/shared/src/canonical.ts', [
-    (
-        """    patterns: [/^phone/i, /mobile\\s*(number|phone)/i, /telephone/i, /contact number/i],""",
-        """    patterns: [/^phone(?!\\s*(ext|extension|type|device))/i, /mobile\\s*(number|phone)/i, /telephone(?!\\s*ext)/i, /contact number/i],""",
-    ),
-])
-
-# 4. A run nobody is waiting on is not "needs human": interrupted auto-apply
-#    runs become FAILED (retryable, review on), and on boot any NEEDS_HUMAN run
-#    whose browser died with the old process is moved the same way - except
-#    where a submit may already have gone through.
-patch('apps/server/src/engine/queue.ts', [
-    (
-        """          status: 'NEEDS_HUMAN',
-          requiresReview: true,
-          blockedReason:
-            app.status === 'SUBMITTING'
-              ? 'The server restarted mid-submit. Check the job board before retrying - it may have gone through.'
-              : 'Auto-apply was interrupted by a server restart. Review is back on; start it again if you still want it.',""",
-        """          status: app.status === 'SUBMITTING' ? 'NEEDS_HUMAN' : 'FAILED',
-          requiresReview: true,
-          blockedReason:
-            app.status === 'SUBMITTING'
-              ? 'The server restarted mid-submit. Check the job board before retrying - it may have gone through.'
-              : 'Auto-apply was interrupted by a server restart. Review is back on; retry it if you still want it.',""",
-    ),
-    (
-        """export async function recoverInterruptedRuns(): Promise<number> {""",
-        """export async function recoverInterruptedRuns(): Promise<number> {
-  // Waiting for you at a wall needs the browser page, and that died with the
-  // old process. Nothing is waiting any more, so say it stopped - unless a
-  // submit may have landed, which a person has to check.
-  const orphaned = await prisma.application.findMany({
-    where: { status: 'NEEDS_HUMAN' },
-    select: { id: true, blockedReason: true },
-  });
-  for (const app of orphaned) {
-    if (/Submit was pressed|mid-submit|may have gone through/i.test(app.blockedReason ?? '')) continue;
-    const interrupted = /Auto-apply was interrupted/i.test(app.blockedReason ?? '');
-    await prisma.application.update({
-      where: { id: app.id },
-      data: {
-        status: 'FAILED',
-        blockedReason: interrupted
-          ? 'Auto-apply was interrupted by a server restart. Review is back on; retry it if you still want it.'
-          : `Stopped by a server restart while it was waiting for you (${(app.blockedReason ?? 'in the browser').slice(0, 160)}). Retry it.`,
-      },
-    });
-  }
-""",
-    ),
-])
-
-# 5. Workday swaps a text input for a fresh node when it blurs, so the
-#    data-ja-field stamp is gone by the time we read the value back. The
-#    read-back waited the full 20s default timeout on a missing node, got '',
-#    and reported "value did not stick" for every field that had in fact
-#    filled correctly.
-patch('apps/server/src/browser/fill.ts', [
-    (
-        """    const el = page.locator(field.selector).first();
-    if (field.kind === 'CHECKBOX') {""",
-        """    let el = page.locator(field.selector).first();
-    // Workday replaces a text input with a new node on blur, and our stamp
-    // leaves with the old one. The name attribute survives the swap.
-    if (!(await el.count()) && field.name) {
-      el = page.locator(`[name="${cssEscape(field.name)}"]`).first();
-    }
-    if (field.kind === 'CHECKBOX') {""",
-    ),
-    (
-        "const actual = normalizeLabel((await el.inputValue().catch(() => '')) || '');",
-        "const actual = normalizeLabel((await el.inputValue({ timeout: 3_000 }).catch(() => '')) || '');",
-    ),
-])
-
-# 6. The run list was not scoped to the signed-in account. Runs page showed
-#    another account's NEEDS_HUMAN runs, and "Answer all questions" counted
-#    their questions but got 404 opening each one, so the modal was empty.
-patch('apps/server/src/routes/applications.ts', [
-    (
-        """  app.get('/api/applications', async () => {
-    const applications = await prisma.application.findMany({
-      include:""",
-        """  app.get('/api/applications', async (req, reply) => {
-    const profile = await requireProfile(req, reply);
-    if (!profile) return;
-    const applications = await prisma.application.findMany({
-      where: { profileId: profile.id },
-      include:""",
-    ),
-])
-
-# 7. Job site account walls (Workday "Create Account" / "Sign In"): fill them
-#    with the profile email and the saved JOB_SITE_PASSWORD before asking the
-#    person. Plain DOM work in browser/accountWall.ts - no model sees the page
-#    or the password. The password lives in settings, never in profile facts,
-#    because facts are pasted into LLM prompts.
-patch('apps/server/src/lib/secrets.ts', [
-    (
-        """  LLM_PROVIDER: {
-    label: 'Model provider',""",
-        """  JOB_SITE_PASSWORD: {
-    label: 'Job site account password',
-    help: 'Used with your profile email to create or sign in to job site accounts (Workday and similar).',
-    where: '',
-    secret: true,
-  },
-  LLM_PROVIDER: {
-    label: 'Model provider',""",
-    ),
-])
-patch('apps/server/src/routes/settings.ts', [
-    (
-        """    preview: meta.secret ? maskSecret(value) : value,""",
-        """    // Not even four characters of a password.
-    preview: key === 'JOB_SITE_PASSWORD' ? (value ? '••••' : '') : meta.secret ? maskSecret(value) : value,""",
-    ),
-    (
-        """async function verify(key: SettingKey): Promise<{ ok: boolean; detail: string }> {
-  try {""",
-        """async function verify(key: SettingKey): Promise<{ ok: boolean; detail: string }> {
-  // Nothing to call: it is checked by the first account wall it meets.
-  if (key === 'JOB_SITE_PASSWORD') return { ok: true, detail: 'Saved.' };
-  try {""",
-    ),
-])
+# 8. Account wall with no job site password saved: the web app pops up and
+#    asks for one. The run waits for it (autopilot included, instead of
+#    setting the job aside), and signs in by itself the moment it is saved.
 patch('apps/server/src/engine/humanGate.ts', [
     (
-        """import { whileWaitingOnHuman } from './slots.js';
-""",
-        """import { whileWaitingOnHuman } from './slots.js';
-import { secret } from '../lib/secrets.js';
-import { signInOrRegister } from '../browser/accountWall.js';
-""",
-    ),
-    (
         """  blocker: Blocker,
-): Promise<boolean> {
-  // Park BEFORE announcing, for the same reason as the review gate: a client""",
-        """  blocker: Blocker,
-): Promise<boolean> {
-  if (await signInWithSavedAccount(applicationId, page, blocker)) return true;
-
-  // Park BEFORE announcing, for the same reason as the review gate: a client""",
-    ),
-    (
-        """export async function pauseForHuman(""",
-        """/**
- * A job site's own account wall, cleared with the saved email and password
- * before anyone is asked. No model is involved; see browser/accountWall.ts.
- * Anything it cannot do - no password saved, a Google sign-in, a refused
- * password - falls through to the ordinary pause.
- */
-async function signInWithSavedAccount(
-  applicationId: string,
-  page: Page,
-  blocker: Blocker,
 ): Promise<boolean> {
   if (blocker.kind !== 'LOGIN_REQUIRED' && blocker.kind !== 'ACCOUNT_CREATION') return false;
-  const password = secret('JOB_SITE_PASSWORD');
-  if (!password) return false;
-  const app = await prisma.application.findUnique({
-    where: { id: applicationId },
-    select: { profile: { select: { email: true } } },
-  });
-  const email = app?.profile.email;
-  if (!email) return false;
-
-  await bus.emitEvent(applicationId, 'LOG', 'Account wall: using your saved email and password.');
-  const attempt = await signInOrRegister(page, { email, password }).catch((err: unknown) => ({
-    ok: false,
-    detail: `Sign-in failed: ${(err as Error).message}`,
-  }));
-  await bus.emitEvent(applicationId, 'LOG', attempt.detail);
-  if (!attempt.ok) return false;
-  // An emailed code after registering is the next wall, and the wizard's next
-  // step pauses for it; only the account wall itself has to be gone.
-  const still = (await detectBlockers(page)).some(
-    (b) => b.kind === 'LOGIN_REQUIRED' || b.kind === 'ACCOUNT_CREATION',
-  );
-  return !still;
+  const password = secret('JOB_SITE_PASSWORD');""",
+        """  blocker: Blocker,
+): Promise<boolean> {
+  if (!isAccountWall(blocker)) return false;
+  const password = secret('JOB_SITE_PASSWORD');""",
+    ),
+    (
+        """  return !still;
 }
 
 export async function pauseForHuman(""",
+        """  return !still;
+}
+
+const isAccountWall = (blocker: Blocker) =>
+  blocker.kind === 'LOGIN_REQUIRED' || blocker.kind === 'ACCOUNT_CREATION';
+
+/**
+ * Waiting on the password popup: once a password is saved, sign in with it and
+ * carry on without anyone pressing Continue. Never resolves if that sign-in
+ * fails - the person finishes it in the browser, and watchForClearance sees it.
+ */
+function signInOnceSaved(
+  applicationId: string,
+  page: Page,
+  blocker: Blocker,
+  stopped: AbortSignal,
+): Promise<{ carryOn: boolean; note?: string }> {
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (stopped.aborted || !secret('JOB_SITE_PASSWORD')) return;
+      clearInterval(timer);
+      void signInWithSavedAccount(applicationId, page, blocker).then((ok) => {
+        if (ok && !stopped.aborted) resolve({ carryOn: true });
+      });
+    }, 1500);
+    stopped.addEventListener('abort', () => clearInterval(timer));
+  });
+}
+
+export async function pauseForHuman(""",
+    ),
+    (
+        """  if (await signInWithSavedAccount(applicationId, page, blocker)) return true;
+
+  // Park BEFORE announcing, for the same reason as the review gate: a client
+  // watching the run can see NEEDS_HUMAN and reply within microseconds, and a
+  // reply that arrives before the promise exists is dropped forever.
+  if (await isAutopilot(applicationId)) {""",
+        """  if (await signInWithSavedAccount(applicationId, page, blocker)) return true;
+  // The app asks for the password in a popup; worth waiting for even on
+  // autopilot, because every later account wall then clears by itself.
+  const askingForPassword = isAccountWall(blocker) && !secret('JOB_SITE_PASSWORD');
+  if (askingForPassword) {
+    await bus.emitEvent(
+      applicationId,
+      'LOG',
+      'This site wants an account and no job site password is saved - asking you for one.',
+    );
+  }
+
+  // Park BEFORE announcing, for the same reason as the review gate: a client
+  // watching the run can see NEEDS_HUMAN and reply within microseconds, and a
+  // reply that arrives before the promise exists is dropped forever.
+  if (!askingForPassword && (await isAutopilot(applicationId))) {""",
+    ),
+    (
+        """  let decision: { carryOn: boolean; note?: string };
+  try {
+    decision = await whileWaitingOnHuman(
+      applicationId,
+      unlessClosed(
+        page,
+        Promise.race([manual, watchForClearance(applicationId, page, blocker)]),
+        'while waiting for you in the browser',
+      ),
+    );
+  } finally {
+    abandon(key);
+  }""",
+        """  let decision: { carryOn: boolean; note?: string };
+  const done = new AbortController();
+  const waits = [manual, watchForClearance(applicationId, page, blocker)];
+  if (askingForPassword) waits.push(signInOnceSaved(applicationId, page, blocker, done.signal));
+  try {
+    decision = await whileWaitingOnHuman(
+      applicationId,
+      unlessClosed(page, Promise.race(waits), 'while waiting for you in the browser'),
+    );
+  } finally {
+    done.abort();
+    abandon(key);
+  }""",
+    ),
+])
+
+# 9. "Hide company" on Discover: the web app sends notCompanies, which the
+#    server never read, so hidden companies stayed in the list.
+patch('apps/server/src/routes/leads.ts', [
+    (
+        """    company: z.string().optional(),
+    tier: z.string().optional(),
+    minPay: optionalNumber,""",
+        """    company: z.string().optional(),
+    // Repeated in the query string, one per company; a single one arrives as a string.
+    notCompanies: z.union([z.string(), z.array(z.string())]).optional()
+      .transform((v) => (v === undefined ? [] : [v].flat().filter(Boolean))),
+    tier: z.string().optional(),
+    minPay: optionalNumber,""",
+    ),
+])
+patch('apps/server/src/discovery/leadListing.ts', [
+    (
+        """  company?: string;
+  /** Target-list tier""",
+        """  company?: string;
+  /** Companies to leave out. */
+  notCompanies: string[];
+  /** Target-list tier""",
+    ),
+    (
+        """  if (query.company) where.companyName = query.company;
+""",
+        """  if (query.company) where.companyName = query.company;
+  else if (query.notCompanies.length) where.companyName = { notIn: query.notCompanies };
+""",
+    ),
+])
+
+# 9. Email-first account walls ("Log in or create account": an email box and
+#    Continue, no password yet - Amazon's job site) count as a login wall, so
+#    the saved-account sign-in in .staged/accountWall.ts gets a go at them.
+patch('apps/server/src/browser/blockers.ts', [
+    (
+        """        has(/log ?in to your account/) ||
+""",
+        """        has(/log ?in to your account/) ||
+        has(/(log ?in|sign ?in) or (create|register) (an )?account/) ||
+""",
     ),
 ])
 

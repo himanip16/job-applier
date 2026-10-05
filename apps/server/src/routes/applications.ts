@@ -11,6 +11,7 @@ import { adapterFor } from '../ats/registry.js';
 import { matchCanonical, normalizeLabel } from '@ja/shared';
 import { NOT_YOURS, ownedApplication } from '../auth/ownership.js';
 import { config } from '../lib/config.js';
+import { tabLeftOpen } from '../browser/session.js';
 import type { RequireProfile } from './types.js';
 
 export function registerApplicationRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
@@ -82,15 +83,22 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
       where: { id: req.params.id, profileId: profile.id },
       include: {
         job: true,
-        events: { orderBy: { createdAt: 'asc' }, take: 500 },
+        // The newest 500, not the oldest: an application retried a few times
+        // otherwise shows only its first runs and never the one that matters.
+        events: { orderBy: { createdAt: 'desc' }, take: 500 },
         pending: { orderBy: { createdAt: 'asc' } },
         artifacts: { orderBy: { createdAt: 'asc' } },
       },
     });
     if (!application) return reply.code(404).send({ error: 'Not found' });
-    // NEEDS_HUMAN covers both a run paused at a wall, which can carry on, and a
-    // finished run whose outcome is unclear, which cannot. Only this tells them apart.
-    return { application, atWall: isParked(blockerKey(application.id)) };
+    application.events.reverse();
+    const atWall = isParked(blockerKey(application.id));
+    return {
+      application,
+      atWall,
+      handoff: application.status === 'NEEDS_HUMAN' ? handoffKind(application, atWall) : null,
+      tabOpen: tabLeftOpen(application.id),
+    };
   });
 
   app.post<{ Params: { id: string } }>('/api/applications/:id/start', async (req, reply) => {
@@ -253,4 +261,28 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
     }
     return { ok: true };
   });
+}
+
+/**
+ * NEEDS_HUMAN means four different things, and each wants a different button.
+ * The UI used to guess which from the log text; the run says so instead.
+ *
+ *  - WALL               a live run is parked at a sign-in or captcha; it carries on
+ *  - CAPTCHA_ON_SUBMIT  a live run pressed submit and the captcha challenged
+ *  - UNCONFIRMED        submit was pressed and nobody could see whether it landed
+ *  - SET_ASIDE          autopilot left the form in a tab for you and moved on
+ *  - STOPPED            the run ended before the form (no form found, a wall)
+ */
+export type Handoff = 'WALL' | 'CAPTCHA_ON_SUBMIT' | 'UNCONFIRMED' | 'SET_ASIDE' | 'STOPPED';
+
+function handoffKind(
+  app: { blockedReason: string | null; events: Array<{ type: string; data: Prisma.JsonValue }> },
+  atWall: boolean,
+): Handoff {
+  if (atWall) return 'WALL';
+  // A restart mid-submit leaves no event behind, only this reason.
+  if (/Submit was pressed|mid-submit|may have gone through/i.test(app.blockedReason ?? '')) return 'UNCONFIRMED';
+  const last = [...app.events].reverse().find((e) => e.type === 'STATUS' || e.type === 'BLOCKED');
+  const tagged = (last?.data as { handoff?: Handoff } | null)?.handoff;
+  return tagged ?? 'STOPPED';
 }

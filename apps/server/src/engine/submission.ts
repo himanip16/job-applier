@@ -46,6 +46,11 @@ export async function finishApplication(args: {
   // ---- Blockers, second look ---------------------------------------------
   const blockers = await detectBlockers(page);
   const captcha = blockers.find((b) => b.kind === 'CAPTCHA');
+  // Armed is not blocked. Invisible reCAPTCHA is on every Greenhouse form and
+  // usually passes on submit; setting aside every one of those meant autopilot
+  // never submitted a Greenhouse job at all. Only a challenge already showing
+  // needs a person before the click - one that appears on submit is caught after.
+  const challenge = captcha?.onScreen ? captcha : undefined;
 
   // ---- Review gate ---------------------------------------------------------
   //
@@ -55,16 +60,19 @@ export async function finishApplication(args: {
   // Those are set aside so the queue moves on instead of waiting.
   const autopilot = !app.requiresReview;
   const unmappedEnd = (adapter.id === 'generic' || !!adapter.alwaysReview) && !(autopilot && submitControl);
-  const needsHands = !!captcha || plan.some((p) => p.error) || unmappedEnd;
+  const needsHands = !!challenge || plan.some((p) => p.error) || unmappedEnd;
 
   if (autopilot && needsHands) {
-    const reason = captcha
-      ? `${captcha.detail} The form is filled and open in the browser.`
+    const reason = challenge
+      ? `${challenge.detail} The form is filled and open in the browser.`
       : unmappedEnd
         ? 'Could not find the final submit button on this site. The form is filled and open in the browser.'
         : 'Some fields would not fill. The form is open in the browser.';
     await setAside(applicationId, reason);
     return;
+  }
+  if (autopilot && captcha) {
+    await bus.emitEvent(applicationId, 'LOG', `${captcha.detail} Submitting anyway; if it challenges, this is set aside for you.`);
   }
 
   if (!autopilot) {
@@ -126,7 +134,32 @@ export async function finishApplication(args: {
   }
   const urlBefore = page.url();
   await pressSubmit();
-  const outcome = await detectSubmissionOutcome(page, urlBefore);
+  let outcome = await detectSubmissionOutcome(page, urlBefore);
+
+  // The armed captcha challenged. Nothing was sent: the click is held until it
+  // is solved, and solving it usually submits the form by itself.
+  if (outcome.outcome !== 'SUBMITTED' && (await captchaOnScreen(page))) {
+    const detail = 'A captcha challenge appeared when submitting, so nothing has been sent yet.';
+    if (autopilot) {
+      await setAside(
+        applicationId,
+        `${detail} Solve it in the open browser tab (it usually submits by itself), then mark it as submitted here.`,
+      );
+      return;
+    }
+    await setStatus(
+      applicationId,
+      'NEEDS_HUMAN',
+      `${detail} Solve it in the browser window; this carries on by itself once the site confirms.`,
+      { handoff: 'CAPTCHA_ON_SUBMIT' },
+    );
+    if (!config.headless) await page.bringToFront().catch(() => {});
+    process.stdout.write(`\x07[needs you] CAPTCHA on submit\n`);
+    outcome = await whileWaitingOnHuman(
+      applicationId,
+      unlessClosed(page, detectSubmissionOutcome(page, urlBefore, 10 * 60_000), 'while waiting for the captcha'),
+    );
+  }
   await artifact(applicationId, 'screenshot', 'after-submit', await screenshot(page, applicationId, 'after-submit'));
 
   if (outcome.outcome === 'SUBMITTED') {
@@ -186,7 +219,7 @@ export async function finishApplication(args: {
     applicationId,
     'STATUS',
     'Submitted, but no confirmation was visible. Check the browser before assuming it went through.',
-    { status: 'NEEDS_HUMAN', detail: outcome.detail },
+    { status: 'NEEDS_HUMAN', detail: outcome.detail, handoff: 'UNCONFIRMED' },
   );
 }
 
@@ -199,7 +232,15 @@ async function setAside(applicationId: string, reason: string): Promise<void> {
     where: { id: applicationId },
     data: { status: 'NEEDS_HUMAN', blockedReason: `${reason} Autopilot moved on to the next job.` },
   });
-  await bus.emitEvent(applicationId, 'STATUS', `Set aside: ${reason}`, { status: 'NEEDS_HUMAN' });
+  await bus.emitEvent(applicationId, 'STATUS', `Set aside: ${reason}`, {
+    status: 'NEEDS_HUMAN',
+    handoff: 'SET_ASIDE',
+  });
+}
+
+async function captchaOnScreen(page: Page): Promise<boolean> {
+  const blockers = await detectBlockers(page).catch(() => []);
+  return blockers.some((b) => b.kind === 'CAPTCHA' && b.onScreen);
 }
 
 let submitLock: Promise<unknown> = Promise.resolve();

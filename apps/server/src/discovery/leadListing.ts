@@ -36,6 +36,8 @@ export interface LeadListQuery {
   /** Canonical city name from CITIES. */
   city?: string;
   company?: string;
+  /** Companies to leave out. */
+  notCompanies: string[];
   /** Target-list tier: quant, bigtech, infra-saas, india-product, finance-gcc. */
   tier?: string;
   /** Minimum median base salary reported on LeetCode for the company, in LPA. */
@@ -82,6 +84,7 @@ export async function listLeads(profileId: string, query: LeadListQuery) {
   if (query.minScore !== undefined) where.score = { gte: query.minScore };
   if (query.depth !== 'any') where.deepScored = query.depth === 'deep';
   if (query.company) where.companyName = query.company;
+  else if (query.notCompanies.length) where.companyName = { notIn: query.notCompanies };
   if (query.postedWithin) where.postedAt = { gte: new Date(Date.now() - query.postedWithin * 86_400_000) };
   if (query.autoApply) where.ats = { in: [...AUTO_APPLY] };
   if (query.q) {

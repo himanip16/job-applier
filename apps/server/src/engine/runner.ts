@@ -2,7 +2,14 @@ import type { Page } from 'playwright';
 import { prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
-import { getContextSync, newPage, PageClosedError, screenshot } from '../browser/session.js';
+import {
+  closeLeftOpen,
+  getContextSync,
+  leaveOpen,
+  newPage,
+  PageClosedError,
+  screenshot,
+} from '../browser/session.js';
 import { NeedsHumanError } from '../browser/openForm.js';
 import { findEmbeddedAts } from '../ats/embedded.js';
 import { resolveKnownAts } from '../ats/resolve.js';
@@ -48,6 +55,7 @@ export async function runApplication(applicationId: string): Promise<void> {
       await bus.emitEvent(applicationId, 'LOG', `${adapter.id}: ${note}`);
     }
 
+    await closeLeftOpen(applicationId);
     page = await newPage();
 
     // ---- 1. Reach the form --------------------------------------------------
@@ -133,6 +141,7 @@ export async function runApplication(applicationId: string): Promise<void> {
     // The page is left open on purpose while a human may still be looking at
     // it; closing here would destroy the evidence and any captcha token.
     if (page && !page.isClosed() && !config.headless && !closePage) {
+      leaveOpen(applicationId, page);
       await bus.emitEvent(applicationId, 'LOG', 'Leaving the browser tab open for you.');
     } else {
       await page?.close().catch(() => {});

@@ -38,6 +38,20 @@ export default function RunsPage() {
       setRetrying(null);
     }
   }
+  async function markSubmitted(r: AppRow) {
+    const name = r.job.title === 'pending' ? r.job.url : `${r.job.title} at ${r.job.company}`;
+    if (!window.confirm(`Mark ${name} as submitted?`)) return;
+    setError(null);
+    try {
+      await api(`/api/applications/${r.id}/outcome`, {
+        method: 'POST',
+        body: JSON.stringify({ submitted: true }),
+      });
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
   const [error, setError] = useState<string | null>(null);
   const [health, setHealth] = useState<{ llmConfigured: boolean; headless: boolean } | null>(null);
 
@@ -198,6 +212,16 @@ export default function RunsPage() {
                           aria-label="Retry"
                         >
                           <Icon name="refresh" size={14} className={retrying === r.id ? 'spin' : undefined} />
+                        </button>
+                      )}
+                      {r.status !== 'SUBMITTED' && (
+                        <button
+                          className="ghost small"
+                          onClick={() => markSubmitted(r)}
+                          title="Mark as submitted (you applied yourself)"
+                          aria-label="Mark as submitted"
+                        >
+                          <Icon name="check" size={14} />
                         </button>
                       )}
                     </span>

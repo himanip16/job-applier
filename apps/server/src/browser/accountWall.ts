@@ -43,7 +43,11 @@ const CREATE_BUTTON =
   '[data-automation-id="createAccountSubmitButton"], [data-automation-id="click_filter"][aria-label*="Create Account" i]';
 const SIGN_IN_BUTTON =
   '[data-automation-id="signInSubmitButton"], [data-automation-id="click_filter"][aria-label*="Sign In" i]';
-const SIGN_IN_LINK = '[data-automation-id="signInLink"]';
+const CONSENT_BOX = 'input[data-automation-id="createAccountCheckbox"]';
+/** Where Workday and most React forms say why a submit was refused. */
+const SITE_ERROR =
+  '[data-automation-id="errorMessage"]:visible, [data-automation-id="inputAlert"]:visible, [role="alert"]:visible';
+const SIGN_IN_LINK ='[data-automation-id="signInLink"]';
 const CREATE_LINK = '[data-automation-id="createAccountLink"]';
 
 const ALREADY_EXISTS = /already (exists|registered|in use|have an account)|account with this email/i;
@@ -64,6 +68,28 @@ export async function signInOrRegister(page: Page, account: SiteAccount): Promis
     return { ok: false, detail: `${host} is a third-party sign-in; that one is yours to do.` };
   }
 
+  // Email-first wall ("Log in or create account": one email box and
+  // Continue). The site decides from the email which screen comes next - a
+  // password to sign in, or a new password (and confirm) to register.
+  let emailEntered = false;
+  if (!(await visibleCount(page, VISIBLE_PASSWORD)) && (await isEmailFirst(page))) {
+    await fillEmail(page, account.email);
+    if (!(await clickByName(page, /^(continue|next)$/i))) {
+      await page.locator(EMAIL_INPUT).first().press('Enter').catch(() => {});
+    }
+    await page.locator(VISIBLE_PASSWORD).first().waitFor({ timeout: 15_000 }).catch(() => {});
+    if (!(await visibleCount(page, VISIBLE_PASSWORD))) {
+      const said = await siteError(page);
+      return {
+        ok: false,
+        detail: said
+          ? `Entered the email and pressed Continue; the site said: "${said}".`
+          : 'Entered the email and pressed Continue, but no password box followed.',
+      };
+    }
+    emailEntered = true;
+  }
+
   // A wall with no password box yet: "Sign In" / "Create Account" buttons
   // that open the form. Prefer signing in - an account made on an earlier
   // application is the common case once a few have gone through.
@@ -81,7 +107,7 @@ export async function signInOrRegister(page: Page, account: SiteAccount): Promis
   }
 
   if ((await visibleCount(page, VISIBLE_PASSWORD)) >= 2) {
-    const created = await submitCreate(page, account);
+    const created = await submitCreate(page, account, emailEntered);
     if (created.ok) return created;
     // Made on an earlier application: switch to signing in.
     if (!ALREADY_EXISTS.test(await bodyText(page))) return created;
@@ -90,11 +116,23 @@ export async function signInOrRegister(page: Page, account: SiteAccount): Promis
     if (!switched) return { ok: false, detail: 'An account already exists, but there was no Sign In link to switch to.' };
     await page.waitForTimeout(1500);
   }
-  return submitSignIn(page, account);
+  return submitSignIn(page, account, emailEntered);
 }
 
-async function submitCreate(page: Page, account: SiteAccount): Promise<AccountAttempt> {
-  if (!(await fillEmail(page, account.email))) {
+/** An email box with a Continue/Next button and no password box anywhere on the page. */
+async function isEmailFirst(page: Page): Promise<boolean> {
+  if (!(await page.locator(EMAIL_INPUT).first().isVisible().catch(() => false))) return false;
+  if (await page.locator('input[type="password"]').count().catch(() => 0)) return false;
+  for (const role of ['button', 'link'] as const) {
+    if (await page.getByRole(role, { name: /^(continue|next)$/i }).first().isVisible().catch(() => false)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function submitCreate(page: Page, account: SiteAccount, emailEntered = false): Promise<AccountAttempt> {
+  if (!(await fillEmail(page, account.email)) && !emailEntered) {
     return { ok: false, detail: 'Found the Create Account form but not its email box.' };
   }
   const passwords = page.locator(VISIBLE_PASSWORD);
@@ -103,10 +141,13 @@ async function submitCreate(page: Page, account: SiteAccount): Promise<AccountAt
 
   // The consent tick ("I agree", "By creating an account…") is required to
   // submit; anything else checkable on this screen is the same kind of box.
-  const boxes = page.locator('input[type="checkbox"]:visible');
+  // Not only `:visible`: Workday's createAccountCheckbox is a transparent
+  // input under a drawn box, which can measure as nothing.
+  const boxes = page.locator(`${CONSENT_BOX}, form input[type="checkbox"]:visible`);
   for (let i = 0; i < (await boxes.count()); i++) {
-    const box = boxes.nth(i);
-    if (!(await box.isChecked().catch(() => true))) await box.check({ force: true }).catch(() => {});
+    if (!(await tick(page, boxes.nth(i)))) {
+      return { ok: false, detail: 'Filled the Create Account form but could not tick its terms checkbox.' };
+    }
   }
 
   const clicked =
@@ -116,8 +157,8 @@ async function submitCreate(page: Page, account: SiteAccount): Promise<AccountAt
   return awaitOutcome(page, 'Created an account');
 }
 
-async function submitSignIn(page: Page, account: SiteAccount): Promise<AccountAttempt> {
-  if (!(await fillEmail(page, account.email))) {
+async function submitSignIn(page: Page, account: SiteAccount, emailEntered = false): Promise<AccountAttempt> {
+  if (!(await fillEmail(page, account.email)) && !emailEntered) {
     return { ok: false, detail: 'Found the sign-in form but not its email box.' };
   }
   const password = page.locator(VISIBLE_PASSWORD).first();
@@ -150,12 +191,48 @@ async function awaitOutcome(page: Page, success: string): Promise<AccountAttempt
     const refused = text.match(REJECTED);
     if (refused) return { ok: false, detail: `The site refused it: "${refused[0]}".` };
   }
-  return { ok: false, detail: 'Submitted, but the sign-in screen did not go away.' };
+  const said = await siteError(page);
+  return {
+    ok: false,
+    detail: said
+      ? `Submitted, but the site said: "${said}".`
+      : 'Submitted, but the sign-in screen did not go away.',
+  };
+}
+
+/**
+ * Tick a checkbox and make sure it took.
+ *
+ * Styled checkboxes hide the real input under a drawn box, so a click at its
+ * centre can land on the drawing. Try the input, then its label, then a click
+ * dispatched straight to the input (React still sees the change).
+ */
+async function tick(page: Page, box: Locator): Promise<boolean> {
+  const checked = () => box.isChecked({ timeout: 1000 }).catch(() => false);
+  if (await checked()) return true;
+  await box.check({ force: true, timeout: 3000 }).catch(() => {});
+  if (await checked()) return true;
+  const id = await box.getAttribute('id').catch(() => null);
+  if (id) await page.locator(`label[for="${id}"]`).first().click({ timeout: 3000 }).catch(() => {});
+  if (await checked()) return true;
+  await box.dispatchEvent('click').catch(() => {});
+  return checked();
+}
+
+async function siteError(page: Page): Promise<string | null> {
+  const texts = await page
+    .locator(SITE_ERROR)
+    .allInnerTexts()
+    .catch(() => [] as string[]);
+  const said = texts.map((t) => t.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  return said.length ? said.join(' ').slice(0, 300) : null;
 }
 
 async function fillEmail(page: Page, email: string): Promise<boolean> {
   const box = page.locator(EMAIL_INPUT).first();
   if (!(await box.isVisible().catch(() => false))) return false;
+  // After an email-first step the address is often shown back read-only.
+  if (!(await box.isEditable().catch(() => false))) return Boolean(await box.inputValue().catch(() => ''));
   await box.fill(email);
   return true;
 }

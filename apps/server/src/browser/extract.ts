@@ -171,10 +171,50 @@ const EXTRACTOR = () => {
     return hint ? textOf(hint) : '';
   };
 
+  /**
+   * The ARIA box around a set of options. Google's EEO race question puts
+   * `role="checkbox"` on the box around all of its checkboxes, so that counts
+   * too - but only when it holds several inputs, or every single consent
+   * checkbox would be mistaken for a group.
+   */
+  const ariaGroupOf = (el: HTMLElement): HTMLElement | null => {
+    const box = el.closest<HTMLElement>('[role="radiogroup"], [role="group"], [role="checkbox"]');
+    if (!box) return null;
+    if (box.getAttribute('role') !== 'checkbox' || box.querySelectorAll('input').length >= 2) return box;
+    return box.parentElement ? ariaGroupOf(box.parentElement) : null;
+  };
+
+  // Validation wording only. "Please indicate your gender" is a question.
+  const VALIDATION_TEXT =
+    /^(the answer is required|this (field|question) is required|required|error\b.*|please (select|choose|pick|enter|fill( in| out)?|complete|provide|make)( (an?|one|at least one|this|the|a valid|your))? ?(option|options|selection|value|answer|response|choice|field|question)\.?)$/i;
+
+  /** The plain-text question sitting just before an ARIA group, if any. */
+  const questionBefore = (group: HTMLElement): HTMLElement | null => {
+    // Step over a validation message ("The answer is required") that
+    // Google renders between the question and its options.
+    let prev = group.previousElementSibling as HTMLElement | null;
+    for (let hops = 0; prev && hops < 2; hops++, prev = prev.previousElementSibling as HTMLElement | null) {
+      if (prev.querySelector('input, select, textarea, button')) break;
+      const text = textOf(prev);
+      if (!text || VALIDATION_TEXT.test(text)) continue;
+      return text.length <= 300 ? prev : null;
+    }
+    return null;
+  };
+
   const isRequired = (el: HTMLElement): boolean => {
     if (el.hasAttribute('required') || el.getAttribute('aria-required') === 'true') return true;
     // Google Careers marks the group, not each radio in it.
     if (el.closest('[role="radiogroup"][aria-required="true"], [role="group"][aria-required="true"]')) return true;
+    // ...except the EEO race box, which carries no required flag at all. Its
+    // question ends in `*` or carries a "required field" marker instead.
+    const group = ariaGroupOf(el);
+    const question = group && questionBefore(group);
+    if (question) {
+      if (/[*\u2731\uFF0A]\s*$/.test(question.textContent ?? '')) return true;
+      if (question.querySelector('[aria-label*="required" i], [title*="required" i]')) return true;
+      if (/\brequired field\b/i.test(question.textContent ?? '')) return true;
+    }
     // A marker glyph in the label is the near-universal convention for forms
     // that do not set the attribute. Ashby draws its asterisk with CSS from a
     // `_required_xxxx` class on the question title, so there is no glyph in
@@ -228,23 +268,15 @@ const EXTRACTOR = () => {
     // An ARIA group that names itself, or whose question sits as plain text
     // in the element just before it - Google Careers' qualification
     // questions, which have no <label> or <legend> at all.
-    const group = container.closest<HTMLElement>('[role="radiogroup"], [role="group"]');
+    const group = ariaGroupOf(container);
     if (group) {
       const labelledBy = group.getAttribute('aria-labelledby');
       const named = labelledBy
         ? labelledBy.split(/\s+/).map((id) => textOf(document.getElementById(id))).filter(Boolean).join(' ')
         : '';
       if (named) return named;
-      // Step over a validation message ("The answer is required") that
-      // Google renders between the question and its options.
-      let prev = group.previousElementSibling;
-      for (let hops = 0; prev && hops < 2; hops++, prev = prev.previousElementSibling) {
-        if (prev.querySelector('input, select, textarea, button')) break;
-        const text = textOf(prev);
-        if (!text || /^(the answer is required|this (field|question) is required|required|error\b.*|please .*)$/i.test(text)) continue;
-        if (text.length <= 300) return text;
-        break;
-      }
+      const question = questionBefore(group);
+      if (question) return textOf(question);
       const aria = group.getAttribute('aria-label')?.trim();
       if (aria && !/radio input$/i.test(aria)) return aria;
     }

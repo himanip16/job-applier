@@ -17,6 +17,12 @@ export interface Blocker {
    * with", and only your click carries on.
    */
   autoClears?: boolean;
+  /**
+   * CAPTCHA only: a challenge is showing now. Without it the captcha is merely
+   * armed - invisible reCAPTCHA sits on every Greenhouse form and usually
+   * passes on submit without anyone seeing it.
+   */
+  onScreen?: boolean;
 }
 
 /**
@@ -67,6 +73,7 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
         ? `A ${captcha.hits.join('/')} challenge is on screen and must be solved by a person.`
         : `${captcha.hits.join('/')} is armed on this form. It may pass silently, or it may challenge on submit.`,
       humanCanClear: true,
+      onScreen: captcha.challengeVisible,
     });
   }
 
@@ -119,6 +126,7 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
         visiblePassword ||
         has(/sign in to (continue|apply)/) ||
         has(/log ?in to your account/) ||
+        has(/(log ?in|sign ?in) or (create|register) (an )?account/) ||
         // Google's first sign-in screen is an email box and this sentence.
         has(/use your google account/) ||
         has(/sign in with your (work|school|microsoft|google) account/) ||

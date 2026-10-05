@@ -35,21 +35,34 @@ interface AppDetail {
 
 interface Evt { type: string; message: string; at: string }
 
+/** Which kind of NEEDS_HUMAN this is; see handoffKind in the server's routes/applications.ts. */
+type Handoff = 'WALL' | 'CAPTCHA_ON_SUBMIT' | 'UNCONFIRMED' | 'SET_ASIDE' | 'STOPPED';
+
 export default function RunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [detail, setDetail] = useState<AppDetail | null>(null);
-  const [atWall, setAtWall] = useState(false);
+  const [handoff, setHandoff] = useState<Handoff | null>(null);
+  const [tabOpen, setTabOpen] = useState(false);
   const [events, setEvents] = useState<Evt[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // A failed button press. Shown beside the buttons, never in place of the page.
+  const [actionError, setActionError] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(
-    () => api<{ application: AppDetail; atWall?: boolean }>(`/api/applications/${id}`)
+    () => api<{ application: AppDetail; handoff?: Handoff | null; tabOpen?: boolean }>(`/api/applications/${id}`)
       .then((d) => {
         setDetail(d.application);
-        setAtWall(Boolean(d.atWall));
+        setHandoff(d.handoff ?? null);
+        setTabOpen(Boolean(d.tabOpen));
+        setError(null);
       })
-      .catch((e) => setError(e.message)),
+      // Once the page has loaded, a failed refresh (the API restarting, say)
+      // keeps what is on screen; only a first load with nothing to show errors.
+      .catch((e) => setDetail((cur) => {
+        if (!cur) setError(e.message);
+        return cur;
+      })),
     [id],
   );
 
@@ -74,7 +87,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [events]);
 
-  if (error) return <div className="panel"><div className="notice bad">{error}</div></div>;
+  if (error && !detail) return <div className="panel"><div className="notice bad">{error}</div></div>;
   if (!detail) return <Loading />;
 
   const open = detail.pending.filter((q) => !q.answeredAt);
@@ -91,15 +104,38 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
           </div>
           <div className="row" style={{ gap: '.5rem', alignItems: 'center' }}>
             <span className={`pill ${detail.status}`}>{detail.status.replace('_', ' ')}</span>
+            {/* For an application finished by hand, outside the run - at any point. */}
+            {detail.status !== 'SUBMITTED' && (
+              <button
+                className="ghost"
+                onClick={async () => {
+                  if (!window.confirm(`Mark ${detail.job.company} as submitted?`)) return;
+                  setActionError(null);
+                  try {
+                    await api(`/api/applications/${id}/outcome`, {
+                      method: 'POST',
+                      body: JSON.stringify({ submitted: true }),
+                    });
+                    await refresh();
+                  } catch (e) {
+                    setActionError(`Could not mark it as submitted: ${(e as Error).message}. Try again in a moment.`);
+                  }
+                }}
+                style={{ fontSize: '.85rem', padding: '.3rem .6rem' }}
+              >
+                Mark as submitted
+              </button>
+            )}
             {(detail.status === 'FAILED' || detail.status === 'BLOCKED') && (
               <button
                 className="primary"
                 onClick={async () => {
                   try {
+                    setActionError(null);
                     await api(`/api/applications/${id}/start`, { method: 'POST' });
-                    refresh();
+                    await refresh();
                   } catch (e) {
-                    setError((e as Error).message);
+                    setActionError(`Could not resume: ${(e as Error).message}. Try again in a moment.`);
                   }
                 }}
                 style={{ fontSize: '.85rem', padding: '.3rem .6rem' }}
@@ -109,6 +145,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             )}
           </div>
         </div>
+        {actionError && <div className="notice bad" style={{ marginTop: '.9rem' }}>{actionError}</div>}
         {/* NEEDS_HUMAN explains itself in its own panel below; saying it twice is noise. */}
         {detail.blockedReason && detail.status !== 'NEEDS_HUMAN' && (
           <div
@@ -121,12 +158,17 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
       </div>
 
       {detail.status === 'NEEDS_HUMAN' &&
-        (atWall ? (
+        (handoff === 'WALL' ? (
           <WallPanel applicationId={id} detail={detail} onDone={refresh} />
-        ) : events.some((e) => e.message.startsWith('Submitting')) ? (
+        ) : handoff === 'CAPTCHA_ON_SUBMIT' ? (
+          <div className="panel" style={{ borderColor: 'var(--warn-border)', background: 'var(--warn-soft)' }}>
+            <h2>Solve the captcha in the browser</h2>
+            <p className="sub" style={{ maxWidth: '44rem' }}>{detail.blockedReason}</p>
+          </div>
+        ) : handoff === 'UNCONFIRMED' ? (
           <OutcomePanel applicationId={id} detail={detail} onDone={refresh} />
         ) : (
-          <StoppedPanel applicationId={id} detail={detail} onDone={refresh} />
+          <StoppedPanel applicationId={id} detail={detail} setAside={handoff === 'SET_ASIDE'} tabOpen={tabOpen} onDone={refresh} />
         ))}
 
       {/* Questions from a run that has since ended are stale: a restart re-asks them. */}
@@ -393,46 +435,75 @@ function Reason({ text }: { text: string | null }) {
 }
 
 /**
- * The run gave up before submitting and is no longer waiting on anything.
- * Nothing was sent, so the only questions are: try again, or look yourself.
+ * The run is over and nothing was sent. Either autopilot left a filled form in
+ * a tab for you (set aside), or the run stopped short of the form.
+ *
+ * "Try again" alone was the wrong answer to a set-aside: it re-runs into the
+ * same captcha and sets it aside again. When the form is sitting there filled,
+ * finishing it by hand is the quick way, so that comes first.
  */
 function StoppedPanel({
   applicationId,
   detail,
+  setAside,
+  tabOpen,
   onDone,
 }: {
   applicationId: string;
   detail: AppDetail;
+  setAside: boolean;
+  tabOpen: boolean;
   onDone: () => void;
 }) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<'retry' | 'done' | 'drop' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function retry() {
-    setBusy(true);
+  async function act(kind: 'retry' | 'done' | 'drop') {
+    setBusy(kind);
     setError(null);
     try {
-      await api(`/api/applications/${applicationId}/start`, { method: 'POST' });
+      if (kind === 'retry') await api(`/api/applications/${applicationId}/start`, { method: 'POST' });
+      else
+        await api(`/api/applications/${applicationId}/outcome`, {
+          method: 'POST',
+          body: JSON.stringify({ submitted: kind === 'done' }),
+        });
       onDone();
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
+  const reason = detail.blockedReason
+    ?.replace(/^UNKNOWN:\s*/, '')
+    .replace(/\s*Autopilot moved on to the next job\.$/, '') ?? null;
+  const finishByHand = setAside && tabOpen;
+
   return (
     <div className="panel" style={{ borderColor: 'var(--warn-border)', background: 'var(--warn-soft)' }}>
-      <h2>This application stopped before submitting</h2>
-      <Reason text={detail.blockedReason?.replace(/^UNKNOWN:\s*/, '') ?? null} />
+      <h2>{setAside ? 'Set aside for you to finish' : 'This application stopped before submitting'}</h2>
+      <Reason text={reason} />
       <p className="small muted" style={{ maxWidth: '44rem' }}>
-        Nothing was sent to {detail.job.company}.{' '}
+        Nothing has been sent to {detail.job.company} yet.{' '}
+        {tabOpen
+          ? 'The browser tab it was working in is still open: finish it there and tell us, or run it again (that replaces the tab).'
+          : 'The browser tab it was working in has closed, so run it again to refill the form.'}{' '}
         <a href={detail.job.url} target="_blank" rel="noreferrer">Open the job page</a>
       </p>
       {error && <div className="notice bad">{error}</div>}
       <div className="row" style={{ gap: '.5rem', marginTop: '.6rem' }}>
-        <button className="primary" disabled={busy} onClick={retry}>
-          {busy ? 'Starting…' : 'Try again'}
+        {finishByHand && (
+          <button className="primary" disabled={busy !== null} onClick={() => act('done')}>
+            {busy === 'done' ? 'Saving…' : 'I submitted it in the browser'}
+          </button>
+        )}
+        <button className={finishByHand ? 'ghost' : 'primary'} disabled={busy !== null} onClick={() => act('retry')}>
+          {busy === 'retry' ? 'Starting…' : 'Run it again'}
+        </button>
+        <button className="ghost" disabled={busy !== null} onClick={() => act('drop')}>
+          {busy === 'drop' ? 'Saving…' : 'Leave it'}
         </button>
       </div>
     </div>

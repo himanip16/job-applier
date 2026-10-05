@@ -84,6 +84,9 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
     country: z.string().length(2).optional().or(z.literal('').transform(() => undefined)),
     city: z.string().optional(),
     company: z.string().optional(),
+    // Repeated in the query string, one per company; a single one arrives as a string.
+    notCompanies: z.union([z.string(), z.array(z.string())]).optional()
+      .transform((v) => (v === undefined ? [] : [v].flat().filter(Boolean))),
     tier: z.string().optional(),
     minPay: optionalNumber,
     autoApply: flag,

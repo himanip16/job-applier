@@ -117,7 +117,8 @@ export function Nav() {
   // Shares one poller with whatever else on the page wants these numbers,
   // rather than running a second interval against the same endpoint.
   const { data } = useOverview();
-  const badges = { runs: data?.needsYou.total ?? 0, discover: data?.counts.leadsNew ?? 0 };
+  // Only questions earn a badge; walls and set-asides wait on the Runs page.
+  const badges = { runs: data?.needsYou.needsInput ?? 0, discover: data?.counts.leadsNew ?? 0 };
 
   // Nothing here works signed out - every link bounces straight back to
   // sign-in via AuthGate - so showing it there is just a wall of dead links

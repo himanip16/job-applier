@@ -135,6 +135,34 @@ export async function newPage(): Promise<Page> {
 }
 
 /**
+ * Tabs a finished run left open for you to finish by hand, by application.
+ *
+ * Without this the app cannot say whether "it is open in the browser" is still
+ * true, and every retry of a set-aside application stacks up another tab of
+ * the same form.
+ */
+const leftOpen = new Map<string, Page>();
+
+export function leaveOpen(applicationId: string, page: Page): void {
+  leftOpen.set(applicationId, page);
+  page.once('close', () => {
+    if (leftOpen.get(applicationId) === page) leftOpen.delete(applicationId);
+  });
+}
+
+export function tabLeftOpen(applicationId: string): boolean {
+  const page = leftOpen.get(applicationId);
+  return !!page && !page.isClosed();
+}
+
+/** A new run replaces the tab the last one left; you would not want both. */
+export async function closeLeftOpen(applicationId: string): Promise<void> {
+  const page = leftOpen.get(applicationId);
+  leftOpen.delete(applicationId);
+  await page?.close().catch(() => {});
+}
+
+/**
  * The tab a run was driving has gone - someone closed it, or the whole window.
  *
  * Distinct from every other failure because nothing on the page can be read or

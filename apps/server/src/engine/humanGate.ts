@@ -203,7 +203,7 @@ async function signInWithSavedAccount(
   page: Page,
   blocker: Blocker,
 ): Promise<boolean> {
-  if (blocker.kind !== 'LOGIN_REQUIRED' && blocker.kind !== 'ACCOUNT_CREATION') return false;
+  if (!isAccountWall(blocker)) return false;
   const password = secret('JOB_SITE_PASSWORD');
   if (!password) return false;
   const app = await prisma.application.findUnique({
@@ -228,17 +228,53 @@ async function signInWithSavedAccount(
   return !still;
 }
 
+const isAccountWall = (blocker: Blocker) =>
+  blocker.kind === 'LOGIN_REQUIRED' || blocker.kind === 'ACCOUNT_CREATION';
+
+/**
+ * Waiting on the password popup: once a password is saved, sign in with it and
+ * carry on without anyone pressing Continue. Never resolves if that sign-in
+ * fails - the person finishes it in the browser, and watchForClearance sees it.
+ */
+function signInOnceSaved(
+  applicationId: string,
+  page: Page,
+  blocker: Blocker,
+  stopped: AbortSignal,
+): Promise<{ carryOn: boolean; note?: string }> {
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (stopped.aborted || !secret('JOB_SITE_PASSWORD')) return;
+      clearInterval(timer);
+      void signInWithSavedAccount(applicationId, page, blocker).then((ok) => {
+        if (ok && !stopped.aborted) resolve({ carryOn: true });
+      });
+    }, 1500);
+    stopped.addEventListener('abort', () => clearInterval(timer));
+  });
+}
+
 export async function pauseForHuman(
   applicationId: string,
   page: Page,
   blocker: Blocker,
 ): Promise<boolean> {
   if (await signInWithSavedAccount(applicationId, page, blocker)) return true;
+  // The app asks for the password in a popup; worth waiting for even on
+  // autopilot, because every later account wall then clears by itself.
+  const askingForPassword = isAccountWall(blocker) && !secret('JOB_SITE_PASSWORD');
+  if (askingForPassword) {
+    await bus.emitEvent(
+      applicationId,
+      'LOG',
+      'This site wants an account and no job site password is saved - asking you for one.',
+    );
+  }
 
   // Park BEFORE announcing, for the same reason as the review gate: a client
   // watching the run can see NEEDS_HUMAN and reply within microseconds, and a
   // reply that arrives before the promise exists is dropped forever.
-  if (await isAutopilot(applicationId)) {
+  if (!askingForPassword && (await isAutopilot(applicationId))) {
     await handOffToHuman(applicationId, page, blocker);
     throw new SetAsideError(
       'Autopilot: this needs you in the browser, so it is set aside with the tab left open. ' +
@@ -256,16 +292,16 @@ export async function pauseForHuman(
   // because you dealt with it. The second is the common case and it should not
   // require coming back to this app to say so.
   let decision: { carryOn: boolean; note?: string };
+  const done = new AbortController();
+  const waits = [manual, watchForClearance(applicationId, page, blocker)];
+  if (askingForPassword) waits.push(signInOnceSaved(applicationId, page, blocker, done.signal));
   try {
     decision = await whileWaitingOnHuman(
       applicationId,
-      unlessClosed(
-        page,
-        Promise.race([manual, watchForClearance(applicationId, page, blocker)]),
-        'while waiting for you in the browser',
-      ),
+      unlessClosed(page, Promise.race(waits), 'while waiting for you in the browser'),
     );
   } finally {
+    done.abort();
     abandon(key);
   }
 

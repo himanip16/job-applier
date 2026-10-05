@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useOverview } from '../lib/overview';
 import { AllQuestions } from './AllQuestions';
+import { AccountPassword } from './AccountPassword';
 
 /** How many runs were waiting on questions when the popup last opened, this tab session. */
 const SEEN_KEY = 'ja.questionsSeen';
@@ -31,9 +32,12 @@ export function NeedsYou() {
   const [asking, setAsking] = useState(false);
   const [autoOpened, setAutoOpened] = useState(false);
 
-  const first = data?.needsYou.first ?? null;
-  const total = data?.needsYou.total ?? 0;
   const needsInput = data?.needsYou.needsInput ?? 0;
+  // Only unanswered questions interrupt you. Questions sort first on the
+  // server, so when there are any, `first` is one of them.
+  const urgent = data?.needsYou.first ?? null;
+  const first = urgent?.status === 'NEEDS_INPUT' ? urgent : null;
+  const total = needsInput;
   const onRunPage = pathname?.startsWith('/applications/') ?? false;
 
   // Pop the questions up by themselves when a new run starts waiting on them,
@@ -76,7 +80,14 @@ export function NeedsYou() {
     };
   }, [first]);
 
-  const popup = asking && !onRunPage ? <AllQuestions auto={autoOpened} onClose={() => { setAsking(false); setAutoOpened(false); }} /> : null;
+  const questions = asking && !onRunPage ? <AllQuestions auto={autoOpened} onClose={() => { setAsking(false); setAutoOpened(false); }} /> : null;
+  // Shown on every page, the run's own included: the run is waiting on it.
+  const popup = (
+    <>
+      {questions}
+      <AccountPassword waiting={urgent} />
+    </>
+  );
 
   if (!first || total === 0) return popup;
   if (dismissed === first.id) return popup;
