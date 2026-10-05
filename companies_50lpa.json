@@ -433,8 +433,8 @@
     "company": "Nutanix",
     "domain": "nutanix.com",
     "job_links": [],
-    "source": "careers-page",
-    "handle": "https://careers.nutanix.com/en/jobs/",
+    "source": "jobvite",
+    "handle": "nutanix",
     "tier": "infra-saas",
     "sde2_ctc_lpa": "50-80",
     "india_locations": "Bangalore, Pune"
@@ -543,8 +543,8 @@
     "company": "Postman",
     "domain": "postman.com",
     "job_links": [],
-    "source": "greenhouse",
-    "handle": "postman",
+    "source": "careers-page",
+    "handle": "https://www.postman.com/company/careers/open-positions/",
     "tier": "infra-saas",
     "sde2_ctc_lpa": "50-80",
     "india_locations": "Bangalore, Hyderabad"
