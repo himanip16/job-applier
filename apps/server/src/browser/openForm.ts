@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import type { BlockerKind } from '@ja/shared';
 import { detectBlockers } from './blockers.js';
-import { isNavigationRace } from './steps.js';
+import { detectAutofillPrompt, isNavigationRace } from './steps.js';
 
 /**
  * Getting from a job URL to a form you can actually fill.
@@ -199,6 +199,12 @@ export async function clearInterstitial(page: Page, budgetMs = 25_000): Promise<
   }
 }
 
+/**
+ * "Apply Manually" starts with "apply" but is not the job's Apply button: it is
+ * one side of the autofill choice the wizard makes (it prefers the resume).
+ */
+const NOT_THE_APPLY_BUTTON = /manually|autofill|auto-fill|use my last application/i;
+
 /** Labels that open an application, in rough order of specificity. */
 const APPLY_PATTERNS = [
   /apply for this job/i,
@@ -267,6 +273,10 @@ export async function openApplicationForm(
       await clearInterstitial(page).catch((err: unknown) => {
         throw err;
       });
+      // Workday's Apply opens "Autofill with Resume / Apply Manually". That is
+      // the start of the application, and the wizard decides it - clicking
+      // Apply again here picked "Apply Manually" every time.
+      if (await detectAutofillPrompt(page)) return;
       if (await formReady(page, minInputs, opts.formSelectors, 15_000)) return;
     }
   }
@@ -340,6 +350,8 @@ async function clickApply(page: Page, patterns: RegExp[]): Promise<boolean> {
       for (let i = 0; i < Math.min(count, 3); i++) {
         const nth = control.nth(i);
         if (!(await nth.isVisible().catch(() => false))) continue;
+        const name = (await nth.innerText().catch(() => '')) || (await nth.getAttribute('aria-label').catch(() => '')) || '';
+        if (NOT_THE_APPLY_BUTTON.test(name)) continue;
         try {
           await nth.scrollIntoViewIfNeeded({ timeout: 3000 });
           await nth.click({ timeout: 8000 });

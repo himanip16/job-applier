@@ -353,7 +353,7 @@ export async function detectAutofillPrompt(page: Page): Promise<AutofillPrompt |
       typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null;
 
     const clickable = Array.from(
-      document.querySelectorAll<HTMLElement>('button, a[role="button"], [role="button"], label'),
+      document.querySelectorAll<HTMLElement>('button, a[href], a[role="button"], [role="button"], label'),
     ).filter(visible);
 
     const labelOf = (el: HTMLElement) =>

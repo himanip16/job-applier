@@ -161,13 +161,16 @@ function describe(key: SettingKey) {
     origin,
     // Masked for the secrets; LLM_PROVIDER is not one, and hiding it would
     // just make the page harder to read.
-    preview: meta.secret ? maskSecret(value) : value,
+    // Not even four characters of a password.
+    preview: key === 'JOB_SITE_PASSWORD' ? (value ? '••••' : '') : meta.secret ? maskSecret(value) : value,
     set: Boolean(value),
   };
 }
 
 /** Does this key actually work? One real call, with a message worth reading. */
 async function verify(key: SettingKey): Promise<{ ok: boolean; detail: string }> {
+  // Nothing to call: it is checked by the first account wall it meets.
+  if (key === 'JOB_SITE_PASSWORD') return { ok: true, detail: 'Saved.' };
   try {
     if (key === 'FIRECRAWL_API_KEY') {
       // The cheapest real request the API offers. Two credits to find out now

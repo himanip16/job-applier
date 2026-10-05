@@ -63,8 +63,11 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
     return { applicationId: application.id, ats: adapter.id, notes: adapter.notes };
   });
 
-  app.get('/api/applications', async () => {
+  app.get('/api/applications', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
     const applications = await prisma.application.findMany({
+      where: { profileId: profile.id },
       include: { job: true, _count: { select: { pending: { where: { answeredAt: null } } } } },
       orderBy: { updatedAt: 'desc' },
       take: 100,
@@ -178,16 +181,28 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
   });
 
   async function resumeAfterAnswers(applicationId: string): Promise<{ resumed: 'elsewhere' | 'restarted' | 'waiting' }> {
-    for (let i = 0; i < 3; i++) {
-      await new Promise((r) => setTimeout(r, ANSWER_POLL_MS * 1.5));
-      const app = await prisma.application.findUnique({ where: { id: applicationId } });
-      if (app?.status !== 'NEEDS_INPUT') return { resumed: 'elsewhere' };
+    const statusOf = async () =>
+      (await prisma.application.findUnique({ where: { id: applicationId }, select: { status: true } }))?.status;
+    let status = await statusOf();
+    if (status === 'NEEDS_INPUT') {
+      // Possibly parked in another process, which picks the answers up from
+      // the database within a poll or two. Give it that long first.
+      for (let i = 0; i < 3 && status === 'NEEDS_INPUT'; i++) {
+        await new Promise((r) => setTimeout(r, ANSWER_POLL_MS * 1.5));
+        status = await statusOf();
+      }
+      if (status !== 'NEEDS_INPUT') return { resumed: 'elsewhere' };
+    } else if (!(status === 'FAILED' || status === 'NEEDS_HUMAN') || activeRuns().includes(applicationId)) {
+      // Running, finished, or cancelled. FAILED and NEEDS_HUMAN with no live
+      // run here are ended runs (tab closed, set aside, server restarted):
+      // nobody else will pick these answers up, so they go back in the queue.
+      return { resumed: 'elsewhere' };
     }
     const open = await prisma.pendingQuestion.count({ where: { applicationId, answeredAt: null } });
     if (open > 0) return { resumed: 'waiting' };
     await prisma.application.update({
       where: { id: applicationId },
-      data: { status: 'QUEUED', blockedReason: 'Restarted with your answers.' },
+      data: { status: 'QUEUED', blockedReason: 'Back in the queue with your answers.' },
     });
     enqueue(applicationId);
     return { resumed: 'restarted' };

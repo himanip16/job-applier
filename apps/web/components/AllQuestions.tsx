@@ -13,7 +13,7 @@ import {
 
 interface Group {
   applicationId: string;
-  /** Still waiting on these answers; otherwise the run has ended and they are kept for its restart. */
+  /** Still waiting on these answers; otherwise the run has ended and answering puts it back in the queue. */
   live: boolean;
   title: string;
   company: string;
@@ -29,10 +29,10 @@ interface Group {
  * and one press sends every job whose required questions are answered. Jobs
  * left incomplete stay in the list for later.
  *
- * A run parked on its questions, or set aside by auto-apply, carries on once
- * answered (the server restarts a set-aside one). A run that ended some other
- * way - its tab closed - keeps the answers for when you start it again, and
- * remembered ones go to the answer bank either way.
+ * A run parked on its questions carries on once answered. One that has
+ * already ended - set aside by auto-apply, or its tab closed - goes back in
+ * the queue with the answers, and remembered ones go to the answer bank
+ * either way.
  */
 export function AllQuestions({
   onClose,
@@ -108,9 +108,10 @@ export function AllQuestions({
     setErr(null);
     setNote(null);
     const failed: string[] = [];
+    let requeued = 0;
     await Promise.all(
       ready.map((g) =>
-        api(`/api/applications/${g.applicationId}/answers`, {
+        api<{ resumed?: 'elsewhere' | 'restarted' | 'waiting' }>(`/api/applications/${g.applicationId}/answers`, {
           method: 'POST',
           body: JSON.stringify({
             answers: g.questions.map((q) => ({
@@ -120,17 +121,18 @@ export function AllQuestions({
               remember: remember[q.id] ?? false,
             })),
           }),
-        }).catch(() => failed.push(`${g.title} — ${g.company}`)),
+        })
+          .then((r) => { if (r.resumed === 'restarted') requeued++; })
+          .catch(() => failed.push(`${g.title} — ${g.company}`)),
       ),
     );
     const sentOk = ready.filter((g) => !failed.includes(`${g.title} — ${g.company}`));
-    const resumed = sentOk.filter((g) => g.live).length;
-    const saved = sentOk.length - resumed;
+    const resumed = sentOk.length - requeued;
     const left = groups.length - ready.length;
     setNote(
       [
         resumed && `${resumed} job${resumed === 1 ? '' : 's'} carrying on with your answers.`,
-        saved && `Answers saved for ${saved} ended run${saved === 1 ? '' : 's'}; start ${saved === 1 ? 'it' : 'them'} again from Runs to use them.`,
+        requeued && `${requeued} ended run${requeued === 1 ? '' : 's'} back in the queue with your answers.`,
         left && `${left} still need${left === 1 ? 's' : ''} answers.`,
       ].filter(Boolean).join(' '),
     );
@@ -172,7 +174,7 @@ export function AllQuestions({
                 {g.title} <span className="muted">— {g.company}</span>
               </strong>
               <span className="row small" style={{ gap: '.6rem', flex: 'none' }}>
-                {!g.live && <span className="muted" title="This run has ended. Answers are kept for when you start it again.">run ended</span>}
+                {!g.live && <span className="muted" title="This run has ended. Answering puts it back in the queue.">run ended</span>}
                 {complete(g) ? (
                   <span style={{ color: 'var(--good)' }}>ready</span>
                 ) : (

@@ -11,6 +11,7 @@ import { rememberAnswer } from './answerBank.js';
 import { park, reviewKey } from './waiters.js';
 import { artifact, setStatus } from './runLog.js';
 import { markLeadApplied } from './leadSync.js';
+import { whileWaitingOnHuman } from './slots.js';
 import type { FieldPlanEntry } from './fieldPlan.js';
 
 /**
@@ -80,7 +81,10 @@ export async function finishApplication(args: {
     // is dropped and the run waits forever.
     const decisionPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
     await setStatus(applicationId, 'REVIEW', reason, { blockers, plan });
-    const decision = await unlessClosed(page, decisionPromise, 'while waiting for your review');
+    const decision = await whileWaitingOnHuman(
+      applicationId,
+      unlessClosed(page, decisionPromise, 'while waiting for your review'),
+    );
     if (!decision.approved) {
       await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
       return;
@@ -101,12 +105,25 @@ export async function finishApplication(args: {
     await adapter.submit(page);
   };
 
-  await enforceSubmitBudget(autopilot ? applicationId : null);
-  await setStatus(
-    applicationId,
-    'SUBMITTING',
-    submitControl ? `Submitting ("${submitControl.label}").` : 'Submitting.',
-  );
+  // Checking the cap and claiming a place under it happen as one step, or two
+  // parallel runs could both see 9/10 and both submit. Autopilot waits for
+  // room outside the lock, so it never holds up anyone else's submit.
+  for (;;) {
+    await enforceSubmitBudget(autopilot ? applicationId : null);
+    const claimed = await withSubmitLock(async () => {
+      if ((await recentSubmits()) >= config.maxSubmitsPerHour) {
+        if (autopilot) return false;
+        await enforceSubmitBudget(null);
+      }
+      await setStatus(
+        applicationId,
+        'SUBMITTING',
+        submitControl ? `Submitting ("${submitControl.label}").` : 'Submitting.',
+      );
+      return true;
+    });
+    if (claimed) break;
+  }
   const urlBefore = page.url();
   await pressSubmit();
   const outcome = await detectSubmissionOutcome(page, urlBefore);
@@ -135,7 +152,10 @@ export async function finishApplication(args: {
       'REVIEW',
       `The form rejected the submission: ${outcome.detail}. It is still open in the browser - fix it there and approve, or cancel.`,
     );
-    const retry = await unlessClosed(page, retryPromise, 'while waiting for your review');
+    const retry = await whileWaitingOnHuman(
+      applicationId,
+      unlessClosed(page, retryPromise, 'while waiting for your review'),
+    );
     if (!retry.approved) {
       await setStatus(applicationId, 'CANCELLED', retry.note ?? 'Cancelled after a validation error.');
       return;
@@ -182,16 +202,34 @@ async function setAside(applicationId: string, reason: string): Promise<void> {
   await bus.emitEvent(applicationId, 'STATUS', `Set aside: ${reason}`, { status: 'NEEDS_HUMAN' });
 }
 
+let submitLock: Promise<unknown> = Promise.resolve();
+
+function withSubmitLock<T>(fn: () => Promise<T>): Promise<T> {
+  const turn = submitLock.then(fn);
+  submitLock = turn.catch(() => {});
+  return turn;
+}
+
 /**
  * The hourly cap. A run you are watching fails when it is reached; an
  * autopilot run waits for room, since the whole point is to keep going.
+ *
+ * Runs mid-submit count too: with several filling at once, one can be past
+ * this check and not yet SUBMITTED when the next one arrives.
  */
+function recentSubmits(): Promise<number> {
+  return prisma.application.count({
+    where: {
+      OR: [
+        { status: 'SUBMITTED', submittedAt: { gte: new Date(Date.now() - 60 * 60 * 1000) } },
+        { status: 'SUBMITTING' },
+      ],
+    },
+  });
+}
+
 async function enforceSubmitBudget(waitingRun: string | null): Promise<void> {
-  const recentCount = () =>
-    prisma.application.count({
-      where: { status: 'SUBMITTED', submittedAt: { gte: new Date(Date.now() - 60 * 60 * 1000) } },
-    });
-  let recent = await recentCount();
+  let recent = await recentSubmits();
   if (waitingRun && recent >= config.maxSubmitsPerHour) {
     await bus.emitEvent(
       waitingRun,
@@ -200,7 +238,7 @@ async function enforceSubmitBudget(waitingRun: string | null): Promise<void> {
     );
     while (recent >= config.maxSubmitsPerHour) {
       await new Promise((r) => setTimeout(r, 60_000));
-      recent = await recentCount();
+      recent = await recentSubmits();
     }
   }
   if (recent >= config.maxSubmitsPerHour) {

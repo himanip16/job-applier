@@ -65,7 +65,7 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     key: 'contact.phone',
     prompt: 'Phone number',
     kind: 'TEXT',
-    patterns: [/^phone/i, /mobile\s*(number|phone)/i, /telephone/i, /contact number/i],
+    patterns: [/^phone(?!\s*(ext|extension|type|device))/i, /mobile\s*(number|phone)/i, /telephone(?!\s*ext)/i, /contact number/i],
   },
   {
     key: 'contact.linkedin',

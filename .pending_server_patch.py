@@ -150,6 +150,118 @@ patch('apps/server/src/browser/fill.ts', [
     ),
 ])
 
+# 6. The run list was not scoped to the signed-in account. Runs page showed
+#    another account's NEEDS_HUMAN runs, and "Answer all questions" counted
+#    their questions but got 404 opening each one, so the modal was empty.
+patch('apps/server/src/routes/applications.ts', [
+    (
+        """  app.get('/api/applications', async () => {
+    const applications = await prisma.application.findMany({
+      include:""",
+        """  app.get('/api/applications', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    const applications = await prisma.application.findMany({
+      where: { profileId: profile.id },
+      include:""",
+    ),
+])
+
+# 7. Job site account walls (Workday "Create Account" / "Sign In"): fill them
+#    with the profile email and the saved JOB_SITE_PASSWORD before asking the
+#    person. Plain DOM work in browser/accountWall.ts - no model sees the page
+#    or the password. The password lives in settings, never in profile facts,
+#    because facts are pasted into LLM prompts.
+patch('apps/server/src/lib/secrets.ts', [
+    (
+        """  LLM_PROVIDER: {
+    label: 'Model provider',""",
+        """  JOB_SITE_PASSWORD: {
+    label: 'Job site account password',
+    help: 'Used with your profile email to create or sign in to job site accounts (Workday and similar).',
+    where: '',
+    secret: true,
+  },
+  LLM_PROVIDER: {
+    label: 'Model provider',""",
+    ),
+])
+patch('apps/server/src/routes/settings.ts', [
+    (
+        """    preview: meta.secret ? maskSecret(value) : value,""",
+        """    // Not even four characters of a password.
+    preview: key === 'JOB_SITE_PASSWORD' ? (value ? '••••' : '') : meta.secret ? maskSecret(value) : value,""",
+    ),
+    (
+        """async function verify(key: SettingKey): Promise<{ ok: boolean; detail: string }> {
+  try {""",
+        """async function verify(key: SettingKey): Promise<{ ok: boolean; detail: string }> {
+  // Nothing to call: it is checked by the first account wall it meets.
+  if (key === 'JOB_SITE_PASSWORD') return { ok: true, detail: 'Saved.' };
+  try {""",
+    ),
+])
+patch('apps/server/src/engine/humanGate.ts', [
+    (
+        """import { whileWaitingOnHuman } from './slots.js';
+""",
+        """import { whileWaitingOnHuman } from './slots.js';
+import { secret } from '../lib/secrets.js';
+import { signInOrRegister } from '../browser/accountWall.js';
+""",
+    ),
+    (
+        """  blocker: Blocker,
+): Promise<boolean> {
+  // Park BEFORE announcing, for the same reason as the review gate: a client""",
+        """  blocker: Blocker,
+): Promise<boolean> {
+  if (await signInWithSavedAccount(applicationId, page, blocker)) return true;
+
+  // Park BEFORE announcing, for the same reason as the review gate: a client""",
+    ),
+    (
+        """export async function pauseForHuman(""",
+        """/**
+ * A job site's own account wall, cleared with the saved email and password
+ * before anyone is asked. No model is involved; see browser/accountWall.ts.
+ * Anything it cannot do - no password saved, a Google sign-in, a refused
+ * password - falls through to the ordinary pause.
+ */
+async function signInWithSavedAccount(
+  applicationId: string,
+  page: Page,
+  blocker: Blocker,
+): Promise<boolean> {
+  if (blocker.kind !== 'LOGIN_REQUIRED' && blocker.kind !== 'ACCOUNT_CREATION') return false;
+  const password = secret('JOB_SITE_PASSWORD');
+  if (!password) return false;
+  const app = await prisma.application.findUnique({
+    where: { id: applicationId },
+    select: { profile: { select: { email: true } } },
+  });
+  const email = app?.profile.email;
+  if (!email) return false;
+
+  await bus.emitEvent(applicationId, 'LOG', 'Account wall: using your saved email and password.');
+  const attempt = await signInOrRegister(page, { email, password }).catch((err: unknown) => ({
+    ok: false,
+    detail: `Sign-in failed: ${(err as Error).message}`,
+  }));
+  await bus.emitEvent(applicationId, 'LOG', attempt.detail);
+  if (!attempt.ok) return false;
+  // An emailed code after registering is the next wall, and the wizard's next
+  // step pauses for it; only the account wall itself has to be gone.
+  const still = (await detectBlockers(page)).some(
+    (b) => b.kind === 'LOGIN_REQUIRED' || b.kind === 'ACCOUNT_CREATION',
+  );
+  return !still;
+}
+
+export async function pauseForHuman(""",
+    ),
+])
+
 if '--check' in sys.argv:
     print('all matches found')
 else:

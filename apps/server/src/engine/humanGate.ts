@@ -8,6 +8,9 @@ import { detectBlockers, type Blocker } from '../browser/blockers.js';
 import { abandon, park, questionsKey, blockerKey } from './waiters.js';
 import { NeedsHumanError, NoFormError, describeDiagnosis } from '../browser/openForm.js';
 import { setStatus, artifact } from './runLog.js';
+import { whileWaitingOnHuman } from './slots.js';
+import { secret } from '../lib/secrets.js';
+import { signInOrRegister } from '../browser/accountWall.js';
 
 /**
  * Every point where the run needs a person.
@@ -129,13 +132,16 @@ export async function askHuman(
   const answeredElsewhere = new AbortController();
   let replies: Awaited<typeof replyPromise>;
   try {
-    replies = await unlessClosed(
-      page,
-      Promise.race([
-        replyPromise,
-        watchForAnswers(asked.map((q) => q.id), answeredElsewhere.signal),
-      ]),
-      'while waiting for your answers',
+    replies = await whileWaitingOnHuman(
+      applicationId,
+      unlessClosed(
+        page,
+        Promise.race([
+          replyPromise,
+          watchForAnswers(asked.map((q) => q.id), answeredElsewhere.signal),
+        ]),
+        'while waiting for your answers',
+      ),
     );
   } finally {
     answeredElsewhere.abort();
@@ -186,11 +192,49 @@ async function watchForAnswers(
     }
   }
 }
+/**
+ * A job site's own account wall, cleared with the saved email and password
+ * before anyone is asked. No model is involved; see browser/accountWall.ts.
+ * Anything it cannot do - no password saved, a Google sign-in, a refused
+ * password - falls through to the ordinary pause.
+ */
+async function signInWithSavedAccount(
+  applicationId: string,
+  page: Page,
+  blocker: Blocker,
+): Promise<boolean> {
+  if (blocker.kind !== 'LOGIN_REQUIRED' && blocker.kind !== 'ACCOUNT_CREATION') return false;
+  const password = secret('JOB_SITE_PASSWORD');
+  if (!password) return false;
+  const app = await prisma.application.findUnique({
+    where: { id: applicationId },
+    select: { profile: { select: { email: true } } },
+  });
+  const email = app?.profile.email;
+  if (!email) return false;
+
+  await bus.emitEvent(applicationId, 'LOG', 'Account wall: using your saved email and password.');
+  const attempt = await signInOrRegister(page, { email, password }).catch((err: unknown) => ({
+    ok: false,
+    detail: `Sign-in failed: ${(err as Error).message}`,
+  }));
+  await bus.emitEvent(applicationId, 'LOG', attempt.detail);
+  if (!attempt.ok) return false;
+  // An emailed code after registering is the next wall, and the wizard's next
+  // step pauses for it; only the account wall itself has to be gone.
+  const still = (await detectBlockers(page)).some(
+    (b) => b.kind === 'LOGIN_REQUIRED' || b.kind === 'ACCOUNT_CREATION',
+  );
+  return !still;
+}
+
 export async function pauseForHuman(
   applicationId: string,
   page: Page,
   blocker: Blocker,
 ): Promise<boolean> {
+  if (await signInWithSavedAccount(applicationId, page, blocker)) return true;
+
   // Park BEFORE announcing, for the same reason as the review gate: a client
   // watching the run can see NEEDS_HUMAN and reply within microseconds, and a
   // reply that arrives before the promise exists is dropped forever.
@@ -213,10 +257,13 @@ export async function pauseForHuman(
   // require coming back to this app to say so.
   let decision: { carryOn: boolean; note?: string };
   try {
-    decision = await unlessClosed(
-      page,
-      Promise.race([manual, watchForClearance(applicationId, page, blocker)]),
-      'while waiting for you in the browser',
+    decision = await whileWaitingOnHuman(
+      applicationId,
+      unlessClosed(
+        page,
+        Promise.race([manual, watchForClearance(applicationId, page, blocker)]),
+        'while waiting for you in the browser',
+      ),
     );
   } finally {
     abandon(key);

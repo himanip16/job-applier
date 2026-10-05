@@ -564,14 +564,19 @@ export async function verifyFilled(
       for (let i = 0; i < n; i++) labels.push(normalizeLabel(await labelTextFor(page, checked.nth(i))));
       return { ok: wants.every((w) => labels.includes(w)), actual: labels.join(', ') };
     }
-    const el = page.locator(field.selector).first();
+    let el = page.locator(field.selector).first();
+    // Workday replaces a text input with a new node on blur, and our stamp
+    // leaves with the old one. The name attribute survives the swap.
+    if (!(await el.count()) && field.name) {
+      el = page.locator(`[name="${cssEscape(field.name)}"]`).first();
+    }
     if (field.kind === 'CHECKBOX') {
       // The input's value is whatever the site set ("1", "on"); what matters is the tick.
       const want = /^(true|yes|1|on|checked)$/i.test(wants[0] ?? '');
       const checked = await el.isChecked().catch(() => false);
       return { ok: checked === want, actual: checked ? 'ticked' : 'not ticked' };
     }
-    const actual = normalizeLabel((await el.inputValue().catch(() => '')) || '');
+    const actual = normalizeLabel((await el.inputValue({ timeout: 3_000 }).catch(() => '')) || '');
     if (field.kind === 'PHONE' || wants.every((w) => /^[\d\s()+.-]{6,}$/.test(w))) {
       // Sites reformat numbers as you type: "9902583674" becomes "99025 83674".
       const digits = (v: string) => v.replace(/\D/g, '');
