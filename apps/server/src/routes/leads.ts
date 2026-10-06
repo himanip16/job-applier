@@ -243,7 +243,7 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
     return { applicationId: application.id };
   });
 
-  /** Shortlist and immediately start an application run. */
+  /** Start an application run. The card sits in Processing until it submits. */
   app.post<{ Params: { id: string } }>('/api/leads/:id/apply', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
@@ -282,7 +282,9 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
 
     await prisma.jobLead.update({
       where: { id: lead.id },
-      data: { status: 'APPLIED', applicationId: application.id, decidedAt: new Date() },
+      // Processing (Saved with a run attached), not Applied: the run has only
+      // started. syncLead moves it on when the run ends.
+      data: { status: 'SHORTLISTED', applicationId: application.id, decidedAt: new Date() },
     });
     await learnFromDecision({
       profileId: profile.id,

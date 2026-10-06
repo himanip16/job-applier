@@ -23,6 +23,7 @@ const VIEW_KEY = 'discover.view';
 const TABS: { status: string; label: string; icon: IconName }[] = [
   { status: 'NEW', label: 'For you', icon: 'sparkles' },
   { status: 'SHORTLISTED', label: 'Saved', icon: 'bookmark' },
+  { status: 'PROCESSING', label: 'Processing', icon: 'clock' },
   { status: 'APPLIED', label: 'Applied', icon: 'send' },
   { status: 'REJECTED', label: 'Dismissed', icon: 'archive' },
   { status: 'ALL', label: 'All jobs', icon: 'list' },
@@ -456,6 +457,8 @@ export default function DiscoverPage() {
                   ? 'Remove a filter above to see more.'
                   : view.status === 'SHORTLISTED'
                     ? 'Save a job to keep it here for later.'
+                    : view.status === 'PROCESSING'
+                      ? 'Jobs you hit Apply on wait here until they are submitted.'
                     : 'No jobs here yet. Find new jobs to get started.'}
             </p>
             {error ? (

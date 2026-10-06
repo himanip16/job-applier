@@ -77,7 +77,10 @@ export function recommendedRank(score: number, report: CompanyReport | undefined
 export async function listLeads(profileId: string, query: LeadListQuery) {
   // ---- the SQL-expressible part ---------------------------------------------
   const tab: Prisma.JobLeadWhereInput = { profileId };
-  if (query.status !== 'ALL') tab.status = query.status as Prisma.JobLeadWhereInput['status'];
+  // Processing is a Saved card with a run attached (see leadSync); Saved is the rest.
+  if (query.status === 'PROCESSING') Object.assign(tab, { status: 'SHORTLISTED', applicationId: { not: null } });
+  else if (query.status === 'SHORTLISTED') Object.assign(tab, { status: 'SHORTLISTED', applicationId: null });
+  else if (query.status !== 'ALL') tab.status = query.status as Prisma.JobLeadWhereInput['status'];
 
   const where: Prisma.JobLeadWhereInput = { ...tab };
   if (query.remote !== 'any') where.remote = query.remote === 'yes';
@@ -154,8 +157,9 @@ export async function listLeads(profileId: string, query: LeadListQuery) {
   // ---- counts --------------------------------------------------------------------
   // Facets count the tab as a whole, so a choice never shows zero just because
   // another filter is on.
-  const [counts, strong, inTab] = await Promise.all([
+  const [counts, processing, strong, inTab] = await Promise.all([
     prisma.jobLead.groupBy({ by: ['status'], where: { profileId }, _count: true }),
+    prisma.jobLead.count({ where: { profileId, status: 'SHORTLISTED', applicationId: { not: null } } }),
     prisma.jobLead.count({ where: { profileId, status: 'NEW', score: { gte: 70 } } }),
     prisma.jobLead.findMany({ where: tab, select: { companyName: true, location: true } }),
   ]);
@@ -183,7 +187,11 @@ export async function listLeads(profileId: string, query: LeadListQuery) {
         leetcode: rep?.links ?? [],
       };
     }),
-    counts: Object.fromEntries(counts.map((c) => [c.status, c._count])),
+    counts: {
+      ...Object.fromEntries(counts.map((c) => [c.status, c._count])),
+      SHORTLISTED: (counts.find((c) => c.status === 'SHORTLISTED')?._count ?? 0) - processing,
+      PROCESSING: processing,
+    },
     facets: {
       companies: tally(inTab.map((r) => r.companyName)),
       cities: tally(inTab.flatMap((r) => citiesIn(r.location))),

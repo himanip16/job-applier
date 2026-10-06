@@ -24,6 +24,8 @@ export interface Lead {
     missingTerms?: string[];
   } | null;
   status: string;
+  /** The run for this job. On a Saved card it means the run is still going (Processing). */
+  applicationId?: string | null;
   /** What people reported being paid at this company on LeetCode; null when nobody has. */
   pay?: { baseMedian: number | null; totalMedian: number | null; baseReports: number; totalReports: number } | null;
   /** Interview-experience posts naming the company on LeetCode in the last 90 days. */

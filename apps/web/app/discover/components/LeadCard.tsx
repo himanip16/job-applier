@@ -31,7 +31,9 @@ export function LeadCard({
   const r = lead.scoreReasons ?? {};
   const score = Math.round(lead.score);
   const tone = score >= 70 ? 'good' : score >= 45 ? 'warn' : 'bad';
-  const actionable = lead.status === 'NEW' || lead.status === 'SHORTLISTED';
+  // Saved with a run attached: the run is still going, so Apply again makes no sense.
+  const processing = lead.status === 'SHORTLISTED' && !!lead.applicationId;
+  const actionable = !processing && (lead.status === 'NEW' || lead.status === 'SHORTLISTED');
 
   return (
     <article
@@ -152,6 +154,10 @@ export function LeadCard({
               <Icon name="send" size={15} />Apply
               <Icon name="arrowRight" size={15} className="jc-arrow" />
             </button>
+          ) : processing ? (
+            <a href={`/applications/${lead.applicationId}`} target="_blank" rel="noopener" className="btn jc-btn" title="The application run for this job">
+              <Icon name="clock" size={15} />Processing
+            </a>
           ) : (
             <span className={`pill ${lead.status}`}>{lead.status}</span>
           )}

@@ -1,6 +1,7 @@
 import { prisma } from '../lib/db.js';
 import { bus } from '../lib/events.js';
 import { runApplication } from './runner.js';
+import { markLeadProcessing, syncLead } from './leadSync.js';
 import { give, tryTake, whenSlotFrees } from './slots.js';
 
 /**
@@ -24,6 +25,7 @@ whenSlotFrees(() => pump());
 export function enqueue(applicationId: string): void {
   if (active.has(applicationId) || queued.includes(applicationId)) return;
   queued.push(applicationId);
+  void markLeadProcessing(applicationId).catch(() => {});
   pump();
 }
 
@@ -44,6 +46,8 @@ function pump(): void {
       .finally(() => {
         active.delete(id);
         give(id);
+        // Submitted -> Applied, failed -> back to For you, waiting on you -> stays Processing.
+        void syncLead(id).catch(() => {});
       });
   }
 }
@@ -74,6 +78,7 @@ export async function recoverInterruptedRuns(): Promise<number> {
           : `Stopped by a server restart while it was waiting for you (${(app.blockedReason ?? 'in the browser').slice(0, 160)}). Retry it.`,
       },
     });
+    await syncLead(app.id);
   }
 
   const stuck = await prisma.application.findMany({
