@@ -148,7 +148,7 @@ export async function findJobs(
   const deps: FindJobsDeps = { ...defaultDeps, ...opts.deps };
   const maxQueries = opts.maxQueries ?? 6;
   // The whole list: the API sources answer in a second or two each.
-  const maxCompanies = opts.maxBoards ?? 100;
+  const maxCompanies = opts.maxBoards ?? Number.POSITIVE_INFINITY;
   const deepScoreTop = opts.deepScoreTop ?? 15;
 
   const report: JobSearchReport = {

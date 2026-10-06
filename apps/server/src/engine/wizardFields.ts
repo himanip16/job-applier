@@ -31,12 +31,22 @@ export async function fillApplicationFields(
 }
 
 /** Returns whether a required control could not be filled. */
-async function fillPlannedField(field: FormField, context: FillStepContext): Promise<boolean> {
+async function fillPlannedField(planned: FormField, context: FillStepContext): Promise<boolean> {
   const { applicationId, page, adapter, answers, plan, afterHumanPause } = context;
   assertOpen(page, 'while the form was being filled');
-  const answer = answers.get(field.id);
+  const answer = answers.get(planned.id);
   if (!answer || answer.value === null || answer.displayValue === '') {
-    plan.push(entry(field, answer, false));
+    plan.push(entry(planned, answer, false));
+    return false;
+  }
+  const field = await currentControl(context, planned);
+  if (!field) {
+    plan.push({ ...entry(planned, answer, false), error: 'no longer on the page' });
+    await bus.emitEvent(
+      applicationId,
+      'LOG',
+      `"${planned.label}" is no longer on the page (an earlier answer removed it), so it was left alone.`,
+    );
     return false;
   }
   const wanted = answer.value as string | string[];
@@ -67,31 +77,106 @@ async function fillPlannedField(field: FormField, context: FillStepContext): Pro
   return field.required;
 }
 
+const GENERATED_ID = /^(input|select|react-select|downshift|mui|headlessui|radix)[-_:]?[\w-]*\d+(-input)?$|^:r\w+:$/i;
+
+/**
+ * The control this field is on now, or null when the page has removed it.
+ *
+ * Handles are stamped on DOM nodes, and some forms rebuild a step around
+ * them. On Microsoft's contact page, answering "Is your legal name the same
+ * as your preferred name?" removes the two Legal Name boxes and React reuses
+ * the nodes below, stamps and all: the handle for "Legal Last Name" then sat
+ * on the country code picker, City's on a yes/no question, and every read-back
+ * after that compared against the wrong control - correct values were
+ * reported as not holding and the step stalled on them. The control's own
+ * name or id survives the shuffle, so a stamp whose node no longer carries it
+ * is moved back onto the node that does.
+ *
+ * Moved directly, not by re-reading the form: a re-read re-stamps every field
+ * (so the next one looked moved too) and opens every dropdown to list its
+ * options, and on Microsoft that cycled through the dropdowns indefinitely.
+ */
+async function currentControl(
+  { applicationId, page }: FillStepContext,
+  field: FormField,
+): Promise<FormField | null> {
+  // Generated ids ("input-15") are numbered by position and move with the
+  // re-render, so they say nothing about which question a node is.
+  if (!field.name || GENERATED_ID.test(field.name)) return field;
+  const stamped = await page
+    .locator(field.selector)
+    .first()
+    .evaluate(
+      (node) =>
+        node.getAttribute('name') ||
+        node.getAttribute('id') ||
+        node.querySelector('input')?.getAttribute('name') ||
+        '',
+      undefined,
+      { timeout: 2_000 },
+    )
+    .catch(() => null);
+  // Unknown identity is not evidence of a move; the fill path still recovers.
+  if (stamped === '' || stamped === field.name) return field;
+  const handle = /data-ja-field="([^"]+)"/.exec(field.selector)?.[1];
+  if (!handle) return field;
+  const restamped = await page
+    .evaluate(
+      ({ handle, name }) => {
+        const target = Array.from(document.querySelectorAll('[name], [id]')).find(
+          (n) => n.getAttribute('name') === name || n.id === name,
+        );
+        if (!target) return false;
+        document.querySelectorAll(`[data-ja-field="${handle}"]`).forEach((n) => n.removeAttribute('data-ja-field'));
+        target.setAttribute('data-ja-field', handle);
+        return true;
+      },
+      { handle, name: field.name },
+    )
+    .catch(() => null);
+  if (restamped) {
+    await bus.emitEvent(applicationId, 'LOG', `"${field.label}" moved when the page re-rendered; found it again.`);
+    return field;
+  }
+  // Could not look: let the fill path try. Looked and it is not there: gone.
+  return restamped === null || stamped === null ? field : null;
+}
+
 async function recordLockedField(
-  { applicationId, plan }: FillStepContext,
+  { applicationId, page, plan }: FillStepContext,
   field: FormField,
   answer: ResolvedAnswer,
   state: ControlState,
 ): Promise<boolean> {
   const wanted = answer.value as string | string[];
-  const correct = alreadyHolds(state.current, wanted);
+  let shown = state.current;
+  let correct = alreadyHolds(shown, wanted);
+  // A locked dropdown's input is empty; its choice is drawn beside it.
+  // Microsoft shows the screening answers from the job page this way, and
+  // reading only the input called every one of them wrong.
+  if (!correct && field.widget !== 'native') {
+    const check = await verifyFilled(page, field, wanted);
+    correct = check.ok;
+    shown = check.actual || shown;
+  }
   plan.push({
     ...entry(field, answer, correct),
-    verified: state.current,
+    verified: shown,
     error: correct
       ? undefined
-      : `The site locked this field and it holds ${
-          state.current ? `"${truncate(state.current)}"` : 'nothing'
-        }.`,
+      : `The site locked this field and it holds ${shown ? `"${truncate(shown)}"` : 'nothing'}.`,
   });
   await bus.emitEvent(
     applicationId,
     correct ? 'LOG' : 'WARNING',
     correct
       ? `"${field.label}" is locked by the site and already holds the right value.`
-      : `"${field.label}" is locked by the site and cannot be changed from here.`,
+      : `"${field.label}" is locked by the site and cannot be changed from here` +
+          `${shown ? ` (it shows "${truncate(shown)}")` : ''}; it is flagged for review.`,
   );
-  return !correct && field.required;
+  // Never a reason to pause: you cannot change a locked field in the browser
+  // either, so waiting on it only stalled the step. Review shows the flag.
+  return false;
 }
 
 /** Keep nonblank browser edits after a human pause, even when they differ. */
@@ -185,7 +270,7 @@ async function refindField(
     // phone block labels both the country picker and the number input "Phone",
     // so a lookup by label refound the wrong one, left the number empty, and
     // the submission was rejected for a field that looked filled.
-    if (wanted.name) {
+    if (wanted.name && !GENERATED_ID.test(wanted.name)) {
       const byName = fields.find((f) => f.name === wanted.name);
       if (byName) return byName;
     }

@@ -208,6 +208,11 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
     where: { id: applicationId },
     data: { fieldPlan: state.plan as unknown as Prisma.InputJsonValue },
   });
+  if (adapter.beforeAdvance) {
+    await adapter.beforeAdvance(page);
+    // It changed the page itself; "did Next move us" is measured from here.
+    return advanceStep(context, state, await pageSignature(page));
+  }
   return advanceStep(context, state, signature);
 }
 
@@ -394,7 +399,17 @@ async function pauseForRequiredFields(
   state: WalkState,
   unfilledRequired: string[],
 ): Promise<StepOutcome> {
+  // Path and heading only: the field list changes under your hands as you
+  // answer (Microsoft drops the Legal Name boxes on "same name? Yes").
+  const where = (sig: string) => sig.split('#').slice(0, 2).join('#');
+  const here = where(await pageSignature(page));
+  let movedOn = false;
   const carryOn = await pauseForHuman(applicationId, page, {
+    clearedWhen: async () => {
+      const now = await pageSignature(page).catch(() => '');
+      movedOn = Boolean(now) && where(now) !== here;
+      return movedOn;
+    },
     kind: 'UNKNOWN',
     detail:
       `Could not fill ${unfilledRequired.map((l) => `"${l}"`).join(', ')}, which ` +
@@ -404,6 +419,8 @@ async function pauseForRequiredFields(
     autoClears: false,
   });
   if (!carryOn) return 'ABANDONED';
+  // You pressed Next yourself: this is a new step, read it as one.
+  if (movedOn) return 'CONTINUE';
   state.afterHumanPause = true;
   state.step--;
   return 'CONTINUE';

@@ -44,7 +44,9 @@ export function NeedsYou() {
   // rather than waiting for you to notice the bar. Remembered per tab session,
   // so moving between pages does not reopen it for the same questions.
   useEffect(() => {
-    if (onRunPage) return;
+    // Before the first poll lands needsInput reads 0. Recording that as seen
+    // would make every page load look like new questions arrived.
+    if (!data || onRunPage) return;
     let seen = 0;
     try {
       seen = Number(window.sessionStorage.getItem(SEEN_KEY) ?? 0);
@@ -60,7 +62,7 @@ export function NeedsYou() {
     } catch {
       // As above.
     }
-  }, [needsInput, onRunPage]);
+  }, [data, needsInput, onRunPage]);
 
   // Notify on a *new* item, not on every poll. Keyed by id so a second run
   // needing you still gets through while the first is unresolved.

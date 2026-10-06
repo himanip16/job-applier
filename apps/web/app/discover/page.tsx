@@ -197,7 +197,9 @@ export default function DiscoverPage() {
             ? `Checked ${r.checked} jobs — all still fit${worldwide ? '' : ` ${name}`}.`
             : `Checked ${r.checked} jobs and removed ${r.removed}: ${b.wrongDomain} not engineering roles, ` +
                 (worldwide ? '' : `${b.otherCountry} outside ${name}, `) +
-                `${b.closed} closed, ${b.tooOld} older than 3 months, ${b.tooSenior} too senior.` +
+                `${b.closed} closed, ${b.tooOld} older than 3 months, ${b.tooSenior} too senior` +
+                (b.tooJunior ? `, ${b.tooJunior} internship or new-grad` : '') +
+                '.' +
                 (r.unreachable.length ? ` Could not reach ${r.unreachable.length} board(s), so their jobs were left alone.` : ''),
         );
       }

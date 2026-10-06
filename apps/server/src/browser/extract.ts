@@ -139,7 +139,13 @@ const EXTRACTOR = () => {
    */
   const labelFor = (el: HTMLElement, grouped = false): string => {
     const aria = el.getAttribute('aria-label');
-    if (aria?.trim()) {
+    // Rippling labels every dropdown "Search", "Select..." or "textbox" and
+    // names the actual question ("Gender", "Location") via aria-labelledby.
+    // Read aria-label first and those questions reached you as "Search".
+    const genericAria =
+      /^(search|select\W*|choose\W*|textbox|combobox|input)$/i.test(aria?.trim() ?? '') &&
+      el.hasAttribute('aria-labelledby');
+    if (aria?.trim() && !genericAria) {
       // Workday's date boxes are labelled just "Month" / "Year"; the fieldset
       // legend says which date ("From", "To (Actual or Expected)").
       if (/^(day|month|year)$/i.test(aria.trim())) {
@@ -187,6 +193,30 @@ const EXTRACTOR = () => {
       }
     }
     return el.getAttribute('placeholder')?.trim() ?? '';
+  };
+
+  /**
+   * The caption for a checkbox that stands alone.
+   *
+   * Microsoft's acknowledgments ("By checking this you agree to the Microsoft
+   * Data Privacy Notice", the candidate code of conduct, the qualifications
+   * disclaimer) are each one checkbox with aria-label "Yes", inside a group
+   * that points at the real question with aria-labelledby. Read on its own
+   * label, every one of them came out as a required question called "Yes".
+   */
+  const BARE_ANSWER = /^(yes|i agree|agree|i accept|accept|i acknowledge|acknowledge|i confirm|confirm|ok)\.?$/i;
+  const loneCheckboxLabel = (el: HTMLElement): string => {
+    const own = labelFor(el);
+    if (own && !BARE_ANSWER.test(own)) return own;
+    const group = el.parentElement?.closest<HTMLElement>('[aria-labelledby]');
+    const named = group
+      ? (group.getAttribute('aria-labelledby') ?? '')
+          .split(/\s+/)
+          .map((id) => textOf(byId(el, id)))
+          .filter(Boolean)
+          .join(' ')
+      : '';
+    return named || textOf(el.closest('fieldset')?.querySelector('legend') ?? null) || own;
   };
 
   const helpFor = (el: HTMLElement): string => {
@@ -444,7 +474,7 @@ const EXTRACTOR = () => {
             tag, type,
             kind: 'CHECKBOX',
             widget: 'native',
-            label: labelFor(el),
+            label: loneCheckboxLabel(el),
             helpText: helpFor(el),
             required: isRequired(el),
             options: [],

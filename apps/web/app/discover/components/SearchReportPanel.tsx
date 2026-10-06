@@ -29,6 +29,7 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
     { label: 'not in plan', count: offPlan, examples: report.droppedExamples?.offPlan ?? [] },
     { label: 'not engineering', count: wrongDomain, examples: report.droppedExamples?.wrongDomain ?? [] },
     { label: 'above the experience or seniority limit', count: report.skippedTooSenior ?? 0, examples: report.droppedExamples?.tooSenior ?? [] },
+    { label: 'internship or new-grad', count: report.skippedTooJunior ?? 0, examples: report.droppedExamples?.tooJunior ?? [] },
     { label: 'outside the chosen country', count: report.skippedOtherCountry ?? 0, examples: report.droppedExamples?.otherCountry ?? [] },
     { label: 'older than 90 days', count: report.skippedTooOld ?? 0, examples: report.droppedExamples?.tooOld ?? [] },
   ].filter((d) => d.count > 0);

@@ -30,6 +30,12 @@ export interface AtsAdapter {
   extractForm(page: Page): Promise<FormField[]>;
   /** Point at the resume and (optional) cover-letter file inputs. */
   fileInputs(fields: FormField[]): { resume?: FormField; coverLetter?: FormField };
+  /**
+   * Run after a step is filled, before its Next or Submit is looked for. For
+   * forms that need something pressed inside the step first, such as
+   * SmartRecruiters' per-entry Save. Optional.
+   */
+  beforeAdvance?(page: Page): Promise<void>;
   /** Click the real submit control. */
   submit(page: Page): Promise<void>;
   /** Human-readable notes shown in the UI: known quirks, captcha, etc. */

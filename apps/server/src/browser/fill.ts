@@ -350,10 +350,28 @@ async function fillReactSelect(page: Page, field: FormField, value: string | str
   const wants = Array.isArray(value) ? value : [value];
   const input = page.locator(field.selector).first();
   await input.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
+  // Already showing the answer - a rerun of a page you or an earlier attempt
+  // filled. Re-typing it gains nothing, and on Microsoft's dropdowns clearing
+  // and retyping "Yes" found no option and failed a correctly answered field.
+  if ((await verifyFilled(page, field, value)).ok) return;
   await input.scrollIntoViewIfNeeded().catch(() => {});
+
+  // Rippling's EEO dropdowns are a <div role="combobox">: nothing to type
+  // into, and a space in "Choose not to disclose" would toggle the menu.
+  const typeable = await input
+    .evaluate((e) => e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement)
+    .catch(() => true);
 
   for (const want of wants) {
     await input.click({ timeout: FIELD_TIMEOUT_MS });
+    if (!typeable) {
+      if ((await input.getAttribute('aria-expanded')) !== 'true') await input.press('ArrowDown');
+      const option = await waitForOption(page, field, want);
+      if (!option) throw new FillError(`Could not find option "${want}" for ${field.label}`, field);
+      await option.click();
+      await page.waitForTimeout(120);
+      continue;
+    }
     // Typing narrows a long list (country pickers run to 240 entries) and also
     // opens the menu when a bare click did not.
     await input.fill('').catch(() => {});
@@ -375,6 +393,25 @@ async function fillReactSelect(page: Page, field: FormField, value: string | str
   }
   // Close the menu so it cannot swallow the next click.
   await page.keyboard.press('Escape').catch(() => {});
+}
+
+/**
+ * An option's words. SmartRecruiters' `spl-*` dropdown items are a
+ * role="option" div inside a shadow root whose text arrives through a
+ * <slot>, so their innerText is empty and the words are the slot's.
+ */
+async function optionText(opt: Locator): Promise<string> {
+  return opt
+    .evaluate((el) => {
+      const own = (el as HTMLElement).innerText?.trim();
+      if (own) return own;
+      return Array.from(el.querySelectorAll('slot'))
+        .flatMap((s) => s.assignedNodes({ flatten: true }))
+        .map((n) => (n as HTMLElement).innerText ?? n.textContent ?? '')
+        .join(' ')
+        .trim();
+    })
+    .catch(() => '');
 }
 
 async function waitForOption(page: Page, field: FormField, want: string): Promise<Locator | null> {
@@ -402,7 +439,7 @@ async function waitForOption(page: Page, field: FormField, want: string): Promis
   
   for (let i = 0; i < count; i++) {
     const opt = options.nth(i);
-    const text = normalizeLabel((await opt.innerText().catch(() => '')) ?? '');
+    const text = normalizeLabel((await optionText(opt)) ?? '');
     if (text) {
       optionData.push({ label: text, locator: opt });
     }
@@ -726,7 +763,15 @@ export async function verifyFilled(
         .locator(field.selector)
         .first()
         .locator('xpath=ancestor::*[contains(@class,"select-shell") or contains(@class,"select__control")][1]');
-      const text = normalizeLabel(await shell.first().innerText().catch(() => ''));
+      // Counted first: reading a shell that is not there waits out the 20s default.
+      let text = (await shell.count())
+        ? normalizeLabel(await shell.first().innerText().catch(() => ''))
+        : '';
+      // Microsoft's (Eightfold) dropdowns have neither class: the shell was
+      // never found, every chosen value read as "", and correct answers were
+      // reported as not holding. Fall back to the nearest box around this one
+      // control that shows any text.
+      if (!text) text = normalizeLabel(await shownAroundControl(page, field));
       // A phone country picker shows "+91" for "India +91" once chosen.
       const ok = wants.every((w) => text.includes(w) || showsChosenOption(field, w, text));
       return { ok, actual: text };
@@ -785,6 +830,25 @@ export async function verifyFilled(
   } catch (err) {
     return { ok: false, actual: `verification failed: ${(err as Error).message}` };
   }
+}
+
+/** The text shown in the smallest box around one control, without the next question's. */
+async function shownAroundControl(page: Page, field: FormField): Promise<string> {
+  return page
+    .locator(field.selector)
+    .first()
+    .evaluate((input) => {
+      const own = (input as HTMLInputElement).value?.trim();
+      let node = input.parentElement;
+      for (let depth = 0; node && depth < 5; depth++, node = node.parentElement) {
+        // Stop before the box grows to take in another question.
+        if (node.querySelectorAll('input:not([type="hidden"]), select, textarea').length > 1) break;
+        const text = (node as HTMLElement).innerText?.replace(/\s+/g, ' ').trim();
+        if (text) return text;
+      }
+      return own ?? '';
+    })
+    .catch(() => '');
 }
 
 function asOne(value: string | string[], field: FormField): string {

@@ -18,6 +18,11 @@ export interface Blocker {
    */
   autoClears?: boolean;
   /**
+   * For a wall the run raised itself: how to tell, by looking at the page,
+   * that you dealt with it anyway. Polled in place of detectBlockers.
+   */
+  clearedWhen?: () => Promise<boolean>;
+  /**
    * CAPTCHA only: a challenge is showing now. Without it the captcha is merely
    * armed - invisible reCAPTCHA sits on every Greenhouse form and usually
    * passes on submit without anyone seeing it.

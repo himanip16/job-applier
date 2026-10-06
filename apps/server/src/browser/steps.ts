@@ -275,10 +275,24 @@ export async function findAdvanceControl(page: Page): Promise<AdvanceControl | n
       const visible = (el: HTMLElement) =>
         typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null;
 
-      const candidates = Array.from(
-        document.querySelectorAll<HTMLElement>(
-          'button, input[type="submit"], input[type="button"], a[role="button"], [role="button"]',
-        ),
+      // Into open shadow roots too: SmartRecruiters' "Next" is the <button>
+      // inside an `spl-button`, invisible to a light-DOM query, so the walk
+      // took its form for a single page and tried to submit step one.
+      const deepAll = (sel: string): HTMLElement[] => {
+        const out: HTMLElement[] = [];
+        const visit = (node: ParentNode) => {
+          for (const el of Array.from(node.children)) {
+            if (el.matches(sel)) out.push(el as HTMLElement);
+            if (el.shadowRoot) visit(el.shadowRoot);
+            visit(el);
+          }
+        };
+        visit(document);
+        return out;
+      };
+
+      const candidates = deepAll(
+        'button, input[type="submit"], input[type="button"], a[role="button"], [role="button"]',
       ).filter((el) => {
         if (!visible(el)) return false;
         if ((el as HTMLButtonElement).disabled) return false;
@@ -286,7 +300,7 @@ export async function findAdvanceControl(page: Page): Promise<AdvanceControl | n
         return true;
       });
 
-      const labelOf = (el: HTMLElement) =>
+      const ownLabel = (el: Element) =>
         (
           (el as HTMLInputElement).value ||
           el.getAttribute('aria-label') ||
@@ -295,6 +309,13 @@ export async function findAdvanceControl(page: Page): Promise<AdvanceControl | n
         )
           .replace(/\s+/g, ' ')
           .trim();
+      // A button inside a web component gets its text through a <slot>, so
+      // its own textContent is empty: the words are on the shadow host.
+      const labelOf = (el: HTMLElement) => {
+        const own = ownLabel(el);
+        const host = (el.getRootNode() as ShadowRoot).host;
+        return own || (host ? ownLabel(host) : '');
+      };
 
       // A stable way to point at the element afterwards. Marking it beats
       // synthesising a selector that may not be unique.
@@ -303,9 +324,7 @@ export async function findAdvanceControl(page: Page): Promise<AdvanceControl | n
         return `[data-ja-advance="${token}"]`;
       };
 
-      document
-        .querySelectorAll('[data-ja-advance]')
-        .forEach((el) => el.removeAttribute('data-ja-advance'));
+      deepAll('[data-ja-advance]').forEach((el) => el.removeAttribute('data-ja-advance'));
 
       let submit: { selector: string; label: string } | null = null;
       let next: { selector: string; label: string } | null = null;

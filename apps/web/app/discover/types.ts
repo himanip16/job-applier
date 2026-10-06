@@ -75,6 +75,8 @@ export interface SearchReport {
   newLeads: number;
   skippedAlreadySeen: number;
   skippedTooSenior?: number;
+  /** Internships, new-grad and campus hiring. */
+  skippedTooJunior?: number;
   skippedTooOld?: number;
   skippedOtherCountry?: number;
   /** Titles that matched none of the planned roles. */
@@ -82,7 +84,7 @@ export interface SearchReport {
   /** Sales, recruiting, legal and the like. */
   skippedWrongDomain?: number;
   /** A few of the titles behind each count, so an over-strict filter is visible. */
-  droppedExamples?: { offPlan: string[]; wrongDomain: string[]; tooOld?: string[]; tooSenior?: string[]; otherCountry?: string[] };
+  droppedExamples?: { offPlan: string[]; wrongDomain: string[]; tooOld?: string[]; tooSenior?: string[]; tooJunior?: string[]; otherCountry?: string[] };
   /** Kept postings that did not say where they are. */
   keptUnknownLocation?: number;
   /** Listed companies with no careers source set up, so not read. */

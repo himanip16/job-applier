@@ -338,9 +338,14 @@ async function nudge(applicationId: string, page: Page, blocker: Blocker): Promi
   await bus.emitEvent(
     applicationId,
     'NEEDS_YOU',
-    blocker.humanCanClear
-      ? 'Waiting for you in the browser window. It carries on by itself once the page is past this.'
-      : 'Waiting for you.',
+    !blocker.humanCanClear
+      ? 'Waiting for you.'
+      : blocker.autoClears === false && !blocker.clearedWhen
+        ? 'Waiting for you in the browser window. Press Continue here once it is dealt with.'
+        : blocker.clearedWhen
+          ? 'Waiting for you in the browser window. Fill those in, then press Continue here - or the ' +
+            "site's own Next button, and it picks up on the next step."
+          : 'Waiting for you in the browser window. It carries on by itself once the page is past this.',
     { kind: blocker.kind },
   );
 }
@@ -368,12 +373,19 @@ function watchForClearance(
     // so it always read as cleared and the run looped: fail every dropdown,
     // pause, "looks dealt with" four seconds later, fail them all again. Only
     // walls the page can show clear themselves; the rest wait for your click.
-    if (blocker.autoClears === false) return;
+    //
+    // A wall that brings its own test is the exception: "could not fill these
+    // fields" is dealt with once you press the site's own Next and the step
+    // changes, and waiting for a second click in this app after that left
+    // finished pages sitting there.
+    if (blocker.autoClears === false && !blocker.clearedWhen) return;
 
     const tick = async () => {
       if (page.isClosed()) return;
       try {
-        const stillThere = (await detectBlockers(page)).some((b) => b.kind === blocker.kind);
+        const stillThere = blocker.clearedWhen
+          ? !(await blocker.clearedWhen())
+          : (await detectBlockers(page)).some((b) => b.kind === blocker.kind);
         clearReads = stillThere ? 0 : clearReads + 1;
         if (clearReads >= 2) {
           if (!announced) {
