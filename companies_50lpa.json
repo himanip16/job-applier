@@ -83,8 +83,8 @@
     "company": "D. E. Shaw India",
     "domain": "deshawindia.com",
     "job_links": [],
-    "source": "careers-page",
-    "handle": "https://www.deshawindia.com/careers",
+    "source": "deshaw",
+    "handle": "www.deshawindia.com",
     "tier": "quant",
     "sde2_ctc_lpa": "45-90",
     "india_locations": "Hyderabad, Gurgaon, Bangalore"
@@ -113,8 +113,8 @@
     "company": "Meta",
     "domain": "meta.com",
     "job_links": [],
-    "source": "careers-page",
-    "handle": "https://www.metacareers.com/jobs",
+    "source": "meta",
+    "handle": "metacareers.com",
     "tier": "bigtech",
     "sde2_ctc_lpa": "80-130",
     "india_locations": "Bangalore, Gurgaon"
@@ -543,8 +543,8 @@
     "company": "Postman",
     "domain": "postman.com",
     "job_links": [],
-    "source": "careers-page",
-    "handle": "https://www.postman.com/company/careers/open-positions/",
+    "source": "workday",
+    "handle": "postman.wd108/careers",
     "tier": "infra-saas",
     "sde2_ctc_lpa": "50-80",
     "india_locations": "Bangalore, Hyderabad"
@@ -863,8 +863,8 @@
     "company": "Nomura",
     "domain": "nomura.com",
     "job_links": [],
-    "source": "careers-page",
-    "handle": "https://careers.nomura.com/Nomura/go/Career-Opportunities-India/9050900/",
+    "source": "successfactors",
+    "handle": "careers.nomura.com",
     "tier": "finance-gcc",
     "sde2_ctc_lpa": "40-65",
     "india_locations": "Mumbai (Powai)"
@@ -883,8 +883,8 @@
     "company": "Goldman Sachs",
     "domain": "goldmansachs.com",
     "job_links": [],
-    "source": "careers-page",
-    "handle": "https://higher.gs.com/results",
+    "source": "goldman-sachs",
+    "handle": "higher.gs.com",
     "tier": "finance-gcc",
     "sde2_ctc_lpa": "45-70",
     "india_locations": "Bangalore, Hyderabad"
@@ -2986,6 +2986,36 @@
     "source": "lever",
     "handle": "fampay",
     "tier": "india-product",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Mujin",
+    "domain": "mujin.co.jp",
+    "job_links": [],
+    "source": "lever",
+    "handle": "mujininc",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Monzo",
+    "domain": "monzo.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "monzo",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Wayve",
+    "domain": "wayve.ai",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "wayve",
+    "tier": "shortlist",
     "sde2_ctc_lpa": "",
     "india_locations": ""
   }

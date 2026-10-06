@@ -34,6 +34,15 @@ const AUTO_APPLY_MIN_MATCH = 70;
 
 const EMPTY_FACETS: LeadPage['facets'] = { companies: [], cities: [], tiers: [] };
 
+interface SearchProgress {
+  phase: 'reading' | 'scoring' | 'done';
+  startedAt: string;
+  companiesTotal: number;
+  companiesDone: number;
+  reading: string[];
+  newLeads: number;
+}
+
 export default function DiscoverPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
@@ -122,6 +131,49 @@ export default function DiscoverPage() {
       setLoading(false);
     }
   }, [view, page]);
+
+  /** The list re-read without the loading spinner, for jobs arriving while a search runs. */
+  const refresh = useCallback(async () => {
+    const l = await api<LeadPage>(`/api/leads?${queryString(view, page)}`);
+    setLeads(l.leads);
+    setCounts(l.counts);
+    setFacets(l.facets ?? EMPTY_FACETS);
+    setPageInfo({ total: l.total, pages: l.pages, maxRescoreBatch: l.maxRescoreBatch });
+  }, [view, page]);
+
+  // A search saves each company's jobs as soon as that company answers. While
+  // one runs, ask how far it has got and pull in new jobs as they land, rather
+  // than showing nothing until every company has been read.
+  const [progress, setProgress] = useState<SearchProgress | null>(null);
+  useEffect(() => {
+    if (busy !== 'find') {
+      setProgress(null);
+      return;
+    }
+    // The server keeps the last finished search too; only this one counts.
+    const since = Date.now() - 5000;
+    let shown = 0;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const { progress: p } = await api<{ progress: SearchProgress | null }>('/api/discovery/progress');
+        if (stopped || !p || new Date(p.startedAt).getTime() < since) return;
+        setProgress(p);
+        if (p.newLeads > shown) {
+          shown = p.newLeads;
+          await refresh();
+        }
+      } catch {
+        // A missed tick is caught up by the next one, and the search's own result follows.
+      }
+    };
+    void tick();
+    const timer = setInterval(tick, 2500);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [busy, refresh]);
 
   /** Any change to what is being shown starts again at page one. */
   function change(patch: Partial<View>) {
@@ -216,19 +268,26 @@ export default function DiscoverPage() {
   async function decide(lead: Lead, action: 'apply' | 'shortlist' | 'applied') {
     setBusy(lead.id);
     setLeadErrors(({ [lead.id]: _, ...rest }) => rest);
+    // Open the tab now, inside the click, so the popup blocker allows it;
+    // it is pointed at the application once the server has made one.
+    const tab = action === 'apply' ? window.open('about:blank', '_blank') : null;
     try {
       if (action === 'apply') {
         const r = await api<{ applicationId: string }>(`/api/leads/${lead.id}/apply`, {
           method: 'POST',
           body: JSON.stringify({ writeCoverLetter: prefs.writeCoverLetter, autoTailorResume: prefs.tailorResume }),
         });
-        window.location.href = `/applications/${r.applicationId}`;
+        const href = `/applications/${r.applicationId}`;
+        if (tab) tab.location.href = href;
+        else window.open(href, '_blank');
+        await load();
         return;
       }
       await api(`/api/leads/${lead.id}/${action === 'applied' ? 'applied' : 'shortlist'}`, { method: 'POST' });
       if (action === 'applied') setFlash(`Marked "${lead.title}" as applied. It is in the tracker now, and out of the queue.`);
       await load();
     } catch (e) {
+      tab?.close();
       setLeadErrors((prev) => ({ ...prev, [lead.id]: (e as Error).message }));
     } finally {
       setBusy(null);
@@ -377,7 +436,13 @@ export default function DiscoverPage() {
           <div className={styles.actions}>
             <button className="primary" disabled={busy !== null} onClick={() => setAsking('find')}>
               <Icon name="sparkles" className={busy === 'find' ? 'spin' : undefined} />
-              {busy === 'find' ? 'Searching…' : 'Find new jobs'}
+              {busy === 'find'
+                ? progress?.phase === 'reading'
+                  ? `Searching… ${progress.companiesDone}/${progress.companiesTotal}`
+                  : progress?.phase === 'scoring'
+                    ? 'Ranking…'
+                    : 'Searching…'
+                : 'Find new jobs'}
             </button>
             <button
               disabled={busy !== null || applying !== null}
@@ -407,6 +472,14 @@ export default function DiscoverPage() {
           </div>
         </div>
 
+        {busy === 'find' && progress && (
+          <div className="notice" role="status" aria-live="polite" style={{ marginTop: '.9rem' }}>
+            {progress.phase === 'reading'
+              ? `Read ${progress.companiesDone} of ${progress.companiesTotal} companies · ${progress.newLeads} new job${progress.newLeads === 1 ? '' : 's'} added so far` +
+                (progress.reading.length ? ` · now reading ${progress.reading.slice(0, 3).join(', ')}` : '')
+              : `All ${progress.companiesTotal} companies read · ${progress.newLeads} new job${progress.newLeads === 1 ? '' : 's'} added · ranking the best matches`}
+          </div>
+        )}
         {flash && <div className="notice good" style={{ marginTop: '.9rem' }}>{flash}</div>}
         {error && <div className="notice bad" style={{ marginTop: '.9rem' }}>{error}</div>}
         {report && <SearchReportPanel report={report} />}

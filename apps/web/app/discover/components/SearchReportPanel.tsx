@@ -22,6 +22,7 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
   const failed = report.boards.filter((b) => b.error).length;
   const partial = report.boards.filter((b) => !b.error && b.warnings?.length).length;
   const noSource = report.noSource ?? [];
+  const recentlyCrawled = report.recentlyCrawled ?? [];
   const unknownLocation = report.keptUnknownLocation ?? 0;
   const search = report.openSearch;
   const fromSearch = report.boards.filter((b) => b.via === 'search').length;
@@ -52,6 +53,7 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
           {fetched} postings fetched · {report.jobsSeen} passed filters ·{' '}
           {report.skippedAlreadySeen} already seen · {report.deepScored} assessed by the model
           {noSource.length > 0 && ` · ${noSource.length} with no careers source set up`}
+          {recentlyCrawled.length > 0 && ` · ${recentlyCrawled.length} skipped, read in the last 4 hours`}
           {unknownLocation > 0 && ` · ${unknownLocation} kept with location unknown`}
           {report.companiesRegistered > 0 &&
             ` · ${report.companiesRegistered} new board${
@@ -143,6 +145,21 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
           </summary>
           <p className="small muted" style={{ margin: '.4rem 0 0' }}>
             {noSource.join(', ')}.
+          </p>
+        </details>
+      )}
+
+      {/* Read in the last 4 hours; their postings are already in the queue from that read. */}
+      {recentlyCrawled.length > 0 && (
+        <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
+          <summary className="small">
+            {recentlyCrawled.length} compan{recentlyCrawled.length === 1 ? 'y' : 'ies'} skipped, read in the last 4 hours
+          </summary>
+          <p className="small muted" style={{ margin: '.4rem 0 0' }}>
+            {recentlyCrawled
+              .map((r) => `${r.company} (${new Date(r.crawledAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`)
+              .join(', ')}
+            .
           </p>
         </details>
       )}

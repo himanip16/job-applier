@@ -1,7 +1,7 @@
 import { getText } from '../http.js';
 import { looksRemote, stripHtml } from '../text.js';
 import type { DiscoveredJob, Source } from '../types.js';
-import { hydrate, searchPaged, uniqueBy } from './shared.js';
+import { hydrate, queryOverlap, searchPaged, uniqueBy } from './shared.js';
 
 interface Row {
   path: string;
@@ -25,7 +25,9 @@ export const successFactorsSource: Source = {
 
   async fetchJobs(handle, hints) {
     const origin = `https://${handle.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}`;
-    const pageSize = 25;
+    // Sites set their own page size (Nomura's is 100). One page that large
+    // already exceeds what a run reads, and a smaller one ends paging early.
+    const pageSize = 100;
     const rows = await searchPaged<Row>(hints, pageSize, async (query, offset) => {
       const params = new URLSearchParams({ q: query, startrow: String(offset) });
       if (hints?.country) params.set('locationsearch', hints.country.name);
@@ -40,11 +42,12 @@ export const successFactorsSource: Source = {
         }];
       });
       const total = html.match(/Results <b>[^<]*<\/b> of <b>(\d+)<\/b>/)?.[1];
-      // The site's page size is its own setting; page by what it actually sent.
       return { items, total: total ? Number(total) : undefined };
     });
 
-    return hydrate(uniqueBy(rows, (r) => r.path), async (r): Promise<DiscoveredJob> => {
+    // Only so many detail pages are read: the closest titles first.
+    const ranked = uniqueBy(rows, (r) => r.path).sort((a, b) => queryOverlap(b.title, hints) - queryOverlap(a.title, hints));
+    return hydrate(ranked, async (r): Promise<DiscoveredJob> => {
       const url = new URL(r.path, origin).toString();
       const html = await getText(url);
       const description = html.match(/itemprop="description"[^>]*>([\s\S]*?)<\/span>\s*<\/div>/)?.[1] ?? html.match(/<span class="jobdescription">([\s\S]*?)<\/span>/)?.[1] ?? '';

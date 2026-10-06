@@ -1,12 +1,20 @@
 import { getJson, postJson } from '../http.js';
 import { remoteFromLabel, stripHtml } from '../text.js';
+import type { Country } from '@ja/shared';
 import type { DiscoveredJob, Source } from '../types.js';
-import { hydrate, searchPaged, toDate, uniqueBy } from './shared.js';
+import { hydrate, mentionsCountry, searchPaged, toDate, uniqueBy } from './shared.js';
 
 interface Listing {
   title: string;
   externalPath: string;
   locationsText?: string;
+}
+
+interface Facet {
+  facetParameter?: string;
+  descriptor?: string;
+  id?: string;
+  values?: Facet[];
 }
 
 interface Detail {
@@ -39,12 +47,18 @@ export const workdaySource: Source = {
     const origin = `https://${tenant}.${wd}.myworkdayjobs.com`;
     const api = `${origin}/wday/cxs/${tenant}/${site}`;
 
+    // Filter by the board's own location facet when it has one. Typing the
+    // country into the search box instead only works on some tenants: it is
+    // ANDed with the role title, and Postman's board answers "Software
+    // Engineer India" with nothing while listing several in Bangalore.
+    const appliedFacets = hints?.country
+      ? countryFacet((await postJson<{ facets?: Facet[] }>(`${api}/jobs`, { appliedFacets: {}, limit: 1, offset: 0, searchText: '' })).facets ?? [], hints.country)
+      : undefined;
+
     const listings = await searchPaged<Listing>(hints, 20, async (query, offset) => {
-      // Full-text search covers location too, so naming the country narrows a
-      // worldwide board without needing Workday's per-tenant facet ids.
-      const searchText = [query, hints?.country?.name].filter(Boolean).join(' ');
+      const searchText = appliedFacets ? query : [query, hints?.country?.name].filter(Boolean).join(' ');
       const page = await postJson<{ jobPostings?: Listing[]; total?: number }>(`${api}/jobs`, {
-        appliedFacets: {},
+        appliedFacets: appliedFacets ?? {},
         limit: 20,
         offset,
         searchText,
@@ -69,3 +83,29 @@ export const workdaySource: Source = {
     }, hints);
   },
 };
+
+/**
+ * The facet that narrows a board to one country, or undefined if it has none.
+ *
+ * Tenants name their location facets differently (`locationCountry`,
+ * `locationHierarchy1`, a custom field, or only per-city `locations`). A value
+ * that is exactly the country is used when there is one; otherwise every city
+ * value in that country from the location facet that has the most of them.
+ */
+export function countryFacet(facets: Facet[], country: Country): Record<string, string[]> | undefined {
+  const groups = new Map<string, Facet[]>();
+  const visit = (list: Facet[], param?: string) => {
+    for (const f of list) {
+      const key = f.facetParameter ?? param;
+      if (f.values) visit(f.values, key);
+      else if (key && f.id && f.descriptor && /location|country/i.test(key) && mentionsCountry(f.descriptor, country)) {
+        groups.set(key, [...(groups.get(key) ?? []), f]);
+      }
+    }
+  };
+  visit(facets);
+  const exact = [...groups].find(([, vs]) => vs.some((v) => v.descriptor!.trim().toLowerCase() === country.name.toLowerCase()));
+  if (exact) return { [exact[0]]: exact[1].filter((v) => v.descriptor!.trim().toLowerCase() === country.name.toLowerCase()).map((v) => v.id!) };
+  const widest = [...groups].sort((a, b) => b[1].length - a[1].length)[0];
+  return widest ? { [widest[0]]: widest[1].map((v) => v.id!) } : undefined;
+}

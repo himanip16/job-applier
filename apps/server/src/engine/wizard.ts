@@ -193,6 +193,17 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
   const fields = await readStepFields(context, state);
   const fileInputs = adapter.fileInputs(fields);
   await prepareCoverLetter(context, fields, fileInputs.coverLetter);
+  // Files first, then answers. Microsoft parses an uploaded resume into the
+  // contact block - its State and City, and blanks Address and Postal Code -
+  // so attaching after filling undid the fill, and every submission came
+  // back "Address cannot be left blank". Attach, let the parse land, and read
+  // the step again so the profile's answers go in over it.
+  if (await attachStepFiles(context, state, fileInputs)) {
+    await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
+    await adapter.settle?.(page);
+    state.step--;
+    return 'CONTINUE';
+  }
   const fillable = fields.filter((f) => f.kind !== 'FILE');
   await resolveStepAnswers(context, state, fillable);
   const unfilledRequired = await fillApplicationFields(fillable, {
@@ -203,7 +214,6 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
   state.afterHumanPause = false;
   if (unfilledRequired.length) return pauseForRequiredFields(context, state, unfilledRequired);
 
-  await attachStepFiles(context, state, fileInputs);
   await prisma.application.update({
     where: { id: applicationId },
     data: { fieldPlan: state.plan as unknown as Prisma.InputJsonValue },
@@ -430,12 +440,14 @@ async function attachStepFiles(
   { applicationId, page, resume, ctx }: WalkContext,
   state: WalkState,
   { resume: resumeInput, coverLetter: coverInput }: ReturnType<AtsAdapter['fileInputs']>,
-): Promise<void> {
+): Promise<boolean> {
   const { coverLetter } = ctx;
+  let attached = false;
   if (resumeInput && !state.resumeAttached) {
     if (!resume) throw new Error('This form wants a resume and none is uploaded to your profile.');
     await attachFile(page, resumeInput.selector, path.resolve(resume.path));
     state.resumeAttached = true;
+    attached = true;
     await bus.emitEvent(applicationId, 'FILE_ATTACHED', `Attached ${resume.filename}.`);
     state.plan.push({
       fieldId: resumeInput.id, label: resumeInput.label, kind: 'FILE', required: resumeInput.required,
@@ -446,8 +458,10 @@ async function attachStepFiles(
     const file = await writeCoverLetterFile(applicationId, coverLetter);
     await attachFile(page, coverInput.selector, file);
     state.coverAttached = true;
+    attached = true;
     await bus.emitEvent(applicationId, 'FILE_ATTACHED', 'Attached the generated cover letter.');
   }
+  return attached;
 }
 
 async function advanceStep(

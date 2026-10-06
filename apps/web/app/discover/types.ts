@@ -91,6 +91,8 @@ export interface SearchReport {
   keptUnknownLocation?: number;
   /** Listed companies with no careers source set up, so not read. */
   noSource?: string[];
+  /** Read in the last few hours, so not read again this run. */
+  recentlyCrawled?: { company: string; crawledAt: string }[];
   deepScored: number;
   companiesRegistered: number;
   rerankedExisting: number;

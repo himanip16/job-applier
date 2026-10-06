@@ -11,6 +11,7 @@ import { topCompanies, type TargetCompany } from './topCompanies.js';
 import { isFirecrawlConfigured } from './firecrawl.js';
 import { canonicalUrl } from './jobSearchUtils.js';
 import { MAX_POSTING_AGE_DAYS } from './jobFilters.js';
+import { ago, crawlKey, markCrawled, recentCrawls, RECRAWL_AFTER_MS } from './crawlTracker.js';
 
 /**
  * Finding openings at the companies worth working for.
@@ -77,6 +78,8 @@ export interface JobSearchReport {
    * API or page. Not an error - nobody has set their source up yet.
    */
   noSource: string[];
+  /** Read successfully within the last few hours, so not read again (crawlTracker.ts). */
+  recentlyCrawled: { company: string; crawledAt: string }[];
   deepScored: number;
   companiesRegistered: number;
   /** Leads already in the queue whose cheap score was recomputed afterwards. */
@@ -90,6 +93,8 @@ export interface FindJobsDeps {
   plan: (profileId: string, opts: { maxQueries: number; country?: Country }) => Promise<SearchPlan>;
   companies: (limit: number) => TargetCompany[];
   fetchCompany: (company: TargetCompany, hints: FetchHints) => Promise<DiscoveredJob[]>;
+  /** Sites read within RECRAWL_AFTER_MS, keyed by crawlKey(source, handle). */
+  recentCrawls: (refs: { source: string; handle: string }[]) => Promise<Map<string, Date>>;
 }
 
 /**
@@ -117,6 +122,7 @@ const defaultDeps: FindJobsDeps = {
     if (!source) throw new Error(`No crawler registered for "${company.source}"`);
     return source.fetchJobs(company.handle, hints);
   },
+  recentCrawls,
 };
 
 export interface FindJobsOptions {
@@ -128,6 +134,8 @@ export interface FindJobsOptions {
   deepScoreTop?: number;
   /** Where to look, as an ISO code. Asked for before every search. */
   country?: string;
+  /** Read every site, even ones read within the last RECRAWL_AFTER_MS. */
+  force?: boolean;
   deps?: Partial<FindJobsDeps>;
 }
 
@@ -141,9 +149,42 @@ const hasSource = (c: TargetCompany): boolean => c.source !== 'careers-page' || 
 /** Companies read at once. Each site is still read politely, one request at a time. */
 const CONCURRENCY = 6;
 
-export async function findJobs(
+/**
+ * How far a running search has got, so the page can show jobs as they are
+ * saved instead of a spinner for the whole run.
+ */
+export interface SearchProgress {
+  phase: 'reading' | 'scoring' | 'done';
+  startedAt: string;
+  finishedAt?: string;
+  companiesTotal: number;
+  companiesDone: number;
+  /** Companies being read right now. */
+  reading: string[];
+  newLeads: number;
+}
+
+const progressByProfile = new Map<string, SearchProgress>();
+
+/** The latest search for this profile: running, or the last one finished. */
+export const searchProgress = (profileId: string): SearchProgress | null => progressByProfile.get(profileId) ?? null;
+
+export async function findJobs(profileId: string, opts: FindJobsOptions = {}): Promise<JobSearchReport> {
+  try {
+    return await runSearch(profileId, opts);
+  } finally {
+    const progress = progressByProfile.get(profileId);
+    if (progress && progress.phase !== 'done') {
+      progress.phase = 'done';
+      progress.reading = [];
+      progress.finishedAt = new Date().toISOString();
+    }
+  }
+}
+
+async function runSearch(
   profileId: string,
-  opts: FindJobsOptions = {},
+  opts: FindJobsOptions,
 ): Promise<JobSearchReport> {
   const deps: FindJobsDeps = { ...defaultDeps, ...opts.deps };
   const maxQueries = opts.maxQueries ?? 6;
@@ -170,6 +211,7 @@ export async function findJobs(
     droppedExamples: { offPlan: [], wrongDomain: [], tooOld: [], tooSenior: [], otherCountry: [] },
     keptUnknownLocation: 0,
     noSource: [],
+    recentlyCrawled: [],
     deepScored: 0,
     companiesRegistered: 0,
     notes: [],
@@ -184,8 +226,27 @@ export async function findJobs(
   report.queries = plan.roleTitles.map((query) => ({ query, hits: 0 }));
 
   const listed = deps.companies(maxCompanies);
-  const companies = listed.filter(hasSource);
+  const withSource = listed.filter(hasSource);
   report.noSource = listed.filter((c) => !hasSource(c)).map((c) => c.company);
+
+  // Sites read in the last few hours have nothing new to say; their postings
+  // are already in the queue from that read.
+  const recent = opts.force
+    ? new Map<string, Date>()
+    : await deps.recentCrawls(withSource.map((c) => ({ source: c.source, handle: c.handle })));
+  const companies = withSource.filter((c) => !recent.has(crawlKey(c.source, c.handle)));
+  report.recentlyCrawled = withSource
+    .filter((c) => recent.has(crawlKey(c.source, c.handle)))
+    .map((c) => ({ company: c.company, crawledAt: recent.get(crawlKey(c.source, c.handle))!.toISOString() }));
+  if (report.recentlyCrawled.length) {
+    const hours = RECRAWL_AFTER_MS / 3_600_000;
+    const n = report.recentlyCrawled.length;
+    const sample = report.recentlyCrawled.slice(0, 5).map((r) => `${r.company}, ${ago(new Date(r.crawledAt))}`);
+    report.notes.push(
+      `Skipped ${n} compan${n === 1 ? 'y' : 'ies'} already read in the last ${hours} hours (${sample.join('; ')}${n > 5 ? '; ...' : ''}).`,
+    );
+    log(`skipping ${n} compan(ies) read in the last ${hours}h`);
+  }
 
   if (opts.dryRun) {
     report.boards = companies.map((c) => ({ ats: c.source, slug: c.handle, company: c.company, openings: 0, kept: 0 }));
@@ -203,6 +264,24 @@ export async function findJobs(
     return report;
   }
 
+  // Opened before reading, so each company's jobs are saved the moment it
+  // answers and show up in the queue while the rest are still being read.
+  const intake = await openIntake(
+    profileId,
+    { country: target, roleTitles: plan.roleTitles },
+    await loadScoringContext(profileId),
+  );
+  const tally = emptyTally();
+  const progress: SearchProgress = {
+    phase: 'reading',
+    startedAt: new Date().toISOString(),
+    companiesTotal: companies.length,
+    companiesDone: 0,
+    reading: [],
+    newLeads: 0,
+  };
+  progressByProfile.set(profileId, progress);
+
   log(`reading ${companies.length} companies for ${plan.roleTitles.map((t) => `"${t}"`).join(', ')}`);
 
   // ---- 1. read every company ------------------------------------------------
@@ -214,6 +293,7 @@ export async function findJobs(
       const company = companies[next++]!;
       const outcome: BoardOutcome = { ats: company.source, slug: company.handle, company: company.company, openings: 0, kept: 0 };
       report.boards.push(outcome);
+      progress.reading.push(company.company);
       try {
         const hints: FetchHints = {
           queries: plan.roleTitles,
@@ -228,11 +308,19 @@ export async function findJobs(
         const missingDescriptions = jobs.filter((j) => !j.descriptionText.trim()).length;
         if (missingDescriptions) hints.onWarning?.(`${missingDescriptions} posting(s) have no description; matching and scoring have less evidence.`);
         fetched.push({ company, outcome, jobs });
-        log(`  ${company.company} (${company.source}): ${jobs.length} opening(s)`);
+        const registered = await registerCompany({ ats: company.source, slug: company.handle }, company.company);
+        if (registered.created) report.companiesRegistered++;
+        else await markCrawled(registered.id, `${jobs.length} postings`);
+        outcome.kept = await admit(intake, { id: registered.id, name: company.company }, jobs, tally);
+        log(`  ${company.company} (${company.source}): ${jobs.length} opening(s), ${outcome.kept} new`);
       } catch (err) {
         outcome.error = (err as Error).message;
         report.errors.push({ where: company.company, error: outcome.error });
         log(`  ${company.company} (${company.source}): FAILED - ${outcome.error}`);
+      } finally {
+        progress.reading = progress.reading.filter((name) => name !== company.company);
+        progress.companiesDone++;
+        progress.newLeads = tally.saved;
       }
     }
   };
@@ -247,20 +335,13 @@ export async function findJobs(
   report.boards.sort((a, b) => rank.get(a.company)! - rank.get(b.company)!);
   fetched.sort((a, b) => rank.get(a.company.company)! - rank.get(b.company.company)!);
 
-  // ---- 2. keep what matches -------------------------------------------------
+  // ---- 2. what matched -------------------------------------------------------
   //
-  // The big sites' own search is loose - Apple answers "Software Engineer"
-  // with retail specialists - so the plan's titles are the real gate.
-  const intake = await openIntake(
-    profileId,
-    { country: target, roleTitles: plan.roleTitles },
-    await loadScoringContext(profileId),
-  );
-  const tally = emptyTally();
-  for (const { company, outcome, jobs } of fetched) {
-    const registered = await registerCompany({ ats: company.source, slug: company.handle }, company.company);
-    if (registered.created) report.companiesRegistered++;
-    outcome.kept = await admit(intake, { id: registered.id, name: company.company }, jobs, tally);
+  // Each company's jobs were screened and saved as it answered. The big sites'
+  // own search is loose - Apple answers "Software Engineer" with retail
+  // specialists - so the plan's titles were the real gate; count what each
+  // title caught.
+  for (const { jobs } of fetched) {
     for (const job of jobs) {
       if (screen(job, intake.rules)) continue;
       for (const q of report.queries) if (jobMatchesPlan(job, [q.query])) q.hits++;
@@ -289,7 +370,7 @@ export async function findJobs(
     report.notes.push(`Skipped ${report.skippedTooOld} posting(s) older than ${MAX_POSTING_AGE_DAYS} days.`);
   }
 
-  if (!report.jobsSeen && !report.errors.length) {
+  if (!report.jobsSeen && !report.errors.length && companies.length) {
     report.notes.push(
       `No matching openings were returned by the ${companies.length} companies for these roles${
         target ? ` in ${target.name}` : ''
@@ -298,6 +379,7 @@ export async function findJobs(
   }
 
   // ---- 4. read the most promising in full ----------------------------------
+  progress.phase = 'scoring';
   if (fresh.length && deepScoreTop > 0) {
     const deepScoreResult = await deepScoreLeads(profileId, fresh, deepScoreTop);
     report.deepScored = deepScoreResult.deepScored;

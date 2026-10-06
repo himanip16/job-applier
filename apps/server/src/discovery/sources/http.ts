@@ -53,3 +53,36 @@ export async function getText(url: string, headers: Record<string, string> = {})
 export async function getBrowserJson<T>(url: string, headers: Record<string, string> = {}): Promise<T> {
   return (await request(url, { headers: { 'user-agent': BROWSER_UA, accept: 'application/json', ...headers } })).json() as Promise<T>;
 }
+
+/**
+ * A page as a browser's own top-level navigation would request it. Meta's
+ * careers site answers anything without these fetch-metadata headers with a 400.
+ */
+export async function getBrowserPage(url: string): Promise<string> {
+  return getText(url, {
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'accept-language': 'en-US,en;q=0.9',
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'none',
+    'sec-fetch-user': '?1',
+    'upgrade-insecure-requests': '1',
+  });
+}
+
+/** A form POST from the page itself, answered with JSON. */
+export async function postForm<T>(url: string, form: Record<string, string>, headers: Record<string, string> = {}): Promise<T> {
+  return (await request(url, {
+    method: 'POST',
+    headers: {
+      'user-agent': BROWSER_UA,
+      'content-type': 'application/x-www-form-urlencoded',
+      accept: '*/*',
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-site': 'same-origin',
+      ...headers,
+    },
+    body: new URLSearchParams(form).toString(),
+  })).json() as Promise<T>;
+}
