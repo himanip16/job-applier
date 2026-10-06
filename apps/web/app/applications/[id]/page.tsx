@@ -126,7 +126,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
                 Mark as submitted
               </button>
             )}
-            {(detail.status === 'FAILED' || detail.status === 'BLOCKED') && (
+            {detail.status === 'FAILED' && (
               <button
                 className="primary"
                 onClick={async () => {

@@ -167,6 +167,14 @@ patch('apps/server/src/browser/blockers.ts', [
 if '--check' in sys.argv:
     print('all matches found')
 else:
+    # Saving into src/ restarts the server and kills every run in flight.
+    import subprocess
+    busy = subprocess.run(
+        ['pnpm', '--filter', '@ja/server', 'exec', 'tsx', 'src/scripts/applyStaged.ts', '--check'],
+        cwd=ROOT,
+    ).returncode
+    if busy:
+        sys.exit('Not patching: runs are live (or the check failed). Try again when nothing is running.')
     for p, s in out:
         open(p, 'w').write(s)
     print('patched')

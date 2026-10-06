@@ -57,7 +57,7 @@ const REJECTED =
   /(invalid|incorrect|wrong) (email|password|credentials|username)|password (is )?(incorrect|invalid)|does not meet|must contain|locked/i;
 
 const IDENTITY_HOST =
-  /(^|\.)(accounts\.google\.com|login\.microsoftonline\.com|login\.live\.com|signin\.aws\.amazon\.com|okta\.com|oktapreview\.com|auth0\.com|onelogin\.com|pingidentity\.com)$/i;
+  /(^|\.)(accounts\.google\.com|idmsa\.apple\.com|login\.microsoftonline\.com|login\.live\.com|signin\.aws\.amazon\.com|okta\.com|oktapreview\.com|auth0\.com|onelogin\.com|pingidentity\.com)$/i;
 
 export async function signInOrRegister(page: Page, account: SiteAccount): Promise<AccountAttempt> {
   let host = '';

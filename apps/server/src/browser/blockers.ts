@@ -97,7 +97,7 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
    * that was never there. So `www.` is not a tenant.
    */
   const identityHost =
-    /^(accounts\.google\.com|login\.microsoftonline\.com|login\.live\.com|signin\.aws\.amazon\.com|github\.com\/login|(?!www\.)(?:[^.]+\.)+(okta|oktapreview|auth0|onelogin|pingidentity)\.com)$/i;
+    /^(accounts\.google\.com|idmsa\.apple\.com|login\.microsoftonline\.com|login\.live\.com|signin\.aws\.amazon\.com|github\.com\/login|(?!www\.)(?:[^.]+\.)+(okta|oktapreview|auth0|onelogin|pingidentity)\.com)$/i;
 
   let host = '';
   try {
