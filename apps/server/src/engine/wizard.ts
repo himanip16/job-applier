@@ -79,6 +79,8 @@ interface WalkArgs {
   adapter: AtsAdapter;
   app: RunRecord;
   meta: JobMeta;
+  /** Where the form was opened from; walls can leave the browser elsewhere. */
+  formUrl: string;
 }
 
 interface WalkContext extends WalkArgs {
@@ -186,7 +188,9 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
       (b.kind === 'CAPTCHA' && /on screen/i.test(b.detail)),
   );
   if (wall) {
-    return (await pauseForHuman(applicationId, page, wall)) ? 'CONTINUE' : 'ABANDONED';
+    if (!(await pauseForHuman(applicationId, page, wall))) return 'ABANDONED';
+    await adapter.afterWall?.(page, context.formUrl);
+    return 'CONTINUE';
   }
   if (await handleAutofillPrompt(context, state, signature)) return 'CONTINUE';
 

@@ -4,13 +4,14 @@ import { prisma, type Prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
 import { screenshot, unlessClosed } from '../browser/session.js';
-import { detectBlockers, type Blocker } from '../browser/blockers.js';
+import { confirmationShowing, detectBlockers, type Blocker } from '../browser/blockers.js';
 import { abandon, park, questionsKey, blockerKey } from './waiters.js';
 import { NeedsHumanError, NoFormError, describeDiagnosis } from '../browser/openForm.js';
 import { setStatus, artifact } from './runLog.js';
 import { whileWaitingOnHuman } from './slots.js';
 import { secret } from '../lib/secrets.js';
 import { signInOrRegister } from '../browser/accountWall.js';
+import { recordManualSubmit, watchForManualSubmit } from './manualSubmit.js';
 
 /**
  * Every point where the run needs a person.
@@ -291,9 +292,15 @@ export async function pauseForHuman(
   // Whichever comes first: you press the button, or the wall simply goes away
   // because you dealt with it. The second is the common case and it should not
   // require coming back to this app to say so.
-  let decision: { carryOn: boolean; note?: string };
+  //
+  // Or you finish the whole thing there and submit it yourself, which ends the run.
+  let decision: { carryOn: boolean; note?: string; submitted?: string };
   const done = new AbortController();
-  const waits = [manual, watchForClearance(applicationId, page, blocker)];
+  const waits: Array<Promise<typeof decision>> = [
+    manual,
+    watchForClearance(applicationId, page, blocker),
+    watchForManualSubmit(page, done.signal).then((detail) => ({ carryOn: false, submitted: detail })),
+  ];
   if (askingForPassword) waits.push(signInOnceSaved(applicationId, page, blocker, done.signal));
   try {
     decision = await whileWaitingOnHuman(
@@ -305,6 +312,16 @@ export async function pauseForHuman(
     abandon(key);
   }
 
+  // The wall "clearing" can win the race when what cleared it was your submit.
+  // The page showed the wall, not a confirmation, when this pause began.
+  if (decision.carryOn && !page.isClosed()) {
+    const confirmed = await confirmationShowing(page).catch(() => null);
+    if (confirmed) decision = { carryOn: false, submitted: confirmed };
+  }
+  if (decision.submitted) {
+    await recordManualSubmit(applicationId, page, decision.submitted);
+    return false;
+  }
   if (!decision.carryOn) {
     await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
     return false;

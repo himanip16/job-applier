@@ -31,6 +31,10 @@ import { extractFields } from '../../browser/extract.js';
  *     "Phone Device Type" is a `button[aria-haspopup="listbox"]`
  *     (`workday-dropdown`). Typed into as text boxes, they stayed at
  *     "0 items selected" and Workday refused the step.
+ *   - Signing in can drop you on Candidate Home ("My Applications") or the
+ *     bare posting instead of the step you were on (BlackRock and Walmart in
+ *     October 2026: the run read Candidate Home as a step and went nowhere).
+ *     `afterWall` goes back to `<posting>/apply`, which resumes the draft.
  */
 
 const NEXT = '[data-automation-id="pageFooterNextButton"]';
@@ -82,6 +86,21 @@ async function settle(page: Page): Promise<void> {
   await declineCookies(page);
 }
 
+/** On the start page or a step of the apply wizard, not elsewhere on the site. */
+async function inApplyFlow(page: Page): Promise<boolean> {
+  return page
+    .evaluate(() => {
+      const shown = (sel: string) => !!(document.querySelector(sel) as HTMLElement | null)?.checkVisibility();
+      if (shown('[data-automation-id="CandidateHomePage"]')) return false;
+      return (
+        /\/apply(\/|$)/.test(location.pathname) ||
+        shown('[data-automation-id="applyFlowPage"]') ||
+        shown('[data-automation-id="autofillWithResume"], [data-automation-id="applyManually"]')
+      );
+    })
+    .catch(() => false);
+}
+
 /** `<posting>/apply`, the start page, without going through the posting. */
 function applyUrl(url: string): string {
   const u = new URL(url);
@@ -127,6 +146,13 @@ export const workdayAdapter: AtsAdapter = {
     await settle(page);
   },
 
+  async afterWall(page, url) {
+    await settle(page);
+    if (await inApplyFlow(page)) return;
+    await page.goto(applyUrl(url), { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await settle(page);
+  },
+
   async extractForm(page) {
     return extractFields(page, { harvestComboboxOptions: true });
   },
@@ -157,6 +183,7 @@ export const workdayAdapter: AtsAdapter = {
     'Needs a Workday account per company; the saved email and password are used to sign in.',
     'Takes "Autofill with Resume", so Workday parses your resume into the experience step.',
     'Cookie notice is declined (necessary cookies only).',
-  'Search-prompt dropdowns ("How did you hear about us?") are searched and picked, not typed into.',
+    'Search-prompt dropdowns ("How did you hear about us?") are searched and picked, not typed into.',
+    'After signing in, goes back to the application if Workday lands on Candidate Home.',
   ],
 };

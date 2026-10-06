@@ -4,7 +4,7 @@ import { Icon, type IconName } from '../../../components/Icon';
 import { COUNTRIES, countryByCode } from '@ja/shared/countries';
 
 /** Every action that works in one country, and how the dialog words it. */
-export type CountryAction = 'find' | 'preview' | 'crawl' | 'recheck';
+export type CountryAction = 'find' | 'crawl' | 'recheck';
 
 /** The dialog's "anywhere" choice: the request goes out with no country. */
 export const WORLDWIDE = 'WORLD';
@@ -15,31 +15,25 @@ const COPY: Record<CountryAction, { sub: string; icon: IconName; verb: (country:
     icon: 'sparkles',
     verb: (c) => `Search in ${c}`,
   },
-  preview: {
-    sub: 'Shows the roles and companies it would search, without reading anything.',
-    icon: 'eye',
-    verb: (c) => `Preview for ${c}`,
-  },
   crawl: {
     sub: 'Re-reads every company on your watch list and keeps only jobs in this country.',
     icon: 'refresh',
-    verb: (c) => `Re-check boards for ${c}`,
+    verb: (c) => `Search watch list in ${c}`,
   },
   recheck: {
     sub: 'Goes through the jobs waiting in "For you" and removes any outside this country, older than 3 months, too senior, or no longer open. Saved, applied and dismissed jobs are not touched.',
     icon: 'checkCircle',
-    verb: (c) => `Re-check jobs for ${c}`,
+    verb: (c) => `Remove stale jobs for ${c}`,
   },
 };
 
 const WORLDWIDE_COPY: Record<CountryAction, { sub: string; icon: IconName; verb: (country: string) => string }> = {
   find: { ...COPY.find, sub: 'Reads the best-paying companies for jobs in any country, remote or on-site.', verb: () => 'Search worldwide' },
-  preview: { ...COPY.preview, verb: () => 'Preview worldwide' },
-  crawl: { ...COPY.crawl, sub: 'Re-reads every company on your watch list and keeps jobs in any country.', verb: () => 'Re-check all boards' },
+  crawl: { ...COPY.crawl, sub: 'Re-reads every company on your watch list and keeps jobs in any country.', verb: () => 'Search whole watch list' },
   recheck: {
     ...COPY.recheck,
     sub: 'Goes through the jobs waiting in "For you" and removes any older than 3 months, too senior, or no longer open. Location is not checked. Saved, applied and dismissed jobs are not touched.',
-    verb: () => 'Re-check jobs',
+    verb: () => 'Remove stale jobs',
   },
 };
 

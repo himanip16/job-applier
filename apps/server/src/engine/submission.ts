@@ -8,11 +8,12 @@ import { detectBlockers, detectSubmissionOutcome } from '../browser/blockers.js'
 import type { AdvanceControl } from '../browser/steps.js';
 import type { AtsAdapter } from '../ats/types.js';
 import { rememberAnswer } from './answerBank.js';
-import { park, reviewKey } from './waiters.js';
+import { abandon, park, reviewKey } from './waiters.js';
 import { artifact, setStatus } from './runLog.js';
 import { markLeadApplied } from './leadSync.js';
 import { whileWaitingOnHuman } from './slots.js';
 import type { FieldPlanEntry } from './fieldPlan.js';
+import { recordManualSubmit, watchForManualSubmit } from './manualSubmit.js';
 
 /**
  * The last few feet, which are the ones that matter.
@@ -89,10 +90,25 @@ export async function finishApplication(args: {
     // is dropped and the run waits forever.
     const decisionPromise = park<{ approved: boolean; note?: string }>(reviewKey(applicationId));
     await setStatus(applicationId, 'REVIEW', reason, { blockers, plan });
+    // Pressing the site's own submit button is a go-ahead too.
+    const stopWatching = new AbortController();
     const decision = await whileWaitingOnHuman(
       applicationId,
-      unlessClosed(page, decisionPromise, 'while waiting for your review'),
-    );
+      unlessClosed(
+        page,
+        Promise.race([
+          decisionPromise,
+          watchForManualSubmit(page, stopWatching.signal).then((detail) => ({ approved: true, manual: detail })),
+        ]),
+        'while waiting for your review',
+      ),
+    ).finally(() => stopWatching.abort());
+    if ('manual' in decision) {
+      abandon(reviewKey(applicationId));
+      await recordManualSubmit(applicationId, page, decision.manual);
+      await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, companyKey);
+      return;
+    }
     if (!decision.approved) {
       await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
       return;

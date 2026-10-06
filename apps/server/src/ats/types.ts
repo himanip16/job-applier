@@ -36,6 +36,12 @@ export interface AtsAdapter {
    * SmartRecruiters' per-entry Save. Optional.
    */
   beforeAdvance?(page: Page): Promise<void>;
+  /**
+   * Run after a sign-in or other wall is cleared, with the form's URL. For
+   * sites that land somewhere else afterwards, such as Workday's Candidate
+   * Home, and must be steered back to the form. Optional; must be bounded.
+   */
+  afterWall?(page: Page, formUrl: string): Promise<void>;
   /** Click the real submit control. */
   submit(page: Page): Promise<void>;
   /** Human-readable notes shown in the UI: known quirks, captcha, etc. */

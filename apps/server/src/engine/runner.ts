@@ -19,6 +19,7 @@ import { artifact, setStatus } from './runLog.js';
 import { walkApplication } from './wizard.js';
 import { finishApplication } from './submission.js';
 import { abandon, release, questionsKey, reviewKey, blockerKey } from './waiters.js';
+import { watchLeftOpenTab } from './manualSubmit.js';
 
 export { SubmissionBudgetError } from './submission.js';
 
@@ -103,7 +104,7 @@ export async function runApplication(applicationId: string): Promise<void> {
     await bus.emitEvent(applicationId, 'LOG', `Read the posting: ${meta.title} at ${meta.company}.`);
 
     // ---- 3. Walk it ---------------------------------------------------------
-    const walk = await walkApplication({ applicationId, page, adapter, app, meta });
+    const walk = await walkApplication({ applicationId, page, adapter, app, meta, formUrl });
     if (walk.kind === 'ABANDONED') return;
 
     // ---- 4. Review, then submit ---------------------------------------------
@@ -142,6 +143,8 @@ export async function runApplication(applicationId: string): Promise<void> {
     // it; closing here would destroy the evidence and any captcha token.
     if (page && !page.isClosed() && !config.headless && !closePage) {
       leaveOpen(applicationId, page);
+      // Submit it yourself there and the app notices.
+      watchLeftOpenTab(applicationId, page);
       await bus.emitEvent(applicationId, 'LOG', 'Leaving the browser tab open for you.');
     } else {
       await page?.close().catch(() => {});

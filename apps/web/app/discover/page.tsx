@@ -5,7 +5,6 @@ import { countryByCode, countryFromText } from '@ja/shared/countries';
 import { api, needsProfile } from '../../lib/api';
 import { Icon, type IconName } from '../../components/Icon';
 import { ApplyPreferences, useApplyPrefs } from './components/ApplyPreferences';
-import { CompanyManager } from './components/CompanyManager';
 import { CountryDialog, WORLDWIDE, type CountryAction } from './components/CountryDialog';
 import { FilterBar } from './components/FilterBar';
 import { LeadCard } from './components/LeadCard';
@@ -13,7 +12,7 @@ import { Pager } from './components/Pager';
 import { RejectDialog } from './components/RejectDialog';
 import { SearchReportPanel } from './components/SearchReportPanel';
 import { SelectionBar } from './components/SelectionBar';
-import type { Company, Lead, LeadPage, RescoreResult, SearchReport } from './types';
+import type { Lead, LeadPage, RescoreResult, SearchReport } from './types';
 import { DEFAULT_VIEW, FILTER_KEYS, isDefault, pageFromQuery, queryString, viewFromQuery, type View } from './view';
 import styles from './discover.module.css';
 
@@ -47,8 +46,6 @@ export default function DiscoverPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [facets, setFacets] = useState(EMPTY_FACETS);
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [sources, setSources] = useState<{ id: string; handleHint: string }[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [report, setReport] = useState<SearchReport | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -116,14 +113,10 @@ export default function DiscoverPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [l, c] = await Promise.all([
-        api<LeadPage>(`/api/leads?${queryString(view, page)}`),
-        api<{ companies: Company[] }>('/api/companies'),
-      ]);
+      const l = await api<LeadPage>(`/api/leads?${queryString(view, page)}`);
       setLeads(l.leads);
       setCounts(l.counts);
       setFacets(l.facets ?? EMPTY_FACETS);
-      setCompanies(c.companies);
       setPageInfo({ total: l.total, pages: l.pages, maxRescoreBatch: l.maxRescoreBatch });
       // The server clamps a page past the end; follow it.
       if (l.page !== page) setPage(l.page);
@@ -188,11 +181,8 @@ export default function DiscoverPage() {
   }, [load, ready]);
 
   useEffect(() => {
-    api<{ sources: { id: string; handleHint: string }[]; rejectCategories: string[] }>('/api/sources')
-      .then((d) => {
-        setSources(d.sources);
-        setCategories(d.rejectCategories);
-      })
+    api<{ rejectCategories: string[] }>('/api/sources')
+      .then((d) => setCategories(d.rejectCategories))
       .catch(() => {});
   }, []);
 
@@ -221,12 +211,12 @@ export default function DiscoverPage() {
     setBusy(action);
     setError(null);
     setFlash(null);
-    if (action === 'find' || action === 'preview') setReport(null);
+    if (action === 'find') setReport(null);
     try {
-      if (action === 'find' || action === 'preview') {
+      if (action === 'find') {
         const r = await api<{ report: SearchReport }>('/api/discovery/find', {
           method: 'POST',
-          body: JSON.stringify({ deepScoreTop: 15, dryRun: action === 'preview', country: target }),
+          body: JSON.stringify({ deepScoreTop: 15, country: target }),
         });
         setReport(r.report);
       } else if (action === 'crawl') {
@@ -235,7 +225,7 @@ export default function DiscoverPage() {
           { method: 'POST', body: JSON.stringify({ deepScoreTop: 15, country: target }) },
         );
         setFlash(
-          `Re-checked ${r.companiesCrawled} boards${worldwide ? '' : ` for ${name}`}: ${r.newLeads} new job${r.newLeads === 1 ? '' : 's'}. ` +
+          `Searched ${r.companiesCrawled} watch-list companies${worldwide ? '' : ` for ${name}`}: ${r.newLeads} new job${r.newLeads === 1 ? '' : 's'}. ` +
             (worldwide ? 'Skipped ' : `Skipped ${r.skippedOtherCountry ?? 0} outside ${name} and `) +
             `${r.skippedTooOld ?? 0} older than 3 months.` +
             (r.errors.length ? ` ${r.errors.length} board(s) failed.` : ''),
@@ -256,7 +246,7 @@ export default function DiscoverPage() {
                 (r.unreachable.length ? ` Could not reach ${r.unreachable.length} board(s), so their jobs were left alone.` : ''),
         );
       }
-      if (action !== 'preview') await load();
+      await load();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -415,7 +405,6 @@ export default function DiscoverPage() {
     await load();
   }
 
-  const failing = companies.filter((c) => c.lastCrawlNote?.startsWith('failed')).length;
   const pageIds = leads.map((l) => l.id);
   const allPicked = pageIds.length > 0 && pageIds.every((id) => picked.includes(id));
   const filtered = FILTER_KEYS.some((k) => !isDefault(view, k));
@@ -442,7 +431,7 @@ export default function DiscoverPage() {
                   : progress?.phase === 'scoring'
                     ? 'Ranking…'
                     : 'Searching…'
-                : 'Find new jobs'}
+                : 'Search top companies'}
             </button>
             <button
               disabled={busy !== null || applying !== null}
@@ -450,23 +439,23 @@ export default function DiscoverPage() {
               title={`Apply to every job at ${AUTO_APPLY_MIN_MATCH}%+ match and submit each without asking. You confirm the count first.`}
             >
               <Icon name="send" className={busy === 'collect' ? 'spin' : undefined} />
-              {applying ?? (busy === 'collect' ? 'Finding matches…' : `Auto-apply ${AUTO_APPLY_MIN_MATCH}%+ matches`)}
+              {applying ?? (busy === 'collect' ? 'Finding matches…' : `Apply to all ${AUTO_APPLY_MIN_MATCH}%+ matches`)}
             </button>
-            <button disabled={busy !== null} onClick={() => setAsking('recheck')} title="Remove jobs in your list that are closed, too old, or in the wrong country">
+            <button disabled={busy !== null} onClick={() => setAsking('recheck')} title="Remove jobs in For you that are closed, too old, too senior, or in the wrong country. Never adds jobs.">
               <Icon name="checkCircle" className={busy === 'recheck' ? 'spin' : undefined} />
-              {busy === 'recheck' ? 'Re-checking…' : 'Re-check listed jobs'}
+              {busy === 'recheck' ? 'Removing…' : 'Remove stale jobs'}
             </button>
             <details className={styles.menu}>
               <summary>More <Icon name="chevron" size={14} /></summary>
               <div className={styles.menuBody}>
-                <button disabled={busy !== null} onClick={() => setAsking('preview')}>
-                  <Icon name="eye" />
-                  <span>Preview search<span className={styles.menuHint}>See the roles and companies it would read</span></span>
-                </button>
                 <button disabled={busy !== null} onClick={() => setAsking('crawl')}>
                   <Icon name="refresh" className={busy === 'crawl' ? 'spin' : undefined} />
-                  <span>Re-check known boards<span className={styles.menuHint}>Re-read every company on your watch list</span></span>
+                  <span>Search my watch list<span className={styles.menuHint}>Re-read every company on your watch list for new jobs</span></span>
                 </button>
+                <a href="/watchlist" className={styles.menuLink}>
+                  <Icon name="list" />
+                  <span>Edit watch list<span className={styles.menuHint}>See, add or remove the companies it checks</span></span>
+                </a>
               </div>
             </details>
           </div>
@@ -532,7 +521,7 @@ export default function DiscoverPage() {
                     ? 'Save a job to keep it here for later.'
                     : view.status === 'PROCESSING'
                       ? 'Jobs you hit Apply on wait here until they are submitted.'
-                    : 'No jobs here yet. Find new jobs to get started.'}
+                    : 'No jobs here yet. Search top companies to get started.'}
             </p>
             {error ? (
               <button onClick={() => { setError(null); load().catch((e) => setError(e.message)); }}>Try again</button>
@@ -570,19 +559,6 @@ export default function DiscoverPage() {
           </label>
         </div>
       </div>
-
-      <details className="panel disclosure">
-        <summary>
-          <strong>Sources</strong>
-          <span className="muted small">
-            {companies.length} board{companies.length === 1 ? '' : 's'} watched
-            {failing > 0 && `, ${failing} failing`}
-          </span>
-        </summary>
-        <div className="disclosure-body">
-          <CompanyManager companies={companies} sources={sources} onChange={load} />
-        </div>
-      </details>
 
       {asking && (
         <CountryDialog value={country} action={asking} onChange={setCountry} onCancel={() => setAsking(null)} onConfirm={() => run(asking)} />

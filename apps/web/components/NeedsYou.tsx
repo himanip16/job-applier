@@ -39,6 +39,9 @@ export function NeedsYou() {
   const first = urgent?.status === 'NEEDS_INPUT' ? urgent : null;
   const total = needsInput;
   const onRunPage = pathname?.startsWith('/applications/') ?? false;
+  // A job page is for reading about that job; popping every waiting question
+  // over it on open gets in the way. The bar's button still opens them.
+  const onJobPage = pathname?.startsWith('/jobs/') ?? false;
 
   // Pop the questions up by themselves when a new run starts waiting on them,
   // rather than waiting for you to notice the bar. Remembered per tab session,
@@ -46,7 +49,7 @@ export function NeedsYou() {
   useEffect(() => {
     // Before the first poll lands needsInput reads 0. Recording that as seen
     // would make every page load look like new questions arrived.
-    if (!data || onRunPage) return;
+    if (!data || onRunPage || onJobPage) return;
     let seen = 0;
     try {
       seen = Number(window.sessionStorage.getItem(SEEN_KEY) ?? 0);
@@ -62,7 +65,7 @@ export function NeedsYou() {
     } catch {
       // As above.
     }
-  }, [data, needsInput, onRunPage]);
+  }, [data, needsInput, onRunPage, onJobPage]);
 
   // Notify on a *new* item, not on every poll. Keyed by id so a second run
   // needing you still gets through while the first is unresolved.

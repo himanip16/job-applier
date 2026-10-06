@@ -271,6 +271,17 @@ export async function detectSubmissionOutcome(
   };
 }
 
+/**
+ * The site's own "thanks for applying" on screen right now, or null.
+ *
+ * Positive confirmation only: leaving the form is not counted here, because
+ * someone browsing away from a tab they were left with also leaves the form.
+ */
+export async function confirmationShowing(page: Page): Promise<string | null> {
+  const state = await readOutcomeState(page);
+  return state.confirmed ? state.snippet : null;
+}
+
 function readOutcomeState(page: Page) {
   return evaluatePage(page, () => {
     const text = document.body?.innerText ?? '';

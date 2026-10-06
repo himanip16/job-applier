@@ -62,6 +62,7 @@ let app: RunRecord;
 const walk = () => walkApplication({
   applicationId: 'application', page: page as unknown as Page, adapter: adapter as unknown as AtsAdapter,
   app, meta: { company: 'Example', title: 'Engineer', descriptionText: 'A job' },
+  formUrl: 'https://example.com/apply',
 });
 
 beforeEach(() => {
