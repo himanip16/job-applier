@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import type { BlockerKind } from '@ja/shared';
 import { detectBlockers } from './blockers.js';
-import { detectAutofillPrompt, isNavigationRace } from './steps.js';
+import { detectAutofillPrompt, isNavigationRace, settle } from './steps.js';
 
 /**
  * Getting from a job URL to a form you can actually fill.
@@ -199,7 +199,16 @@ export async function clearInterstitial(page: Page, budgetMs = 25_000): Promise<
   let seen: string | null = null;
 
   while (Date.now() < deadline) {
-    const now = await detectInterstitial(page);
+    // A page still redirecting (forms.gle -> docs.google.com) destroys the
+    // context mid-read. That is "not arrived yet", not a failure.
+    let now: string | null;
+    try {
+      now = await detectInterstitial(page);
+    } catch (err) {
+      if (!isNavigationRace(err)) throw err;
+      await settle(page);
+      continue;
+    }
     if (!now) return;
     seen = now;
     await page.waitForTimeout(1000);
@@ -256,6 +265,9 @@ export async function openApplicationForm(
   const patterns = [...(opts.applyPatterns ?? []), ...APPLY_PATTERNS];
 
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+  // A URL that redirects by script after load would otherwise be read
+  // half-way, and every page.evaluate below would die with it.
+  await settle(page);
 
   // 1. Interstitial, if any. Nothing else can be true until this is gone.
   await clearInterstitial(page);
@@ -371,12 +383,21 @@ async function clickApply(page: Page, patterns: RegExp[]): Promise<boolean> {
         if (!(await nth.isVisible().catch(() => false))) continue;
         const name = (await nth.innerText().catch(() => '')) || (await nth.getAttribute('aria-label').catch(() => '')) || '';
         if (NOT_THE_APPLY_BUTTON.test(name)) continue;
+        // Apply buttons that open the form in a new tab (target=_blank, or
+        // window.open) leave this page exactly where it was, and every later
+        // step reads this page. Catch the tab and bring its address here.
+        const opened: Page[] = [];
+        const onPage = (p: Page) => opened.push(p);
+        page.context().on('page', onPage);
         try {
           await nth.scrollIntoViewIfNeeded({ timeout: 3000 });
           await nth.click({ timeout: 8000 });
           await page.waitForTimeout(900);
+          page.context().off('page', onPage);
+          if (opened[0]) await followNewTab(page, opened[0]);
           return true;
         } catch {
+          page.context().off('page', onPage);
           // Overlays and cookie banners intercept the first click; try the
           // next candidate rather than giving up on the whole page.
         }
@@ -384,6 +405,27 @@ async function clickApply(page: Page, patterns: RegExp[]): Promise<boolean> {
     }
   }
   return false;
+}
+
+/**
+ * Load what a new tab opened onto `page`, and close the tab.
+ *
+ * The tab starts on about:blank and may pass through a redirect, so wait for
+ * a real address first. If it never gets one, leave `page` alone.
+ */
+async function followNewTab(page: Page, tab: Page): Promise<void> {
+  try {
+    await tab
+      .waitForURL((u) => /^https?:$/.test(u.protocol), { timeout: 15_000, waitUntil: 'commit' })
+      .catch(() => {});
+    // A short link (forms.gle) redirects again; read where it ends up.
+    await settle(tab);
+    const url = tab.url();
+    if (!/^https?:/.test(url)) return;
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+  } finally {
+    await tab.close().catch(() => {});
+  }
 }
 
 /** Everything worth knowing about why there was no form. */

@@ -14,6 +14,7 @@ import { markLeadApplied } from './leadSync.js';
 import { whileWaitingOnHuman } from './slots.js';
 import type { FieldPlanEntry } from './fieldPlan.js';
 import { recordManualSubmit, watchForManualSubmit } from './manualSubmit.js';
+import { thisApplicationOnly, type BrowserEdits } from './browserEdits.js';
 
 /**
  * The last few feet, which are the ones that matter.
@@ -36,8 +37,9 @@ export async function finishApplication(args: {
   fields: FormField[];
   submitControl: AdvanceControl | null;
   companyKey: string;
+  edits: BrowserEdits;
 }): Promise<void> {
-  const { applicationId, page, adapter, app, plan, answers, fields, submitControl, companyKey } =
+  const { applicationId, page, adapter, app, plan, answers, fields, submitControl, companyKey, edits } =
     args;
 
   const fillable = fields.filter((f) => f.kind !== 'FILE');
@@ -92,7 +94,8 @@ export async function finishApplication(args: {
     await setStatus(applicationId, 'REVIEW', reason, { blockers, plan });
     // Pressing the site's own submit button is a go-ahead too.
     const stopWatching = new AbortController();
-    const decision = await whileWaitingOnHuman(
+    // Anything you change in the browser while reviewing is taken as your answer.
+    const decision = await edits.during(whileWaitingOnHuman(
       applicationId,
       unlessClosed(
         page,
@@ -102,7 +105,7 @@ export async function finishApplication(args: {
         ]),
         'while waiting for your review',
       ),
-    ).finally(() => stopWatching.abort());
+    )).finally(() => stopWatching.abort());
     if ('manual' in decision) {
       abandon(reviewKey(applicationId));
       await recordManualSubmit(applicationId, page, decision.manual);
@@ -148,6 +151,7 @@ export async function finishApplication(args: {
     });
     if (claimed) break;
   }
+  await edits.capture();
   const urlBefore = page.url();
   await pressSubmit();
   let outcome = await detectSubmissionOutcome(page, urlBefore);
@@ -201,24 +205,37 @@ export async function finishApplication(args: {
       'REVIEW',
       `The form rejected the submission: ${outcome.detail}. It is still open in the browser - fix it there and approve, or cancel.`,
     );
-    const retry = await whileWaitingOnHuman(
+    const retry = await edits.during(whileWaitingOnHuman(
       applicationId,
       unlessClosed(page, retryPromise, 'while waiting for your review'),
-    );
+    ));
     if (!retry.approved) {
       await setStatus(applicationId, 'CANCELLED', retry.note ?? 'Cancelled after a validation error.');
       return;
     }
     await pressSubmit();
     const second = await detectSubmissionOutcome(page, urlBefore);
+    // Rejected again means nothing went through. No answer either way means it
+    // may have - that is a person's call, never a FAILED to retry blind.
+    const status =
+      second.outcome === 'SUBMITTED' ? 'SUBMITTED' : second.outcome === 'UNKNOWN' ? 'NEEDS_HUMAN' : 'FAILED';
     await prisma.application.update({
       where: { id: applicationId },
       data:
-        second.outcome === 'SUBMITTED'
-          ? { status: 'SUBMITTED', submittedAt: new Date(), confirmation: second.detail }
-          : { status: 'FAILED', blockedReason: second.detail },
+        status === 'SUBMITTED'
+          ? { status, submittedAt: new Date(), confirmation: second.detail, blockedReason: null }
+          : { status, blockedReason: second.detail },
     });
-    await bus.emitEvent(applicationId, 'STATUS', second.outcome, { status: second.outcome });
+    await bus.emitEvent(
+      applicationId,
+      'STATUS',
+      status === 'SUBMITTED'
+        ? 'Submitted.'
+        : status === 'NEEDS_HUMAN'
+          ? 'Submitted again, but no confirmation was visible. Check the browser before assuming it went through.'
+          : `The form rejected it again: ${second.detail}`,
+      { status, detail: second.detail, ...(status === 'NEEDS_HUMAN' ? { handoff: 'UNCONFIRMED' } : {}) },
+    );
     if (second.outcome === 'SUBMITTED') {
       await markLeadApplied(applicationId);
       await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, companyKey);
@@ -322,6 +339,7 @@ async function persistLearnedAnswers(
   let saved = 0;
   for (const [fieldId, answer] of answers) {
     if (!answer.remember && answer.source !== 'USER') continue;
+    if (thisApplicationOnly.has(answer)) continue;
     if (answer.source === 'GENERATED' || answer.source === 'SKIPPED') continue;
     const field = byId.get(fieldId);
     if (!field || answer.value === null) continue;

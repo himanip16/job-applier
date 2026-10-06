@@ -832,6 +832,66 @@ export async function verifyFilled(
   }
 }
 
+/**
+ * What a control shows right now, as a person would read it: not normalised,
+ * so a typed answer keeps its own capitals. Option controls report the
+ * matching option labels. [] when blank, null when the control is not on the
+ * page (moved on, re-rendered away) - which is not the same as cleared.
+ */
+export async function readShown(page: Page, field: FormField): Promise<string[] | null> {
+  const asOptions = (shown: string[]): string[] =>
+    shown
+      .map((s) => s.trim())
+      .filter((s) => s && !/^(select\b|0 items? selected|choose\b|--)/i.test(s))
+      .map((s) => field.options?.find((o) => normalizeLabel(o.label) === normalizeLabel(s))?.label ?? s);
+  const fromText = (text: string): string[] => {
+    const norm = normalizeLabel(text);
+    if (!norm) return [];
+    if (!field.options?.length) return asOptions([text]);
+    const exact = field.options.find((o) => normalizeLabel(o.label) === norm);
+    if (exact) return [exact.label];
+    // Several picks drawn side by side; anything unrecognised is not trusted.
+    const within = field.options.filter((o) => norm.includes(normalizeLabel(o.label)) && normalizeLabel(o.label));
+    return field.kind === 'MULTISELECT' || field.kind === 'CHECKBOX_GROUP' ? within.map((o) => o.label) : [];
+  };
+
+  try {
+    if (field.widget === 'radio-group' || field.widget === 'checkbox-group') {
+      const scope = page.locator(field.optionContainerSelector ?? field.selector);
+      if (!(await scope.count())) return null;
+      const checked = scope.locator('input:checked');
+      const labels: string[] = [];
+      for (let i = 0; i < (await checked.count()); i++) labels.push(await labelTextFor(page, checked.nth(i)));
+      return asOptions(labels);
+    }
+    let el = page.locator(field.selector).first();
+    if (!(await el.count()) && field.name) el = page.locator(`[name="${cssEscape(field.name)}"]`).first();
+    if (!(await el.count())) return null;
+    if (field.widget === 'button-group') {
+      const pressed = el.locator(':scope > button[aria-pressed="true"]');
+      const labels: string[] = [];
+      for (let i = 0; i < (await pressed.count()); i++) labels.push(await pressed.nth(i).innerText());
+      return asOptions(labels);
+    }
+    if (field.widget === 'react-select') {
+      const shell = el.locator('xpath=ancestor::*[contains(@class,"select-shell") or contains(@class,"select__control")][1]');
+      const text = (await shell.count()) ? await shell.first().innerText().catch(() => '') : '';
+      return fromText(text || (await shownAroundControl(page, field)));
+    }
+    if (field.widget === 'workday-prompt') return fromText(await workdaySelection(page, field));
+    if (field.widget === 'workday-dropdown') return fromText(await el.innerText().catch(() => ''));
+    if (field.kind === 'CHECKBOX') return (await el.isChecked().catch(() => false)) ? ['Yes'] : [];
+    if (field.kind === 'SELECT' && (await el.evaluate((n) => n.tagName === 'SELECT').catch(() => false))) {
+      if (!(await el.inputValue().catch(() => ''))) return [];
+      return asOptions([await el.locator('option:checked').innerText().catch(() => '')]);
+    }
+    const value = await el.inputValue({ timeout: 2_000 }).catch(() => '');
+    return field.options?.length ? fromText(value) : value.trim() ? [value] : [];
+  } catch {
+    return null;
+  }
+}
+
 /** The text shown in the smallest box around one control, without the next question's. */
 async function shownAroundControl(page: Page, field: FormField): Promise<string> {
   return page

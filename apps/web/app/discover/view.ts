@@ -97,6 +97,7 @@ export const TIER_LABELS: Record<string, string> = {
   'india-product': 'Indian product',
   'finance-gcc': 'Finance & GCC',
   shortlist: 'Your shortlist',
+  global: 'Remote or visa',
 };
 
 export const WORK_MODE_LABELS: Record<View['remote'], string> = { any: 'Any work mode', yes: 'Remote', no: 'On-site' };

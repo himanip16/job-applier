@@ -28,6 +28,7 @@ import { artifact, setStatus, truncate, writeCoverLetterFile } from './runLog.js
 import type { FieldPlanEntry } from './fieldPlan.js';
 import { fillApplicationFields } from './wizardFields.js';
 import { readAnswerCache, reuseCachedAnswers, saveToAnswerCache } from './answerCache.js';
+import { BrowserEdits } from './browserEdits.js';
 import {
   expandRepeatableSections,
   hasRepeatableSections,
@@ -71,6 +72,7 @@ export type WalkOutcome =
        */
       submitControl: AdvanceControl | null;
       companyKey: string;
+      edits: BrowserEdits;
     };
 
 interface WalkArgs {
@@ -81,9 +83,12 @@ interface WalkArgs {
   meta: JobMeta;
   /** Where the form was opened from; walls can leave the browser elsewhere. */
   formUrl: string;
+  /** Watches the tab for answers you change there. */
+  edits?: BrowserEdits;
 }
 
 interface WalkContext extends WalkArgs {
+  edits: BrowserEdits;
   resume: RunRecord['profile']['resumes'][number] | undefined;
   earlierReplies: Awaited<ReturnType<typeof answersFromEarlierRuns>>;
   earlierDerived: Awaited<ReturnType<typeof readAnswerCache>>;
@@ -105,6 +110,8 @@ interface WalkState {
   afterHumanPause: boolean;
   navigationRetries: number;
   handledPrompts: Set<string>;
+  // The screen whose "Add another" rows were held back until its files went on.
+  rowsDeferredOn: string | null;
 }
 
 type StepOutcome = 'CONTINUE' | 'ABANDONED' | 'REACHED_END';
@@ -115,8 +122,10 @@ export async function walkApplication(args: WalkArgs): Promise<WalkOutcome> {
     plan: [], allFields: [], answers: new Map(),
     resumeAttached: false, coverAttached: false, submitControl: null,
     step: 0, stuckSignature: null, afterHumanPause: false,
-    navigationRetries: 0, handledPrompts: new Set(),
+    navigationRetries: 0, handledPrompts: new Set(), rowsDeferredOn: null,
   };
+
+  context.edits.attach({ answers: state.answers, sessionAnswers: context.ctx.sessionAnswers, plan: state.plan });
 
   for (;;) {
     startStep(state);
@@ -129,7 +138,7 @@ export async function walkApplication(args: WalkArgs): Promise<WalkOutcome> {
         return {
           kind: 'REACHED_END', plan: state.plan, answers: state.answers,
           fields: state.allFields, submitControl: state.submitControl,
-          companyKey: context.ctx.companyKey,
+          companyKey: context.ctx.companyKey, edits: context.edits,
         };
       }
     } catch (err) {
@@ -162,7 +171,10 @@ async function createWalkContext(args: WalkArgs): Promise<WalkContext> {
     coverLetter: app.coverLetter ?? undefined,
     sessionAnswers,
   };
-  return { ...args, resume, earlierReplies, earlierDerived, ctx };
+  const edits =
+    args.edits ??
+    new BrowserEdits({ applicationId, page: args.page, profileId: app.profileId, companyKey: ctx.companyKey });
+  return { ...args, edits, resume, earlierReplies, earlierDerived, ctx };
 }
 
 function startStep(state: WalkState): void {
@@ -194,7 +206,7 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
   }
   if (await handleAutofillPrompt(context, state, signature)) return 'CONTINUE';
 
-  const fields = await readStepFields(context, state);
+  const { fields, rowsDeferred } = await readStepFields(context, state, signature);
   const fileInputs = adapter.fileInputs(fields);
   await prepareCoverLetter(context, fields, fileInputs.coverLetter);
   // Files first, then answers. Microsoft parses an uploaded resume into the
@@ -208,12 +220,19 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
     state.step--;
     return 'CONTINUE';
   }
+  // Nothing to attach after all; read the step again, this time adding rows.
+  if (rowsDeferred) {
+    state.step--;
+    return 'CONTINUE';
+  }
   const fillable = fields.filter((f) => f.kind !== 'FILE');
   await resolveStepAnswers(context, state, fillable);
   const unfilledRequired = await fillApplicationFields(fillable, {
     applicationId, page, adapter, answers: state.answers, plan: state.plan,
     afterHumanPause: state.afterHumanPause,
   });
+  // What the run put there; anything different later is you.
+  await context.edits.baseline(fillable);
   // Only the page just worked on; later pages start fresh.
   state.afterHumanPause = false;
   if (unfilledRequired.length) return pauseForRequiredFields(context, state, unfilledRequired);
@@ -258,20 +277,34 @@ async function handleAutofillPrompt(
 async function readStepFields(
   context: WalkContext,
   state: WalkState,
-): Promise<FormField[]> {
+  signature: string,
+): Promise<{ fields: FormField[]; rowsDeferred: boolean }> {
   const { applicationId, page, adapter, earlierReplies, earlierDerived, ctx } = context;
   const { sessionAnswers } = ctx;
+  // Extraction re-stamps handles; the last read's no longer point at its controls.
+  context.edits.forget();
   const progress = await readStepProgress(page);
   await setStatus(applicationId, 'FILLING', describeStep(state.step, progress), { progress });
 
   const gate = await looksLikeAGate(page);
   let fields: FormField[] = [];
+  let rowsDeferred = false;
   if (!gate) {
     // Handles restart at f0 on every extraction, so they are namespaced by
     // step before anything stores them - otherwise step 2's "f0" would
     // overwrite step 1's answer and its pending question.
     const sections = await hasRepeatableSections(page);
-    const history = sections ? await workHistory(context) : null;
+    // Resume first, then everything else. Workday's My Experience puts the
+    // resume upload beside Work Experience and Education, and its parser adds
+    // rows of its own - so adding rows before the upload left duplicates.
+    // Hold the rows back once per screen; the walk attaches and reads again.
+    rowsDeferred =
+      sections &&
+      !state.resumeAttached &&
+      state.rowsDeferredOn !== signature &&
+      (await page.locator('input[type="file"]').count().catch(() => 0)) > 0;
+    if (rowsDeferred) state.rowsDeferredOn = signature;
+    const history = sections && !rowsDeferred ? await workHistory(context) : null;
     if (history) {
       for (const r of await expandRepeatableSections(page, history)) {
         if (r.after === r.before) continue;
@@ -302,7 +335,7 @@ async function readStepFields(
       'No form fields found on the page. The posting may be closed, or the form behind a wall.',
     );
   }
-  return fields;
+  return { fields, rowsDeferred };
 }
 
 /** Saved employment.N / education.N facts first; the resume only when there are none. */
@@ -409,7 +442,7 @@ async function resolveStepAnswers(
 }
 
 async function pauseForRequiredFields(
-  { applicationId, page }: WalkContext,
+  { applicationId, page, edits }: WalkContext,
   state: WalkState,
   unfilledRequired: string[],
 ): Promise<StepOutcome> {
@@ -418,7 +451,7 @@ async function pauseForRequiredFields(
   const where = (sig: string) => sig.split('#').slice(0, 2).join('#');
   const here = where(await pageSignature(page));
   let movedOn = false;
-  const carryOn = await pauseForHuman(applicationId, page, {
+  const carryOn = await edits.during(pauseForHuman(applicationId, page, {
     clearedWhen: async () => {
       const now = await pageSignature(page).catch(() => '');
       movedOn = Boolean(now) && where(now) !== here;
@@ -431,7 +464,7 @@ async function pauseForRequiredFields(
       'is filled in - set those in the open browser and it will carry on.',
     humanCanClear: true,
     autoClears: false,
-  });
+  }));
   if (!carryOn) return 'ABANDONED';
   // You pressed Next yourself: this is a new step, read it as one.
   if (movedOn) return 'CONTINUE';
@@ -473,7 +506,7 @@ async function advanceStep(
   state: WalkState,
   signature: string,
 ): Promise<StepOutcome> {
-  const { applicationId, page, adapter } = context;
+  const { applicationId, page, adapter, edits } = context;
   // An upload or save can hold the continue button disabled for a moment.
   await adapter.settle?.(page);
   const advance = await findAdvanceControl(page);
@@ -507,18 +540,21 @@ async function advanceStep(
     await screenshot(page, applicationId, `step-${state.step}`),
   ).catch(() => {});
 
+  // Last look before the step's values leave the screen.
+  await edits.capture();
   await page.click(advance.selector).catch(async (err: unknown) => {
     throw new Error(`Could not press "${advance.label}": ${(err as Error).message}`);
   });
   const moved = await waitForStepChange(page, signature, 20_000);
   if (!moved) return handleRejectedStep(context, state, signature, advance);
+  edits.forget();
   state.stuckSignature = null;
   state.navigationRetries = 0;
   return 'CONTINUE';
 }
 
 async function handleRejectedStep(
-  { applicationId, page }: WalkContext,
+  { applicationId, page, edits }: WalkContext,
   state: WalkState,
   signature: string,
   advance: AdvanceControl,
@@ -534,12 +570,12 @@ async function handleRejectedStep(
       'page gave no reason.';
 
   if (state.stuckSignature === signature) {
-    const carryOn = await pauseForHuman(applicationId, page, {
+    const carryOn = await edits.during(pauseForHuman(applicationId, page, {
       kind: 'UNKNOWN',
       detail: `${detail} The browser is open on it - fix it there and continue, or cancel.`,
       humanCanClear: true,
       autoClears: false,
-    });
+    }));
     if (!carryOn) return 'ABANDONED';
     state.afterHumanPause = true;
     state.stuckSignature = null;

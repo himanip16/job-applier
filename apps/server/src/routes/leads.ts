@@ -274,6 +274,18 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
       update: { descriptionText: lead.descriptionText ?? undefined },
     });
 
+    const already = await prisma.application.findUnique({
+      where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
+      select: { id: true, status: true, submittedAt: true },
+    });
+    if (already?.status === 'SUBMITTED') {
+      return reply.code(409).send({
+        error: 'You already applied to this job.',
+        applicationId: already.id,
+        submittedAt: already.submittedAt,
+      });
+    }
+
     const application = await prisma.application.upsert({
       where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
       create: { profileId: profile.id, jobId: job.id, requiresReview, writeCoverLetter },

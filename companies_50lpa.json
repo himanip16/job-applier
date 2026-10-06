@@ -3018,5 +3018,239 @@
     "tier": "shortlist",
     "sde2_ctc_lpa": "",
     "india_locations": ""
+  },
+  {
+    "company": "Catawiki",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "catawiki",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "Backend Engineer",
+      "location": "Amsterdam, Netherlands",
+      "url": "https://job-boards.greenhouse.io/catawiki/jobs/8215843",
+      "checked": "2026-10-06",
+      "listed_by": "tech-jobs-with-relocation (github.com/AndrewStetsenko)"
+    }
+  },
+  {
+    "company": "Manychat",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "manychat",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "Senior Python Engineer, Billing & Accounts",
+      "location": "Amsterdam, Netherlands",
+      "url": "https://jobs.ashbyhq.com/manychat/b62c092e-c803-4a31-b830-ec45565e0d3d",
+      "checked": "2026-10-06",
+      "listed_by": "tech-jobs-with-relocation (github.com/AndrewStetsenko)"
+    }
+  },
+  {
+    "company": "NavVis",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "navvis",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "Calibration Engineer (F/M/D)",
+      "location": "Munich Onsite (NavVis GmbH)",
+      "url": "https://job-boards.eu.greenhouse.io/navvis/jobs/4904613101",
+      "checked": "2026-10-06",
+      "listed_by": "tech-jobs-with-relocation (github.com/AndrewStetsenko)"
+    }
+  },
+  {
+    "company": "PhotoRoom",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "photoroom",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "Product ML Engineer",
+      "location": "Paris",
+      "url": "https://jobs.ashbyhq.com/photoroom/1073f2ae-906a-42ae-bb5f-96981a2555cf",
+      "checked": "2026-10-06",
+      "listed_by": "tech-jobs-with-relocation (github.com/AndrewStetsenko)"
+    }
+  },
+  {
+    "company": "Scout24",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "scout24",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "Lead Security Engineer (d/m/f)",
+      "location": "Berlin",
+      "url": "https://www.scout24.com/en/career/jobs/8146769?gh_jid=8146769",
+      "checked": "2026-10-06",
+      "listed_by": "tech-jobs-with-relocation (github.com/AndrewStetsenko)"
+    }
+  },
+  {
+    "company": "Wallapop",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "wallapop",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "MLOps Engineer",
+      "location": "Barcelona",
+      "url": "https://job-boards.eu.greenhouse.io/wallapop/jobs/4741205101",
+      "checked": "2026-10-06",
+      "listed_by": "tech-jobs-with-relocation (github.com/AndrewStetsenko)"
+    }
+  },
+  {
+    "company": "Luxor Technology",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "luxor",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "remote",
+    "evidence": {
+      "title": "Data Engineer",
+      "location": "Worldwide, Remote Uruguay, Remote Argentina, Remote Brazil, Remote Mexico, Remote Philippines, Remote",
+      "url": "https://jobs.ashbyhq.com/luxor/710287ed-5596-47a1-b0bc-3fb44ba720b0",
+      "checked": "2026-10-06",
+      "listed_by": "remoteintech.company"
+    }
+  },
+  {
+    "company": "Karat",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "karat",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "remote",
+    "evidence": {
+      "title": "Senior Technical Content Development Engineer (India)",
+      "location": "Remote (India - Bangalore ONLY)",
+      "url": "https://job-boards.greenhouse.io/karat/jobs/8747047002",
+      "checked": "2026-10-06",
+      "listed_by": "remoteintech.company"
+    }
+  },
+  {
+    "company": "Turing",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "turing",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "remote",
+    "evidence": {
+      "title": "Staff Software Engineer",
+      "location": "India - Remote",
+      "url": "https://job-boards.greenhouse.io/turing/jobs/6115701004",
+      "checked": "2026-10-06",
+      "listed_by": "suggested by Claude; kept on board evidence"
+    }
+  },
+  {
+    "company": "Kestra",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "kestra",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "remote",
+    "evidence": {
+      "title": "Senior Security Engineer",
+      "location": "Europe India",
+      "url": "https://jobs.ashbyhq.com/kestra/48a6eb68-1ff3-4947-89e5-324831c22859",
+      "checked": "2026-10-06",
+      "listed_by": "remoteintech.company"
+    }
+  },
+  {
+    "company": "Supabase",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "supabase",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "remote",
+    "evidence": {
+      "title": "AI Platform Engineer",
+      "location": "Remote, Global",
+      "url": "https://jobs.ashbyhq.com/supabase/3b5d54ca-741b-45ac-bd3f-31605a0d3541",
+      "checked": "2026-10-06",
+      "listed_by": "remoteintech.company"
+    }
+  },
+  {
+    "company": "Railway",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "railway",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "remote",
+    "evidence": {
+      "title": "Senior Full-Stack Engineer - Product",
+      "location": "Global",
+      "url": "https://jobs.ashbyhq.com/railway/6ddcfe47-6cce-469b-ba6d-4f0e83440c9d",
+      "checked": "2026-10-06",
+      "listed_by": "remoteintech.company"
+    }
+  },
+  {
+    "company": "adjoe",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "adjoe",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "QA Engineer (f/m/d)",
+      "location": "Hamburg",
+      "url": "https://jobs.ashbyhq.com/adjoe/3610b4c7-4c2d-4746-8fa0-bd52272a248d",
+      "checked": "2026-10-06",
+      "listed_by": "The Global Move company list (public part)"
+    }
   }
 ]

@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useOverview } from '../lib/overview';
 import { AllQuestions } from './AllQuestions';
 import { AccountPassword } from './AccountPassword';
+import { SsoProvider } from './SsoProvider';
 
 /** How many runs were waiting on questions when the popup last opened, this tab session. */
 const SEEN_KEY = 'ja.questionsSeen';
@@ -91,6 +92,7 @@ export function NeedsYou() {
     <>
       {questions}
       <AccountPassword waiting={urgent} />
+      <SsoProvider waiting={urgent} />
     </>
   );
 

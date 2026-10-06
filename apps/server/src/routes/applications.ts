@@ -105,10 +105,12 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
     const profile = await requireProfile(req, reply);
     if (!profile) return;
     if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
-    await prisma.application.update({
-      where: { id: req.params.id },
+    // Re-queueing a submitted application applies to the same job twice.
+    const requeued = await prisma.application.updateMany({
+      where: { id: req.params.id, status: { not: 'SUBMITTED' } },
       data: { status: 'QUEUED', blockedReason: null },
     });
+    if (requeued.count === 0) return reply.code(409).send({ error: 'You already applied to this job.' });
     // Unanswered questions belong to the run that died; the new one re-reads
     // the form and asks again. Answered ones are kept and reused.
     await prisma.pendingQuestion.deleteMany({ where: { applicationId: req.params.id, answeredAt: null } });

@@ -25,7 +25,9 @@ export function AccountPassword({ waiting }: { waiting: Waiting | null }) {
   const wall =
     waiting?.status === 'NEEDS_HUMAN' &&
     /^(LOGIN_REQUIRED|ACCOUNT_CREATION):/.test(waiting.reason ?? '') &&
-    !/handed off to/i.test(waiting.reason ?? '');
+    !/handed off to/i.test(waiting.reason ?? '') &&
+    // Google / Microsoft buttons only: SsoProvider asks for those instead.
+    !/only offers sign-in through/i.test(waiting.reason ?? '');
 
   const [saved, setSaved] = useState<boolean | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);

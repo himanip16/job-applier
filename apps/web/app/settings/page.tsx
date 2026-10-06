@@ -112,6 +112,9 @@ export default function SettingsPage() {
       {byKey.get('JOB_SITE_PASSWORD') && (
         <JobSiteAccount setting={byKey.get('JOB_SITE_PASSWORD')!} onChange={load} />
       )}
+      {byKey.get('SSO_PROVIDER') && (
+        <SignInProvider setting={byKey.get('SSO_PROVIDER')!} onChange={load} />
+      )}
       <p className={s.foot}>
         Keys are stored in plain text in the <code>settings</code> table of your own Postgres
         database — the same protection as the <code>.env</code> file they replace. This page only
@@ -566,6 +569,66 @@ function SearchKey({ setting, onChange }: { setting: Setting; onChange: () => Pr
           {result.detail}
         </div>
       )}
+    </section>
+  );
+}
+
+const SSO_CHOICES = [
+  ['google', 'Google'],
+  ['microsoft', 'Microsoft'],
+  ['linkedin', 'LinkedIn'],
+  ['facebook', 'Facebook'],
+  ['apple', 'Apple'],
+] as const;
+
+/** The button pressed on "Sign in using Google / Microsoft / LinkedIn" walls. */
+function SignInProvider({ setting, onChange }: { setting: Setting; onChange: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function choose(value: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      if (value) {
+        await api('/api/settings', { method: 'PUT', body: JSON.stringify({ key: setting.key, value, verify: false }) });
+      } else {
+        await api(`/api/settings/${setting.key}`, { method: 'DELETE' });
+      }
+      await onChange();
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className={s.card}>
+      <div className={s.cardHead}>
+        <div>
+          <h2>Sign in with another account</h2>
+          <p>
+            Some sites (Microsoft Careers) only offer <strong>Sign in using Google / Microsoft /
+            LinkedIn</strong>. The run presses the one chosen here and picks your profile email on
+            its account list. Sign in to that provider once in the run browser; it is remembered.
+          </p>
+        </div>
+      </div>
+      <select
+        value={setting.preview}
+        disabled={busy}
+        onChange={(e) => choose(e.target.value)}
+        aria-label="Sign-in provider for job sites"
+      >
+        <option value="">Ask me the first time</option>
+        {SSO_CHOICES.map(([value, label]) => (
+          <option key={value} value={value}>
+            {label}
+          </option>
+        ))}
+      </select>
+      {err && <div className="notice bad" style={{ marginTop: '.5rem' }}>{err}</div>}
     </section>
   );
 }

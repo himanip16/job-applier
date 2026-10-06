@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { normalizeLabel } from '@ja/shared';
 import { prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
@@ -14,12 +15,14 @@ import { NeedsHumanError } from '../browser/openForm.js';
 import { findEmbeddedAts } from '../ats/embedded.js';
 import { resolveKnownAts } from '../ats/resolve.js';
 import { adapterFor } from '../ats/registry.js';
+import { isLinkedInJob, resolveApplyUrl } from '../linkedin/jobs.js';
 import { handleOpenFailure, pauseForHuman, SetAsideError } from './humanGate.js';
 import { artifact, setStatus } from './runLog.js';
 import { walkApplication } from './wizard.js';
 import { finishApplication } from './submission.js';
 import { abandon, release, questionsKey, reviewKey, blockerKey } from './waiters.js';
 import { watchLeftOpenTab } from './manualSubmit.js';
+import { BrowserEdits } from './browserEdits.js';
 
 export { SubmissionBudgetError } from './submission.js';
 
@@ -49,6 +52,7 @@ export async function runApplication(applicationId: string): Promise<void> {
   let formUrl = app.job.url;
   let page: Page | null = null;
   let closePage = false;
+  let edits: BrowserEdits | null = null;
 
   try {
     await setStatus(applicationId, 'PREPARING', `Using the ${adapter.id} adapter.`);
@@ -60,10 +64,25 @@ export async function runApplication(applicationId: string): Promise<void> {
     page = await newPage();
 
     // ---- 1. Reach the form --------------------------------------------------
+    // A LinkedIn posting that is not Easy Apply hands off to the company's own
+    // form - a Greenhouse board, a Google Form - in a new tab. Follow it there
+    // and pick the adapter for where it lands, rather than driving LinkedIn.
+    if (adapter.id === 'generic' && isLinkedInJob(app.job.url)) {
+      const offsite = await resolveApplyUrl(page, app.job.url).catch(() => null);
+      if (offsite) {
+        formUrl = offsite;
+        adapter = adapterFor(offsite);
+        await bus.emitEvent(
+          applicationId,
+          'LOG',
+          `LinkedIn's Apply opens ${new URL(offsite).hostname} in a new tab; following it with the ${adapter.id} adapter.`,
+        );
+      }
+    }
     // A careers page on the company's own domain is often a known ATS in an
     // iframe. Drive that ATS directly rather than the page around it.
     if (adapter.id === 'generic') {
-      const known = await resolveKnownAts(app.job.url, app.profileId);
+      const known = await resolveKnownAts(formUrl, app.profileId);
       if (known) {
         adapter = known.adapter;
         formUrl = known.url;
@@ -75,7 +94,7 @@ export async function runApplication(applicationId: string): Promise<void> {
       }
     }
     if (adapter.id === 'generic') {
-      const embedded = await findEmbeddedAts(page, app.job.url);
+      const embedded = await findEmbeddedAts(page, formUrl);
       if (embedded) {
         adapter = embedded.adapter;
         formUrl = embedded.url;
@@ -104,7 +123,10 @@ export async function runApplication(applicationId: string): Promise<void> {
     await bus.emitEvent(applicationId, 'LOG', `Read the posting: ${meta.title} at ${meta.company}.`);
 
     // ---- 3. Walk it ---------------------------------------------------------
-    const walk = await walkApplication({ applicationId, page, adapter, app, meta, formUrl });
+    edits = new BrowserEdits({
+      applicationId, page, profileId: app.profileId, companyKey: normalizeLabel(meta.company),
+    });
+    const walk = await walkApplication({ applicationId, page, adapter, app, meta, formUrl, edits });
     if (walk.kind === 'ABANDONED') return;
 
     // ---- 4. Review, then submit ---------------------------------------------
@@ -118,6 +140,7 @@ export async function runApplication(applicationId: string): Promise<void> {
       fields: walk.fields,
       submitControl: walk.submitControl,
       companyKey: walk.companyKey,
+      edits,
     });
   } catch (err) {
     if (err instanceof SetAsideError) {
@@ -145,6 +168,8 @@ export async function runApplication(applicationId: string): Promise<void> {
       leaveOpen(applicationId, page);
       // Submit it yourself there and the app notices.
       watchLeftOpenTab(applicationId, page);
+      // And anything you change there is still saved as your answer.
+      edits?.watchUntilClosed();
       await bus.emitEvent(applicationId, 'LOG', 'Leaving the browser tab open for you.');
     } else {
       await page?.close().catch(() => {});
