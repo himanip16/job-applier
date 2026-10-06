@@ -15,3 +15,6 @@ generated/
 next-env.d.ts
 .tsbuildinfo
 *.tsbuildinfo
+
+# Server fixes waiting for a quiet moment; applyStaged.ts copies them into src/.
+.staged-src/
