@@ -1,0 +1,100 @@
+diff --git a/apps/server/src/lib/config.ts b/apps/server/src/lib/config.ts
+index 0f7d5a7..871ef51 100644
+--- a/apps/server/src/lib/config.ts
++++ b/apps/server/src/lib/config.ts
+@@ -89,7 +89,12 @@ export const config = {
+    */
+   chromiumExecutablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined,
+   browserProfileDir: rooted(process.env.BROWSER_PROFILE_DIR ?? '.playwright-profile'),
+-  actionDelayMs: num(process.env.ACTION_DELAY_MS, 120),
++  /**
++   * Playwright slowMo: a pause before every click, fill, key press and
++   * navigation. A field takes four to six of those, so at 120 this alone cost
++   * most of a second per field.
++   */
++  actionDelayMs: num(process.env.ACTION_DELAY_MS, 30),
+ 
+   requireReview: bool(process.env.REQUIRE_REVIEW, true),
+   /** Screenshots of each step. Off: nobody looked at them, and they are personal data on disk. */
+diff --git a/apps/server/src/browser/fill.ts b/apps/server/src/browser/fill.ts
+index a86f3ac..4c77f0e 100644
+--- a/apps/server/src/browser/fill.ts
++++ b/apps/server/src/browser/fill.ts
+@@ -3,6 +3,8 @@ import { normalizeLabel, type FormField } from '@ja/shared';
+ 
+ const FIELD_TIMEOUT_MS = 10_000;
+ const OPTION_TIMEOUT_MS = 5_000;
++/** Above this, text is pasted rather than typed key by key. */
++const LONG_TEXT_CHARS = 80;
+ 
+ export class FillError extends Error {
+   constructor(
+@@ -25,9 +27,14 @@ export class FillError extends Error {
+  * gets its own driver, and `verifyFilled` reads the value back afterwards so a
+  * silently-ignored fill is caught here rather than discovered after submit.
+  */
+-export async function fillField(page: Page, field: FormField, value: string | string[]): Promise<void> {
+-  // Check field state before attempting to fill
+-  const state = await inspectControl(page, field);
++export async function fillField(
++  page: Page,
++  field: FormField,
++  value: string | string[],
++  /** The caller's own inspectControl() of this same handle, to skip a second read. */
++  known?: ControlState,
++): Promise<void> {
++  const state = known ?? (await inspectControl(page, field));
+   
+   // If field is locked and already holds the right value, skip filling
+   if (state.locked && state.exists) {
+@@ -185,7 +192,14 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
+       await el.fill('');
+       // type() rather than fill() so React's onChange fires per keystroke;
+       // some forms only validate on keyup and stay in an error state otherwise.
+-      await el.type(text, { delay: 12 });
++      // Long text is pasted instead - a 1,400-character essay took ~17s to
++      // type - with the last character typed so keydown/keyup still fire.
++      if (text.length > LONG_TEXT_CHARS) {
++        await el.fill(text.slice(0, -1));
++        await el.type(text.slice(-1));
++      } else {
++        await el.type(text, { delay: 12 });
++      }
+       // Press Tab to trigger proper blur behavior instead of synthetic events
+       await el.press('Tab').catch(() => {});
+     }
+diff --git a/apps/server/src/engine/wizardFields.ts b/apps/server/src/engine/wizardFields.ts
+index d3dd20a..22b8411 100644
+--- a/apps/server/src/engine/wizardFields.ts
++++ b/apps/server/src/engine/wizardFields.ts
+@@ -45,7 +45,7 @@ async function fillPlannedField(field: FormField, context: FillStepContext): Pro
+   if (state.locked) return recordLockedField(context, field, answer, state);
+   if (afterHumanPause && (await preserveHumanValue(context, field, answer))) return false;
+ 
+-  const { check, failure } = await fillWithRecovery(applicationId, page, adapter, field, wanted);
++  const { check, failure } = await fillWithRecovery(applicationId, page, adapter, field, wanted, state);
+   if (check) {
+     plan.push({
+       ...entry(field, answer, true),
+@@ -126,16 +126,18 @@ async function fillWithRecovery(
+   adapter: AtsAdapter,
+   field: FormField,
+   wanted: string | string[],
++  state: ControlState,
+ ): Promise<{ check: Awaited<ReturnType<typeof verifyFilled>> | null; failure: string }> {
+-  const attempt = async (target: FormField) => {
+-    await fillField(page, target, wanted);
++  const attempt = async (target: FormField, known?: ControlState) => {
++    await fillField(page, target, wanted, known);
+     return verifyFilled(page, target, wanted);
+   };
+ 
+   let check: Awaited<ReturnType<typeof verifyFilled>> | null = null;
+   let failure = '';
+   try {
+-    check = await attempt(field);
++    // A refound field is a new node, so only this first attempt reuses the read.
++    check = await attempt(field, state);
+   } catch (err) {
+     failure = err instanceof FillError ? err.message : (err as Error).message;
+ 

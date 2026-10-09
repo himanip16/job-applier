@@ -111,7 +111,19 @@ export function FilterBar({
           label="Company"
           value={view.company}
           options={[{ value: '', label: 'Any company' }, ...facets.companies.map((c) => withCount(c))]}
-          onChange={(company) => onChange({ company })}
+          onChange={(company) => onChange({ company, notCompanies: view.notCompanies.filter((c) => c !== company) })}
+        />
+        <Pill
+          label="Hide company"
+          value=""
+          options={[
+            { value: '', label: 'Hide company' },
+            ...facets.companies.filter((c) => !view.notCompanies.includes(c.name)).map((c) => withCount(c)),
+          ]}
+          onChange={(name) =>
+            name &&
+            onChange({ notCompanies: [...view.notCompanies, name], company: view.company === name ? '' : view.company })
+          }
         />
         <Toggle
           label="Auto-apply only"
@@ -199,6 +211,7 @@ function ActiveFilters({
     maxYears: () => `${labelOf(YEARS_OPTIONS, view.maxYears)} (unstated kept)`,
     tier: () => TIER_LABELS[view.tier] ?? view.tier,
     company: () => view.company,
+    notCompanies: () => '',
     autoApply: () => 'Auto-apply only',
     excludeSenior: () => 'No senior roles',
     hiring: () => 'Hiring now',
@@ -213,12 +226,26 @@ function ActiveFilters({
       <span className={styles.count}>
         <strong>{total.toLocaleString()}</strong> job{total === 1 ? '' : 's'} · {sortLabel}
       </span>
-      {active.map((k) => (
-        <button key={k} type="button" className={styles.chip} onClick={() => reset([k])} title="Remove this filter">
-          {describe[k]()} <Icon name="x" size={12} />
-        </button>
-      ))}
-      {active.length > 1 && (
+      {active.map((k) =>
+        k === 'notCompanies' ? (
+          view.notCompanies.map((name) => (
+            <button
+              key={`not:${name}`}
+              type="button"
+              className={styles.chip}
+              onClick={() => onChange({ notCompanies: view.notCompanies.filter((c) => c !== name) })}
+              title="Show this company again"
+            >
+              Not {name} <Icon name="x" size={12} />
+            </button>
+          ))
+        ) : (
+          <button key={k} type="button" className={styles.chip} onClick={() => reset([k])} title="Remove this filter">
+            {describe[k]()} <Icon name="x" size={12} />
+          </button>
+        ),
+      )}
+      {active.length + Math.max(0, view.notCompanies.length - 1) > 1 && (
         <button type="button" className={styles.clearAll} onClick={() => reset(FILTER_KEYS)}>
           Clear all
         </button>

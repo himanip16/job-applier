@@ -41,6 +41,14 @@ const job = await prisma.job.upsert({
   create: { url, ats: adapter.id, company: 'pending', title: 'pending' },
   update: {},
 });
+const already = await prisma.application.findUnique({
+  where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
+  select: { status: true, submittedAt: true },
+});
+if (already?.status === 'SUBMITTED') {
+  console.error(`You already applied to this job (${already.submittedAt?.toISOString() ?? 'date unknown'}).`);
+  process.exit(1);
+}
 const application = await prisma.application.upsert({
   where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
   create: { profileId: profile.id, jobId: job.id },

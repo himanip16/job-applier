@@ -8,9 +8,10 @@
  * the same trade the board APIs make - structured data, real locations, full
  * descriptions, no DOM parsing.
  *
- * Workday, SmartRecruiters, Eightfold, Jibe and Radancy are platforms many
- * companies share, so their handle names the tenant. Google, Apple, Amazon,
- * LinkedIn and Atlassian are one company's own site. Each lives in its own file and
+ * Workday, SmartRecruiters, Eightfold, Jobvite, Jibe, Radancy, SuccessFactors,
+ * Oracle HCM and MyNextHire are platforms many companies share, so their handle
+ * names the tenant. Google, Apple, Amazon, LinkedIn, Atlassian, Meta, Goldman
+ * Sachs and D. E. Shaw are one company's own site. Each lives in its own file and
  * shares the paging, hydration and dedupe logic in shared.ts.
  *
  * Every source searches server-side with the caller's role titles and country
@@ -22,26 +23,39 @@ import type { Source } from '../types.js';
 import { amazonSource } from './amazon.js';
 import { appleSource } from './apple.js';
 import { atlassianSource } from './atlassian.js';
+import { deShawSource } from './deShaw.js';
 import { eightfoldSource } from './eightfold.js';
+import { goldmanSachsSource } from './goldmanSachs.js';
 import { googleSource } from './google.js';
 import { jibeSource } from './jibe.js';
+import { jobviteSource } from './jobvite.js';
 import { linkedinCompanySource } from './linkedin.js';
+import { metaSource } from './meta.js';
+import { myNextHireSource } from './myNextHire.js';
+import { oracleHcmSource } from './oracleHcm.js';
 import { radancySource } from './radancy.js';
 import { ripplingSource } from './rippling.js';
 import { smartRecruitersSource } from './smartRecruiters.js';
+import { successFactorsSource } from './successFactors.js';
 import { workdaySource } from './workday.js';
 
 /** Platforms many companies share: offered when adding a company by hand. */
-export const SHARED_PLATFORM_SOURCES: Source[] = [workdaySource, smartRecruitersSource, eightfoldSource];
+export const SHARED_PLATFORM_SOURCES: Source[] = [workdaySource, smartRecruitersSource, eightfoldSource, jobviteSource];
 
 export const CAREER_SITE_SOURCES: Source[] = [
   ...SHARED_PLATFORM_SOURCES,
   jibeSource,
   radancySource,
   ripplingSource,
+  successFactorsSource,
+  oracleHcmSource,
+  myNextHireSource,
   googleSource,
   appleSource,
   amazonSource,
   linkedinCompanySource,
   atlassianSource,
+  metaSource,
+  goldmanSachsSource,
+  deShawSource,
 ];

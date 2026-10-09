@@ -7,6 +7,7 @@ import fastifyStatic from '@fastify/static';
 import { config, artifactsDir, resumesDir } from './lib/config.js';
 import { prisma } from './lib/db.js';
 import { recoverInterruptedRuns, activeRuns } from './engine/queue.js';
+import { reconcileLeads } from './engine/leadSync.js';
 import { estimateActivityCosts, activeModels } from './llm/models.js';
 import { isConfigured, LlmUnavailableError } from './llm/client.js';
 import { schemaProblem, cachedSchemaProblem } from './lib/schemaCheck.js';
@@ -213,6 +214,10 @@ const recovered = await recoverInterruptedRuns();
 if (recovered) {
   process.stdout.write(`Requeued ${recovered} run(s) interrupted by a restart.\n`);
 }
+
+// Cards a run moved before Applied meant submitted go where their run says now.
+const moved = Object.entries(await reconcileLeads().catch(() => ({})));
+if (moved.length) process.stdout.write(`Re-sorted job cards: ${moved.map(([tab, n]) => `${n} to ${tab}`).join(', ')}.\n`);
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
 process.stdout.write(`API on http://localhost:${config.port}\n`);

@@ -7,9 +7,12 @@ import { rescoreLeads, rescoreLexically } from './rescoreLeads.js';
 import { crawlCompany } from './crawlCompany.js';
 import { deepScoreLeads } from './deepScore.js';
 import { admit, emptyTally, openIntake } from './leadIntake.js';
+import { crawledRecently } from './crawlTracker.js';
 
 export interface CrawlReport {
   companiesCrawled: number;
+  /** Read successfully within the last few hours, so left alone (crawlTracker.ts). */
+  skippedRecentlyCrawled: number;
   jobsSeen: number;
   newLeads: number;
   skippedAlreadyDecided: number;
@@ -36,16 +39,18 @@ export interface CrawlReport {
  */
 export async function crawlAll(
   profileId: string,
-  opts: { deepScoreTop?: number; onlyCompanyId?: string; country?: Country } = {},
+  opts: { deepScoreTop?: number; onlyCompanyId?: string; country?: Country; force?: boolean } = {},
 ): Promise<CrawlReport> {
   const deepScoreTop = opts.deepScoreTop ?? 15;
 
-  const companies = await prisma.company.findMany({
+  const enabled = await prisma.company.findMany({
     where: { enabled: true, ...(opts.onlyCompanyId ? { id: opts.onlyCompanyId } : {}) },
   });
+  const companies = opts.force ? enabled : enabled.filter((c) => !crawledRecently(c));
 
   const report: CrawlReport = {
     companiesCrawled: 0,
+    skippedRecentlyCrawled: enabled.length - companies.length,
     jobsSeen: 0,
     newLeads: 0,
     skippedAlreadyDecided: 0,

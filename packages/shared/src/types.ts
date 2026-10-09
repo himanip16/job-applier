@@ -44,7 +44,7 @@ export const FormField = z.object({
    * How the control must be driven. `native` = standard HTML semantics,
    * `react-select` = click/type/pick from a portal listbox, etc.
    */
-  widget: z.enum(['native', 'react-select', 'radio-group', 'checkbox-group', 'button-group', 'file', 'combobox-intl-tel']).default('native'),
+  widget: z.enum(['native', 'react-select', 'radio-group', 'checkbox-group', 'button-group', 'file', 'combobox-intl-tel', 'workday-prompt', 'workday-dropdown', 'select2']).default('native'),
   /** Extra selector for widgets whose options render outside the control. */
   optionContainerSelector: z.string().optional(),
   /** Set when the adapter recognised this as a well-known field. */

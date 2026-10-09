@@ -84,6 +84,9 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
     country: z.string().length(2).optional().or(z.literal('').transform(() => undefined)),
     city: z.string().optional(),
     company: z.string().optional(),
+    // Repeated in the query string, one per company; a single one arrives as a string.
+    notCompanies: z.union([z.string(), z.array(z.string())]).optional()
+      .transform((v) => (v === undefined ? [] : [v].flat().filter(Boolean))),
     tier: z.string().optional(),
     minPay: optionalNumber,
     autoApply: flag,
@@ -240,7 +243,7 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
     return { applicationId: application.id };
   });
 
-  /** Shortlist and immediately start an application run. */
+  /** Start an application run. The card sits in Processing until it submits. */
   app.post<{ Params: { id: string } }>('/api/leads/:id/apply', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
@@ -271,6 +274,18 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
       update: { descriptionText: lead.descriptionText ?? undefined },
     });
 
+    const already = await prisma.application.findUnique({
+      where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
+      select: { id: true, status: true, submittedAt: true },
+    });
+    if (already?.status === 'SUBMITTED') {
+      return reply.code(409).send({
+        error: 'You already applied to this job.',
+        applicationId: already.id,
+        submittedAt: already.submittedAt,
+      });
+    }
+
     const application = await prisma.application.upsert({
       where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
       create: { profileId: profile.id, jobId: job.id, requiresReview, writeCoverLetter },
@@ -279,7 +294,9 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
 
     await prisma.jobLead.update({
       where: { id: lead.id },
-      data: { status: 'APPLIED', applicationId: application.id, decidedAt: new Date() },
+      // Processing (Saved with a run attached), not Applied: the run has only
+      // started. syncLead moves it on when the run ends.
+      data: { status: 'SHORTLISTED', applicationId: application.id, decidedAt: new Date() },
     });
     await learnFromDecision({
       profileId: profile.id,

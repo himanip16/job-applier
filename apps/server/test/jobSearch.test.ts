@@ -43,6 +43,9 @@ describe('recognising a posting URL', () => {
       ['https://jobs.lever.co/plaid/6ca0ab85-77a7-468f-a13f-4b4ad1e264ee', 'lever', 'plaid'],
       ['https://jobs.ashbyhq.com/Nash/5078366e-db73-45a4-b9cb-23162d3bc28b', 'ashby', 'Nash'],
       ['https://apply.workable.com/acme/j/ABCDEF123/', 'workable', 'acme'],
+      ['https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/US-CA/Engineer_JR1', 'workday', 'nvidia.wd5/NVIDIAExternalCareerSite'],
+      // The other Workday host: data centre first, tenant in the path.
+      ['https://wd1.myworkdaysite.com/recruiting/wf/WellsFargoJobs/job/Bengaluru-India/Senior-Software-Engineer---Java-Full-Stack_R-568993', 'workday', 'wf.wd1/WellsFargoJobs'],
     ];
     for (const [url, ats, slug] of cases) {
       expect(parseBoardUrl(url), url).toEqual({ ats, slug });

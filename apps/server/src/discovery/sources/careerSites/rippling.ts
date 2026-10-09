@@ -27,12 +27,15 @@ export const ripplingSource: Source = {
 
     return hydrate(candidates, async (l): Promise<DiscoveredJob> => {
       const location = l.workLocation?.label ?? '';
-      const detail = await orElse(getJson<{ description?: Record<string, string> }>(`${base}/${l.uuid}`), {});
+      const detail = await orElse(
+        getJson<{ description?: Record<string, string>; companyName?: string }>(`${base}/${l.uuid}`),
+        {},
+      );
       return {
         url: l.url,
         ats: 'rippling',
         title: l.name,
-        companyName: handle,
+        companyName: detail.companyName || handle,
         location: location || undefined,
         remote: looksRemote(location),
         descriptionText: Object.values(detail.description ?? {}).map(stripHtml).join('\n\n'),

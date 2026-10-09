@@ -30,6 +30,10 @@ export function queriesFrom(hints?: FetchHints): string[] {
  * `fetchPage` gets the query and the zero-based offset of the page's first
  * item, and returns that page plus the total if the site reports one. Paging
  * stops at MAX_PER_SITE, on a short page, or once the total is reached.
+ *
+ * Only the very first page failing fails the site. A later page failing -
+ * usually a rate limit that outlasted the retries - keeps everything read so
+ * far and says the results are partial.
  */
 export async function searchPaged<T>(
   hints: FetchHints | undefined,
@@ -42,8 +46,16 @@ export async function searchPaged<T>(
   if (requested.length > 3) hints?.onWarning?.(`Searched 3 of ${requested.length} planned roles on this source.`);
   for (const query of queriesFrom(hints)) {
     for (let offset = 0; offset < MAX_PER_SITE; offset += pageSize) {
-      if (offset > 0) await sleep(pauseMs);
-      const { items, total } = await fetchPage(query, offset);
+      if (offset > 0 || all.length > 0) await sleep(pauseMs);
+      let page: { items: T[]; total?: number };
+      try {
+        page = await fetchPage(query, offset);
+      } catch (err) {
+        if (!all.length) throw err;
+        hints?.onWarning?.(`Stopped early (${(err as Error).message}); keeping the ${all.length} results already read.`);
+        return all;
+      }
+      const { items, total } = page;
       all.push(...items);
       if (items.length < pageSize || (total !== undefined && offset + pageSize >= total)) break;
       if (offset + pageSize >= MAX_PER_SITE) {

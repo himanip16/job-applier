@@ -24,6 +24,8 @@ export interface Lead {
     missingTerms?: string[];
   } | null;
   status: string;
+  /** The run for this job. On a Saved card it means the run is still going (Processing). */
+  applicationId?: string | null;
   /** What people reported being paid at this company on LeetCode; null when nobody has. */
   pay?: { baseMedian: number | null; totalMedian: number | null; baseReports: number; totalReports: number } | null;
   /** Interview-experience posts naming the company on LeetCode in the last 90 days. */
@@ -67,12 +69,16 @@ export interface SearchReport {
   roleTitles: string[];
   queries: { query: string; hits: number }[];
   creditsUsed: number;
-  boards: { ats: string; slug: string; company: string; openings: number; kept: number; error?: string; warnings?: string[] }[];
+  boards: { ats: string; slug: string; company: string; openings: number; kept: number; error?: string; warnings?: string[]; via?: 'list' | 'search' }[];
+  /** The web search for companies not on the list. Older servers did not send it. */
+  openSearch?: { ran: boolean; queries: { query: string; hits: number }[]; companiesFound: number };
   jobsSeen: number;
   jobsFetched?: number;
   newLeads: number;
   skippedAlreadySeen: number;
   skippedTooSenior?: number;
+  /** Internships, new-grad and campus hiring. */
+  skippedTooJunior?: number;
   skippedTooOld?: number;
   skippedOtherCountry?: number;
   /** Titles that matched none of the planned roles. */
@@ -80,11 +86,13 @@ export interface SearchReport {
   /** Sales, recruiting, legal and the like. */
   skippedWrongDomain?: number;
   /** A few of the titles behind each count, so an over-strict filter is visible. */
-  droppedExamples?: { offPlan: string[]; wrongDomain: string[]; tooOld?: string[]; tooSenior?: string[]; otherCountry?: string[] };
+  droppedExamples?: { offPlan: string[]; wrongDomain: string[]; tooOld?: string[]; tooSenior?: string[]; tooJunior?: string[]; otherCountry?: string[] };
   /** Kept postings that did not say where they are. */
   keptUnknownLocation?: number;
   /** Listed companies with no careers source set up, so not read. */
   noSource?: string[];
+  /** Read in the last few hours, so not read again this run. */
+  recentlyCrawled?: { company: string; crawledAt: string }[];
   deepScored: number;
   companiesRegistered: number;
   rerankedExisting: number;

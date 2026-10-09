@@ -22,11 +22,15 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
   const failed = report.boards.filter((b) => b.error).length;
   const partial = report.boards.filter((b) => !b.error && b.warnings?.length).length;
   const noSource = report.noSource ?? [];
+  const recentlyCrawled = report.recentlyCrawled ?? [];
   const unknownLocation = report.keptUnknownLocation ?? 0;
+  const search = report.openSearch;
+  const fromSearch = report.boards.filter((b) => b.via === 'search').length;
   const dropped = [
     { label: 'not in plan', count: offPlan, examples: report.droppedExamples?.offPlan ?? [] },
     { label: 'not engineering', count: wrongDomain, examples: report.droppedExamples?.wrongDomain ?? [] },
     { label: 'above the experience or seniority limit', count: report.skippedTooSenior ?? 0, examples: report.droppedExamples?.tooSenior ?? [] },
+    { label: 'internship or new-grad', count: report.skippedTooJunior ?? 0, examples: report.droppedExamples?.tooJunior ?? [] },
     { label: 'outside the chosen country', count: report.skippedOtherCountry ?? 0, examples: report.droppedExamples?.otherCountry ?? [] },
     { label: 'older than 90 days', count: report.skippedTooOld ?? 0, examples: report.droppedExamples?.tooOld ?? [] },
   ].filter((d) => d.count > 0);
@@ -35,7 +39,7 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
     <div className="notice" style={{ marginTop: '.9rem' }}>
       <strong>
         {dryRun
-          ? `Would search ${report.boards.length} top-paying compan${report.boards.length === 1 ? 'y' : 'ies'} for ${report.queries.length} role${report.queries.length === 1 ? '' : 's'}.`
+          ? `Would read ${report.boards.length} listed compan${report.boards.length === 1 ? 'y' : 'ies'} for ${report.queries.length} role${report.queries.length === 1 ? '' : 's'}.`
           : nothing
             ? 'No new jobs this time.'
             : `${report.newLeads} new job${report.newLeads === 1 ? '' : 's'} from ${boards.length} compan${
@@ -44,10 +48,12 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
       </strong>{' '}
       {!dryRun && (
         <span className="muted small">
-          {report.boards.length} companies checked · {failed} failed · {partial} with limited coverage ·{' '}
+          {report.boards.length} companies checked
+          {fromSearch > 0 && ` (${fromSearch} found by open search)`} · {failed} failed · {partial} with limited coverage ·{' '}
           {fetched} postings fetched · {report.jobsSeen} passed filters ·{' '}
           {report.skippedAlreadySeen} already seen · {report.deepScored} assessed by the model
           {noSource.length > 0 && ` · ${noSource.length} with no careers source set up`}
+          {recentlyCrawled.length > 0 && ` · ${recentlyCrawled.length} skipped, read in the last 4 hours`}
           {unknownLocation > 0 && ` · ${unknownLocation} kept with location unknown`}
           {report.companiesRegistered > 0 &&
             ` · ${report.companiesRegistered} new board${
@@ -82,6 +88,21 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
         )}
       </details>
 
+      {!dryRun && search?.ran && (
+        <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
+          <summary className="small">
+            Open search: {search.companiesFound} compan{search.companiesFound === 1 ? 'y' : 'ies'} beyond the list
+          </summary>
+          <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
+            {search.queries.map((q) => (
+              <li key={q.query}>
+                &ldquo;{q.query}&rdquo; — {q.hits} result{q.hits === 1 ? '' : 's'} on a job board
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
       {!dryRun && report.boards.length > 0 && (
         <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
           <summary className="small">
@@ -90,7 +111,8 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
           <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
             {report.boards.map((b) => (
               <li key={`${b.ats}:${b.slug}`}>
-                {b.company} <span className="src">{b.ats}</span> — {b.error
+                {b.company} <span className="src">{b.ats}</span>
+                {b.via === 'search' && <span className="src">open search</span>} — {b.error
                   ? `failed: ${b.error}`
                   : `${b.openings} postings fetched, ${b.kept} new jobs saved`}
                 {b.warnings?.map((warning) => <p key={warning} style={{ margin: '.2rem 0' }}>{warning}</p>)}
@@ -123,6 +145,21 @@ export function SearchReportPanel({ report }: { report: SearchReport }) {
           </summary>
           <p className="small muted" style={{ margin: '.4rem 0 0' }}>
             {noSource.join(', ')}.
+          </p>
+        </details>
+      )}
+
+      {/* Read in the last 4 hours; their postings are already in the queue from that read. */}
+      {recentlyCrawled.length > 0 && (
+        <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
+          <summary className="small">
+            {recentlyCrawled.length} compan{recentlyCrawled.length === 1 ? 'y' : 'ies'} skipped, read in the last 4 hours
+          </summary>
+          <p className="small muted" style={{ margin: '.4rem 0 0' }}>
+            {recentlyCrawled
+              .map((r) => `${r.company} (${new Date(r.crawledAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`)
+              .join(', ')}
+            .
           </p>
         </details>
       )}

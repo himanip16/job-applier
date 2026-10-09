@@ -242,3 +242,7 @@
 .linkHint { color: var(--muted); font-size: var(--fs-sm); }
 .linkCard > svg { color: var(--muted); transition: transform var(--fast) var(--ease); }
 .linkCard:hover > svg { transform: translateX(3px); color: var(--accent); }
+
+/* ---- experience & education ---- */
+.historyEntry { display: grid; gap: .6rem; padding: .9rem 1rem; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+.historyHead { display: flex; align-items: center; justify-content: space-between; gap: .7rem; font-size: var(--fs-sm); }

@@ -37,6 +37,17 @@ const ITEMS: { href: string; label: string; hint: string; icon: ReactNode }[] = 
     ),
   },
   {
+    href: '/watchlist',
+    label: 'Watch list',
+    hint: 'The companies it keeps checking for new jobs',
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+    ),
+  },
+  {
     href: '/runs',
     label: 'Runs',
     hint: 'Applications being filled in, live',
@@ -117,7 +128,8 @@ export function Nav() {
   // Shares one poller with whatever else on the page wants these numbers,
   // rather than running a second interval against the same endpoint.
   const { data } = useOverview();
-  const badges = { runs: data?.needsYou.total ?? 0, discover: data?.counts.leadsNew ?? 0 };
+  // Only questions earn a badge; walls and set-asides wait on the Runs page.
+  const badges = { runs: data?.needsYou.needsInput ?? 0, discover: data?.counts.leadsNew ?? 0 };
 
   // Nothing here works signed out - every link bounces straight back to
   // sign-in via AuthGate - so showing it there is just a wall of dead links

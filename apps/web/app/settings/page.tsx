@@ -109,6 +109,12 @@ export default function SettingsPage() {
       {byKey.get('FIRECRAWL_API_KEY') && (
         <SearchKey setting={byKey.get('FIRECRAWL_API_KEY')!} onChange={load} />
       )}
+      {byKey.get('JOB_SITE_PASSWORD') && (
+        <JobSiteAccount setting={byKey.get('JOB_SITE_PASSWORD')!} onChange={load} />
+      )}
+      {byKey.get('SSO_PROVIDER') && (
+        <SignInProvider setting={byKey.get('SSO_PROVIDER')!} onChange={load} />
+      )}
       <p className={s.foot}>
         Keys are stored in plain text in the <code>settings</code> table of your own Postgres
         database — the same protection as the <code>.env</code> file they replace. This page only
@@ -555,6 +561,183 @@ function SearchKey({ setting, onChange }: { setting: Setting; onChange: () => Pr
           Get one at{' '}
           <a href="https://firecrawl.dev" target="_blank" rel="noreferrer">firecrawl.dev</a> — the
           free tier is enough for a personal job hunt.
+        </p>
+      )}
+
+      {result && (
+        <div className={`notice ${result.ok ? 'good' : 'bad'} ${s.message}`} role="status">
+          {result.detail}
+        </div>
+      )}
+    </section>
+  );
+}
+
+const SSO_CHOICES = [
+  ['google', 'Google'],
+  ['microsoft', 'Microsoft'],
+  ['linkedin', 'LinkedIn'],
+  ['facebook', 'Facebook'],
+  ['apple', 'Apple'],
+] as const;
+
+/** The button pressed on "Sign in using Google / Microsoft / LinkedIn" walls. */
+function SignInProvider({ setting, onChange }: { setting: Setting; onChange: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function choose(value: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      if (value) {
+        await api('/api/settings', { method: 'PUT', body: JSON.stringify({ key: setting.key, value, verify: false }) });
+      } else {
+        await api(`/api/settings/${setting.key}`, { method: 'DELETE' });
+      }
+      await onChange();
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className={s.card}>
+      <div className={s.cardHead}>
+        <div>
+          <h2>Sign in with another account</h2>
+          <p>
+            Some sites (Microsoft Careers) only offer <strong>Sign in using Google / Microsoft /
+            LinkedIn</strong>. The run presses the one chosen here and picks your profile email on
+            its account list. Sign in to that provider once in the run browser; it is remembered.
+          </p>
+        </div>
+      </div>
+      <select
+        value={setting.preview}
+        disabled={busy}
+        onChange={(e) => choose(e.target.value)}
+        aria-label="Sign-in provider for job sites"
+      >
+        <option value="">Ask me the first time</option>
+        {SSO_CHOICES.map(([value, label]) => (
+          <option key={value} value={value}>
+            {label}
+          </option>
+        ))}
+      </select>
+      {err && <div className="notice bad" style={{ marginTop: '.5rem' }}>{err}</div>}
+    </section>
+  );
+}
+
+/**
+ * The password job sites' own accounts use (Workday's "Create Account").
+ * Paired with the profile email; filled by plain DOM code, never shown to a model.
+ */
+function JobSiteAccount({ setting, onChange }: { setting: Setting; onChange: () => Promise<void> }) {
+  const [value, setValue] = useState('');
+  const [editing, setEditing] = useState(!setting.set);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; detail: string } | null>(null);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setResult(null);
+    try {
+      await api('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ key: setting.key, value, verify: false }),
+      });
+      setValue('');
+      setEditing(false);
+      setResult({ ok: true, detail: 'Saved. Account walls are signed in automatically from now on.' });
+      await onChange();
+    } catch (err) {
+      setResult({ ok: false, detail: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clear() {
+    if (!confirm('Remove the job site password? Account walls will wait for you again.')) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      await api(`/api/settings/${setting.key}`, { method: 'DELETE' });
+      await onChange();
+      setEditing(true);
+    } catch (err) {
+      setResult({ ok: false, detail: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className={s.card}>
+      <div className={s.cardHead}>
+        <div>
+          <h2>Job site accounts</h2>
+          <p>
+            When an application asks you to <strong>Create Account</strong> or <strong>Sign In</strong>{' '}
+            (Workday and similar), it is filled with your profile email and this password. If the
+            account already exists it signs in instead. Google, Microsoft and Okta sign-ins still
+            wait for you.
+          </p>
+        </div>
+      </div>
+
+      {setting.set && !editing ? (
+        <div className={`${s.row} ${s.rowActive}`}>
+          <span className={`${s.dot} ${s.dotFirecrawl}`} aria-hidden />
+          <div className={s.rowMain}>
+            <span className={s.rowName}>Password</span>
+            <span className={s.rowMeta}>
+              <code>••••••••</code>
+              {setting.origin === 'env' && ' · from .env'}
+            </span>
+          </div>
+          <span className={s.inUse}>
+            <Check /> Saved
+          </span>
+          <button className={s.pill} disabled={busy} onClick={() => setEditing(true)}>
+            Replace
+          </button>
+          {setting.origin === 'saved' && (
+            <button className={s.quiet} disabled={busy} onClick={clear}>
+              Remove
+            </button>
+          )}
+        </div>
+      ) : (
+        <form className={s.inline} onSubmit={save}>
+          <input
+            type="password"
+            placeholder="Password for job site accounts"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            autoComplete="new-password"
+            spellCheck={false}
+            aria-label="Job site account password"
+          />
+          {setting.set && (
+            <button type="button" className={`ghost ${s.pill}`} onClick={() => setEditing(false)} disabled={busy}>
+              Cancel
+            </button>
+          )}
+          <button type="submit" className={`primary ${s.pill}`} disabled={busy || !value.trim()}>
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+        </form>
+      )}
+      {!setting.set && (
+        <p className={s.hint} style={{ marginTop: '.5rem' }}>
+          Most sites want 8+ characters with upper and lower case, a number and a symbol.
         </p>
       )}
 

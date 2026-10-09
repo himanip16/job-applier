@@ -34,7 +34,7 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     key: 'identity.last_name',
     prompt: 'Last name',
     kind: 'TEXT',
-    patterns: [/^last\s*name/i, /^family\s*name/i, /^surname/i, /^legal\s*last/i],
+    patterns: [/^last\s*name/i, /^family\s*name/i, /^surname/i, /^legal\s*last/i, /^preferred\s*(last|family)\s*name/i],
   },
   {
     key: 'identity.preferred_name',
@@ -65,7 +65,7 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     key: 'contact.phone',
     prompt: 'Phone number',
     kind: 'TEXT',
-    patterns: [/^phone/i, /mobile\s*(number|phone)/i, /telephone/i, /contact number/i],
+    patterns: [/^phone(?!\s*(ext|extension|type|device))/i, /mobile\s*(number|phone)/i, /telephone(?!\s*ext)/i, /contact number/i],
   },
   {
     key: 'contact.linkedin',
@@ -84,6 +84,14 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     prompt: 'Personal website / portfolio URL',
     kind: 'TEXT',
     patterns: [/personal\s*(web)?site/i, /portfolio/i, /other\s*website/i, /^website/i, /your\s*url/i],
+  },
+  {
+    // Just the city. A bare "City" box - often a place autocomplete, as on
+    // SmartRecruiters - searches badly on "Bangalore, Karnataka, India".
+    key: 'location.city',
+    prompt: 'City',
+    kind: 'TEXT',
+    patterns: [/^(city|town)$/i],
   },
   {
     key: 'location.current',

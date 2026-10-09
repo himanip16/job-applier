@@ -20,3 +20,37 @@
 .q:first-of-type { border-top: 0; }
 .q .why { font-size: var(--fs-sm); color: var(--muted); margin: 0.2rem 0 0.5rem; }
 .q .why.policy { color: var(--warn); }
+
+.modal.modal-wide { width: min(920px, 100%); }
+
+/* "Answer all questions": one card per job, opened one at a time */
+.qcards {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 0.75rem; margin: 1rem 0 0.2rem;
+}
+.qcard {
+  display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start;
+  gap: 0.35rem; text-align: left; white-space: normal; height: auto;
+  background: var(--panel); color: inherit; font: inherit;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0.85rem 0.95rem; cursor: pointer; min-width: 0;
+  transition: border-color var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.qcard:hover { border-color: var(--accent-border); transform: translateY(-1px); }
+.qcard.ready { border-color: var(--good-border); }
+.qcard-head { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.qcard-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qcard-title { font-size: var(--fs-sm); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qcard-labels { display: flex; flex-direction: column; min-width: 0; gap: 0.2rem; margin-top: 0.25rem; font-size: var(--fs-sm); }
+.qcard-labels span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 0.9rem; position: relative; }
+.qcard-labels span::before { content: '○'; position: absolute; left: 0; color: var(--muted); }
+.qcard-labels span.done::before { content: '●'; color: var(--good); }
+.qcard-labels span.more { color: var(--muted); padding-left: 0; }
+.qcard-labels span.more::before { content: none; }
+.qcard-foot { font-size: var(--fs-sm); color: var(--muted); margin-top: auto; padding-top: 0.35rem; }
+.qchip {
+  flex: none; font-size: 0.72rem; font-weight: 600; padding: 0.1rem 0.5rem;
+  border-radius: 999px; color: var(--warn);
+  background: var(--warn-soft);
+}
+.qchip.good { color: var(--good); background: var(--good-soft); }

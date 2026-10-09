@@ -4,10 +4,14 @@ import { prisma, type Prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
 import { screenshot, unlessClosed } from '../browser/session.js';
-import { detectBlockers, type Blocker } from '../browser/blockers.js';
+import { confirmationShowing, detectBlockers, type Blocker } from '../browser/blockers.js';
 import { abandon, park, questionsKey, blockerKey } from './waiters.js';
 import { NeedsHumanError, NoFormError, describeDiagnosis } from '../browser/openForm.js';
 import { setStatus, artifact } from './runLog.js';
+import { whileWaitingOnHuman } from './slots.js';
+import { secret } from '../lib/secrets.js';
+import { signInOrRegister } from '../browser/accountWall.js';
+import { recordManualSubmit, watchForManualSubmit } from './manualSubmit.js';
 
 /**
  * Every point where the run needs a person.
@@ -23,6 +27,32 @@ import { setStatus, artifact } from './runLog.js';
  *  - the end of the road                          -> handOffToHuman
  */
 /**
+ * Autopilot hit something only you can deal with, and moved on.
+ *
+ * Not a failure: the application is left in NEEDS_INPUT or NEEDS_HUMAN with
+ * the reason, and the run ends so the queue can start the next one. An
+ * autopilot batch that parked on its first question would apply to one job.
+ */
+export class SetAsideError extends Error {
+  constructor(
+    message: string,
+    /** Whether the tab is still worth looking at. A question is answered in the app, not there. */
+    readonly keepPage: boolean,
+  ) {
+    super(message);
+  }
+}
+
+/** Autopilot is an application that does not need your go-ahead to submit. */
+export async function isAutopilot(applicationId: string): Promise<boolean> {
+  const app = await prisma.application.findUnique({
+    where: { id: applicationId },
+    select: { requiresReview: true },
+  });
+  return app ? !app.requiresReview : false;
+}
+
+/**
  * Post the open questions and park until they come back.
  *
  * The `remember` flag each reply carries is recorded on the question, not
@@ -37,13 +67,16 @@ export async function askHuman(
   gaps: AnswerGap[],
 ): Promise<Map<string, ResolvedAnswer>> {
   const byId = new Map(fields.map((f) => [f.id, f]));
+  const autopilot = await isAutopilot(applicationId);
 
   // Same ordering rule as the review gate: park first, announce second. The
   // questions are written to the database before the status changes, so a
   // client that reacts instantly still finds them.
-  const replyPromise = park<Array<{ fieldId: string; value: string | string[]; remember: boolean }>>(
-    questionsKey(applicationId),
-  );
+  const replyPromise = autopilot
+    ? null
+    : park<Array<{ fieldId: string; value: string | string[]; remember: boolean }>>(
+        questionsKey(applicationId),
+      );
 
   const asked = await prisma.pendingQuestion.createManyAndReturn({
     select: { id: true },
@@ -81,6 +114,15 @@ export async function askHuman(
     })),
   });
 
+  // Answering later restarts the run with these answers (resumeAfterAnswers
+  // in routes/applications.ts), so there is nothing to keep the page for.
+  if (!replyPromise) {
+    throw new SetAsideError(
+      'Autopilot: set aside until you answer. It restarts by itself once you do; moving on to the next job.',
+      false,
+    );
+  }
+
   // A closed tab ends the wait. The answers already given are on the pending
   // questions, so a fresh run picks them up rather than asking again.
   //
@@ -91,13 +133,16 @@ export async function askHuman(
   const answeredElsewhere = new AbortController();
   let replies: Awaited<typeof replyPromise>;
   try {
-    replies = await unlessClosed(
-      page,
-      Promise.race([
-        replyPromise,
-        watchForAnswers(asked.map((q) => q.id), answeredElsewhere.signal),
-      ]),
-      'while waiting for your answers',
+    replies = await whileWaitingOnHuman(
+      applicationId,
+      unlessClosed(
+        page,
+        Promise.race([
+          replyPromise,
+          watchForAnswers(asked.map((q) => q.id), answeredElsewhere.signal),
+        ]),
+        'while waiting for your answers',
+      ),
     );
   } finally {
     answeredElsewhere.abort();
@@ -148,14 +193,97 @@ async function watchForAnswers(
     }
   }
 }
+/**
+ * A job site's own account wall, cleared with the saved email and password
+ * before anyone is asked. No model is involved; see browser/accountWall.ts.
+ * Anything it cannot do - no password saved, a Google sign-in, a refused
+ * password - falls through to the ordinary pause.
+ */
+async function signInWithSavedAccount(
+  applicationId: string,
+  page: Page,
+  blocker: Blocker,
+): Promise<boolean> {
+  if (!isAccountWall(blocker)) return false;
+  const password = secret('JOB_SITE_PASSWORD');
+  if (!password) return false;
+  const app = await prisma.application.findUnique({
+    where: { id: applicationId },
+    select: { profile: { select: { email: true } } },
+  });
+  const email = app?.profile.email;
+  if (!email) return false;
+
+  await bus.emitEvent(applicationId, 'LOG', 'Account wall: using your saved email and password.');
+  const attempt = await signInOrRegister(page, { email, password }).catch((err: unknown) => ({
+    ok: false,
+    detail: `Sign-in failed: ${(err as Error).message}`,
+  }));
+  await bus.emitEvent(applicationId, 'LOG', attempt.detail);
+  if (!attempt.ok) return false;
+  // An emailed code after registering is the next wall, and the wizard's next
+  // step pauses for it; only the account wall itself has to be gone.
+  const still = (await detectBlockers(page)).some(
+    (b) => b.kind === 'LOGIN_REQUIRED' || b.kind === 'ACCOUNT_CREATION',
+  );
+  return !still;
+}
+
+const isAccountWall = (blocker: Blocker) =>
+  blocker.kind === 'LOGIN_REQUIRED' || blocker.kind === 'ACCOUNT_CREATION';
+
+/**
+ * Waiting on the password popup: once a password is saved, sign in with it and
+ * carry on without anyone pressing Continue. Never resolves if that sign-in
+ * fails - the person finishes it in the browser, and watchForClearance sees it.
+ */
+function signInOnceSaved(
+  applicationId: string,
+  page: Page,
+  blocker: Blocker,
+  stopped: AbortSignal,
+): Promise<{ carryOn: boolean; note?: string }> {
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (stopped.aborted || !secret('JOB_SITE_PASSWORD')) return;
+      clearInterval(timer);
+      void signInWithSavedAccount(applicationId, page, blocker).then((ok) => {
+        if (ok && !stopped.aborted) resolve({ carryOn: true });
+      });
+    }, 1500);
+    stopped.addEventListener('abort', () => clearInterval(timer));
+  });
+}
+
 export async function pauseForHuman(
   applicationId: string,
   page: Page,
   blocker: Blocker,
 ): Promise<boolean> {
+  if (await signInWithSavedAccount(applicationId, page, blocker)) return true;
+  // The app asks for the password in a popup; worth waiting for even on
+  // autopilot, because every later account wall then clears by itself.
+  const askingForPassword = isAccountWall(blocker) && !secret('JOB_SITE_PASSWORD');
+  if (askingForPassword) {
+    await bus.emitEvent(
+      applicationId,
+      'LOG',
+      'This site wants an account and no job site password is saved - asking you for one.',
+    );
+  }
+
   // Park BEFORE announcing, for the same reason as the review gate: a client
   // watching the run can see NEEDS_HUMAN and reply within microseconds, and a
   // reply that arrives before the promise exists is dropped forever.
+  if (!askingForPassword && (await isAutopilot(applicationId))) {
+    await handOffToHuman(applicationId, page, blocker);
+    throw new SetAsideError(
+      'Autopilot: this needs you in the browser, so it is set aside with the tab left open. ' +
+        'Start it again once that is dealt with. Moving on to the next job.',
+      true,
+    );
+  }
+
   const key = blockerKey(applicationId);
   const manual = park<{ carryOn: boolean; note?: string }>(key);
   await handOffToHuman(applicationId, page, blocker);
@@ -164,17 +292,36 @@ export async function pauseForHuman(
   // Whichever comes first: you press the button, or the wall simply goes away
   // because you dealt with it. The second is the common case and it should not
   // require coming back to this app to say so.
-  let decision: { carryOn: boolean; note?: string };
+  //
+  // Or you finish the whole thing there and submit it yourself, which ends the run.
+  let decision: { carryOn: boolean; note?: string; submitted?: string };
+  const done = new AbortController();
+  const waits: Array<Promise<typeof decision>> = [
+    manual,
+    watchForClearance(applicationId, page, blocker),
+    watchForManualSubmit(page, done.signal).then((detail) => ({ carryOn: false, submitted: detail })),
+  ];
+  if (askingForPassword) waits.push(signInOnceSaved(applicationId, page, blocker, done.signal));
   try {
-    decision = await unlessClosed(
-      page,
-      Promise.race([manual, watchForClearance(applicationId, page, blocker)]),
-      'while waiting for you in the browser',
+    decision = await whileWaitingOnHuman(
+      applicationId,
+      unlessClosed(page, Promise.race(waits), 'while waiting for you in the browser'),
     );
   } finally {
+    done.abort();
     abandon(key);
   }
 
+  // The wall "clearing" can win the race when what cleared it was your submit.
+  // The page showed the wall, not a confirmation, when this pause began.
+  if (decision.carryOn && !page.isClosed()) {
+    const confirmed = await confirmationShowing(page).catch(() => null);
+    if (confirmed) decision = { carryOn: false, submitted: confirmed };
+  }
+  if (decision.submitted) {
+    await recordManualSubmit(applicationId, page, decision.submitted);
+    return false;
+  }
   if (!decision.carryOn) {
     await setStatus(applicationId, 'CANCELLED', decision.note ?? 'You cancelled this application.');
     return false;
@@ -208,9 +355,14 @@ async function nudge(applicationId: string, page: Page, blocker: Blocker): Promi
   await bus.emitEvent(
     applicationId,
     'NEEDS_YOU',
-    blocker.humanCanClear
-      ? 'Waiting for you in the browser window. It carries on by itself once the page is past this.'
-      : 'Waiting for you.',
+    !blocker.humanCanClear
+      ? 'Waiting for you.'
+      : blocker.autoClears === false && !blocker.clearedWhen
+        ? 'Waiting for you in the browser window. Press Continue here once it is dealt with.'
+        : blocker.clearedWhen
+          ? 'Waiting for you in the browser window. Fill those in, then press Continue here - or the ' +
+            "site's own Next button, and it picks up on the next step."
+          : 'Waiting for you in the browser window. It carries on by itself once the page is past this.',
     { kind: blocker.kind },
   );
 }
@@ -238,12 +390,19 @@ function watchForClearance(
     // so it always read as cleared and the run looped: fail every dropdown,
     // pause, "looks dealt with" four seconds later, fail them all again. Only
     // walls the page can show clear themselves; the rest wait for your click.
-    if (blocker.autoClears === false) return;
+    //
+    // A wall that brings its own test is the exception: "could not fill these
+    // fields" is dealt with once you press the site's own Next and the step
+    // changes, and waiting for a second click in this app after that left
+    // finished pages sitting there.
+    if (blocker.autoClears === false && !blocker.clearedWhen) return;
 
     const tick = async () => {
       if (page.isClosed()) return;
       try {
-        const stillThere = (await detectBlockers(page)).some((b) => b.kind === blocker.kind);
+        const stillThere = blocker.clearedWhen
+          ? !(await blocker.clearedWhen())
+          : (await detectBlockers(page)).some((b) => b.kind === blocker.kind);
         clearReads = stillThere ? 0 : clearReads + 1;
         if (clearReads >= 2) {
           if (!announced) {

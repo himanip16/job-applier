@@ -57,7 +57,7 @@ export default function Home() {
     );
   }
 
-  const outstanding = ov?.needsYou.total ?? 0;
+  const outstanding = ov?.needsYou.needsInput ?? 0;
 
   return (
     <>

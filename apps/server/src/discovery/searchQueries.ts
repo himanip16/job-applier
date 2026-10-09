@@ -204,10 +204,13 @@ function profileDerivedPlan(args: {
   const seniority = detectSeniority(text);
   const city = args.profile.city?.trim();
 
-  // Titles the candidate has already chosen to pursue beat anything inferred.
-  const chosen = dedupe(args.accepted.map((a) => a.title.trim()).filter(Boolean)).slice(0, 4);
+  // Titles the candidate has already chosen to pursue beat anything inferred -
+  // but as the role, not the posting. "Software Engineer (Cybersecurity
+  // Integrations) - Armis" verbatim matches one job at one company, and the
+  // career-site sources that only search the first few titles came back empty.
+  const chosen = args.accepted.map((a) => baseRoleTitle(a.title)).filter(Boolean);
 
-  const roleTitles = dedupe([
+  const roleTitles = dedupeRoles([
     ...chosen,
     ...detectRoleFamilies(text).map((r) => (seniority ? `${seniority} ${r}` : r)),
   ]).slice(0, 6);
@@ -304,15 +307,38 @@ function cleanQueries(raw: string[], max: number): string[] {
   return out;
 }
 
-const dedupe = (xs: string[]): string[] => {
-  const seen = new Set<string>();
-  return xs.filter((x) => {
-    const k = x.toLowerCase();
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-};
+/**
+ * The role a posting title names, without its team, product or company:
+ * "Software Development Engineer II, India HealthCare" -> "Software
+ * Development Engineer II", "Senior Software Engineer - Fullstack" -> "Senior
+ * Software Engineer".
+ */
+function baseRoleTitle(title: string): string {
+  return title
+    .replace(/\([^)]*\)/g, ' ')
+    .split(/\s[-–—|]\s|,|:/)[0]!
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * One title per kind of role. "Software Engineer", "Senior Software Engineer"
+ * and "SDE II" are the same search to a career site; keeping all three spends
+ * the slots that the sources which read only the first few titles have. The
+ * variant without a level wins, since it finds every level.
+ */
+function dedupeRoles(titles: string[]): string[] {
+  const byKind = new Map<string, string>();
+  for (const title of titles) {
+    const kind = withoutLevel(normalizeTitle(title));
+    if (!kind) continue;
+    const kept = byKind.get(kind);
+    if (!kept || withoutLevel(normalizeLabel(title)) === normalizeLabel(title) && title.length < kept.length) {
+      byKind.set(kind, title);
+    }
+  }
+  return [...byKind.values()];
+}
 
 /**
  * Does a posting we found incidentally look like something this candidate

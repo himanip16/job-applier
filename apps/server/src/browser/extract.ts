@@ -27,9 +27,33 @@ const EXTRACTOR = () => {
   const results: RawField[] = [];
   let counter = 0;
 
+  /**
+   * querySelectorAll that also descends into open shadow roots, in reading
+   * order. SmartRecruiters' application is built from `spl-*` web components
+   * with every input inside a shadow root: a plain querySelectorAll found
+   * nothing at all on it. Playwright's CSS engine pierces open shadow roots,
+   * so the `[data-ja-field]` selectors handed back still resolve when filling.
+   */
+  const deepAll = (root: ParentNode, sel: string): HTMLElement[] => {
+    const out: HTMLElement[] = [];
+    const visit = (node: ParentNode) => {
+      for (const el of Array.from(node.children)) {
+        if (el.matches(sel)) out.push(el as HTMLElement);
+        if (el.shadowRoot) visit(el.shadowRoot);
+        visit(el);
+      }
+    };
+    visit(root);
+    return out;
+  };
+
+  /** getElementById in the control's own tree: a shadow root's ids are not the document's. */
+  const byId = (el: Element, id: string): HTMLElement | null =>
+    (el.getRootNode() as Document | ShadowRoot).getElementById?.(id) ?? document.getElementById(id);
+
   // Clear any handles from a previous extraction on this page.
-  document.querySelectorAll(`[${ATTR}]`).forEach((n) => n.removeAttribute(ATTR));
-  document.querySelectorAll('[data-ja-group]').forEach((n) => n.removeAttribute('data-ja-group'));
+  deepAll(document, `[${ATTR}]`).forEach((n) => n.removeAttribute(ATTR));
+  deepAll(document, '[data-ja-group]').forEach((n) => n.removeAttribute('data-ja-group'));
 
   const visible = (el: Element): boolean => {
     const s = getComputedStyle(el as HTMLElement);
@@ -115,20 +139,34 @@ const EXTRACTOR = () => {
    */
   const labelFor = (el: HTMLElement, grouped = false): string => {
     const aria = el.getAttribute('aria-label');
-    if (aria?.trim()) return aria.trim();
+    // Rippling labels every dropdown "Search", "Select..." or "textbox" and
+    // names the actual question ("Gender", "Location") via aria-labelledby.
+    // Read aria-label first and those questions reached you as "Search".
+    const genericAria =
+      /^(search|select\W*|choose\W*|textbox|combobox|input)$/i.test(aria?.trim() ?? '') &&
+      el.hasAttribute('aria-labelledby');
+    if (aria?.trim() && !genericAria) {
+      // Workday's date boxes are labelled just "Month" / "Year"; the fieldset
+      // legend says which date ("From", "To (Actual or Expected)").
+      if (/^(day|month|year)$/i.test(aria.trim())) {
+        const legend = textOf(el.closest('fieldset')?.querySelector('legend') ?? null);
+        if (legend) return `${legend} ${aria.trim()}`;
+      }
+      return aria.trim();
+    }
 
     const labelledBy = el.getAttribute('aria-labelledby');
     if (labelledBy) {
       const parts = labelledBy
         .split(/\s+/)
-        .map((id) => textOf(document.getElementById(id)))
+        .map((id) => textOf(byId(el, id)))
         .filter(Boolean);
       if (parts.length) return parts.join(' ');
     }
 
     const id = el.getAttribute('id');
     if (id) {
-      const l = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+      const l = (el.getRootNode() as Document | ShadowRoot).querySelector(`label[for="${CSS.escape(id)}"]`);
       if (l) return textOf(l);
     }
 
@@ -157,13 +195,38 @@ const EXTRACTOR = () => {
     return el.getAttribute('placeholder')?.trim() ?? '';
   };
 
+  /**
+   * The caption for a checkbox that stands alone.
+   *
+   * Microsoft's acknowledgments ("By checking this you agree to the Microsoft
+   * Data Privacy Notice", the candidate code of conduct, the qualifications
+   * disclaimer) are each one checkbox with aria-label "Yes", inside a group
+   * that points at the real question with aria-labelledby. Read on its own
+   * label, every one of them came out as a required question called "Yes".
+   */
+  const BARE_ANSWER = /^(yes|i agree|agree|i accept|accept|i acknowledge|acknowledge|i confirm|confirm|ok)\.?$/i;
+  const loneCheckboxLabel = (el: HTMLElement): string => {
+    const own = labelFor(el);
+    if (own && !BARE_ANSWER.test(own)) return own;
+    const group = el.parentElement?.closest<HTMLElement>('[aria-labelledby]');
+    const named = group
+      ? (group.getAttribute('aria-labelledby') ?? '')
+          .split(/\s+/)
+          .map((id) => textOf(byId(el, id)))
+          .filter(Boolean)
+          .join(' ')
+      : '';
+    return named || textOf(el.closest('fieldset')?.querySelector('legend') ?? null) || own;
+  };
+
   const helpFor = (el: HTMLElement): string => {
     const describedBy = el.getAttribute('aria-describedby');
     if (describedBy) {
       const parts = describedBy
         .split(/\s+/)
-        .map((id) => textOf(document.getElementById(id)))
-        .filter((t) => t && !/error/i.test(t));
+        .map((id) => textOf(byId(el, id)))
+        // Workday points every prompt at its live "0 items selected" status.
+        .filter((t) => t && !/error/i.test(t) && !/^\d+ items? selected\b/i.test(t));
       if (parts.length) return parts.join(' ');
     }
     const wrapper = el.closest('.field-wrapper, fieldset, .field, .form-group');
@@ -171,10 +234,50 @@ const EXTRACTOR = () => {
     return hint ? textOf(hint) : '';
   };
 
+  /**
+   * The ARIA box around a set of options. Google's EEO race question puts
+   * `role="checkbox"` on the box around all of its checkboxes, so that counts
+   * too - but only when it holds several inputs, or every single consent
+   * checkbox would be mistaken for a group.
+   */
+  const ariaGroupOf = (el: HTMLElement): HTMLElement | null => {
+    const box = el.closest<HTMLElement>('[role="radiogroup"], [role="group"], [role="checkbox"]');
+    if (!box) return null;
+    if (box.getAttribute('role') !== 'checkbox' || box.querySelectorAll('input').length >= 2) return box;
+    return box.parentElement ? ariaGroupOf(box.parentElement) : null;
+  };
+
+  // Validation wording only. "Please indicate your gender" is a question.
+  const VALIDATION_TEXT =
+    /^(the answer is required|this (field|question) is required|required|error\b.*|please (select|choose|pick|enter|fill( in| out)?|complete|provide|make)( (an?|one|at least one|this|the|a valid|your))? ?(option|options|selection|value|answer|response|choice|field|question)\.?)$/i;
+
+  /** The plain-text question sitting just before an ARIA group, if any. */
+  const questionBefore = (group: HTMLElement): HTMLElement | null => {
+    // Step over a validation message ("The answer is required") that
+    // Google renders between the question and its options.
+    let prev = group.previousElementSibling as HTMLElement | null;
+    for (let hops = 0; prev && hops < 2; hops++, prev = prev.previousElementSibling as HTMLElement | null) {
+      if (prev.querySelector('input, select, textarea, button')) break;
+      const text = textOf(prev);
+      if (!text || VALIDATION_TEXT.test(text)) continue;
+      return text.length <= 300 ? prev : null;
+    }
+    return null;
+  };
+
   const isRequired = (el: HTMLElement): boolean => {
     if (el.hasAttribute('required') || el.getAttribute('aria-required') === 'true') return true;
     // Google Careers marks the group, not each radio in it.
     if (el.closest('[role="radiogroup"][aria-required="true"], [role="group"][aria-required="true"]')) return true;
+    // ...except the EEO race box, which carries no required flag at all. Its
+    // question ends in `*` or carries a "required field" marker instead.
+    const group = ariaGroupOf(el);
+    const question = group && questionBefore(group);
+    if (question) {
+      if (/[*\u2731\uFF0A]\s*$/.test(question.textContent ?? '')) return true;
+      if (question.querySelector('[aria-label*="required" i], [title*="required" i]')) return true;
+      if (/\brequired field\b/i.test(question.textContent ?? '')) return true;
+    }
     // A marker glyph in the label is the near-universal convention for forms
     // that do not set the attribute. Ashby draws its asterisk with CSS from a
     // `_required_xxxx` class on the question title, so there is no glyph in
@@ -228,23 +331,15 @@ const EXTRACTOR = () => {
     // An ARIA group that names itself, or whose question sits as plain text
     // in the element just before it - Google Careers' qualification
     // questions, which have no <label> or <legend> at all.
-    const group = container.closest<HTMLElement>('[role="radiogroup"], [role="group"]');
+    const group = ariaGroupOf(container);
     if (group) {
       const labelledBy = group.getAttribute('aria-labelledby');
       const named = labelledBy
         ? labelledBy.split(/\s+/).map((id) => textOf(document.getElementById(id))).filter(Boolean).join(' ')
         : '';
       if (named) return named;
-      // Step over a validation message ("The answer is required") that
-      // Google renders between the question and its options.
-      let prev = group.previousElementSibling;
-      for (let hops = 0; prev && hops < 2; hops++, prev = prev.previousElementSibling) {
-        if (prev.querySelector('input, select, textarea, button')) break;
-        const text = textOf(prev);
-        if (!text || /^(the answer is required|this (field|question) is required|required|error\b.*|please .*)$/i.test(text)) continue;
-        if (text.length <= 300) return text;
-        break;
-      }
+      const question = questionBefore(group);
+      if (question) return textOf(question);
       const aria = group.getAttribute('aria-label')?.trim();
       if (aria && !/radio input$/i.test(aria)) return aria;
     }
@@ -295,9 +390,27 @@ const EXTRACTOR = () => {
       });
     }
 
-    const controls = Array.from(
-      root.querySelectorAll<HTMLElement>('input, select, textarea'),
-    );
+    // ---- Workday dropdown ---------------------------------------------------
+    // "Phone Device Type": a <button aria-haspopup="listbox"> showing the
+    // choice, with the real value in a text input beside it. Neither looks
+    // like a select, so it was never asked and Workday refused the step.
+    deepAll(root, 'button[aria-haspopup="listbox"]').forEach((b) => {
+      if (!visible(b)) return;
+      results.push({
+        handle: mark(b),
+        name: b.getAttribute('name') || b.getAttribute('id') || '',
+        tag: 'button', type: 'button',
+        kind: 'SELECT',
+        widget: 'workday-dropdown',
+        label: labelFor(b),
+        helpText: helpFor(b),
+        required: isRequired(b) || /\brequired\b/i.test(b.getAttribute('aria-label') ?? ''),
+        // Read from Node by opening it, like react-select.
+        options: [],
+      });
+    });
+
+    const controls = deepAll(root, 'input, select, textarea');
 
     for (const el of controls) {
       const tag = el.tagName.toLowerCase();
@@ -306,12 +419,45 @@ const EXTRACTOR = () => {
       const id = el.getAttribute('id') ?? '';
 
       if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'image') continue;
+
+      // ---- select2 (Amazon's applicant forms, jQuery-era boards) ----------
+      // The real <select> is aria-hidden and clipped to 1px; the box a person
+      // sees is a <span role="combobox"> drawn beside it. The span carries the
+      // label and the required flag, the <select> carries the options - so
+      // this is read before the aria-hidden skip below, which would drop it.
+      if (tag === 'select' && el.classList.contains('select2-hidden-accessible')) {
+        const box = el.nextElementSibling?.querySelector<HTMLElement>('[role="combobox"]');
+        if (!box || !visible(box)) continue;
+        const sel = el as unknown as HTMLSelectElement;
+        const labelledBy = (box.getAttribute('aria-labelledby') ?? '')
+          .split(/\s+/)
+          .map((ref) => document.getElementById(ref)?.textContent?.trim() ?? '')
+          .filter(Boolean)
+          .join(' ');
+        results.push({
+          handle: mark(el),
+          name: el.getAttribute('name') || el.getAttribute('id') || '',
+          tag, type,
+          kind: sel.multiple ? 'MULTISELECT' : 'SELECT',
+          widget: 'select2',
+          label: labelledBy || labelFor(el),
+          helpText: helpFor(el),
+          required: box.getAttribute('aria-required') === 'true' || isRequired(el),
+          options: Array.from(sel.options)
+            .map((o) => ({ label: (o.textContent ?? '').trim(), value: o.value }))
+            .filter((o) => o.value !== '' && o.label && !/^(select\.*|choose\.*|please select)/i.test(o.label)),
+        });
+        continue;
+      }
+
       // react-select renders a second, aria-hidden input under each dropdown
       // purely for form validation. It is not a question; reading it asked
       // every Greenhouse dropdown twice, once as a text box.
       if (el.getAttribute('aria-hidden') === 'true') continue;
       if (CAPTCHA_NAMES.test(name) || CAPTCHA_NAMES.test(id)) continue;
       if (!visible(el) && type !== 'file') continue;
+      // The value-holder beside a Workday dropdown; the button is the question.
+      if (el.previousElementSibling?.matches('button[aria-haspopup="listbox"]')) continue;
 
       // ---- radio / checkbox groups -------------------------------------
       if (type === 'radio' || type === 'checkbox') {
@@ -328,7 +474,7 @@ const EXTRACTOR = () => {
             tag, type,
             kind: 'CHECKBOX',
             widget: 'native',
-            label: labelFor(el),
+            label: loneCheckboxLabel(el),
             helpText: helpFor(el),
             required: isRequired(el),
             options: [],
@@ -432,6 +578,28 @@ const EXTRACTOR = () => {
         continue;
       }
 
+      // ---- Workday prompt ---------------------------------------------------
+      // "How Did You Hear About Us?", "Country Phone Code": a plain text box
+      // (no role, no aria-haspopup) that searches, with the choice shown as a
+      // pill beside it. Read as a text box, it was typed into and left at
+      // "0 items selected", and Workday refused the step. Options are not
+      // harvested: many are trees ("Job Board" > "LinkedIn"), and the top
+      // level would limit the answer to a category, which is not selectable.
+      if (el.getAttribute('data-uxi-widget-type') === 'selectinput') {
+        results.push({
+          handle: mark(el),
+          name: el.getAttribute('name') || el.getAttribute('id') || '',
+          tag, type,
+          kind: 'SELECT',
+          widget: 'workday-prompt',
+          label: labelFor(el),
+          helpText: helpFor(el),
+          required: isRequired(el),
+          options: [],
+        });
+        continue;
+      }
+
       // ---- combobox (react-select and friends) -----------------------------
       const role = el.getAttribute('role');
       if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox') {
@@ -476,14 +644,11 @@ const EXTRACTOR = () => {
   }
 
   // Button groups are swept first; put everything back in the order a person
-  // reads the form, which is the order it is filled and reviewed in.
-  const at = (r: RawField) => document.querySelector(`[${ATTR}="${r.handle}"]`);
-  results.sort((a, b) => {
-    const ea = at(a);
-    const eb = at(b);
-    if (!ea || !eb) return 0;
-    return ea.compareDocumentPosition(eb) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
-  });
+  // reads the form, which is the order it is filled and reviewed in. Ranked
+  // by a deep walk rather than compareDocumentPosition, which cannot order
+  // elements in different shadow trees.
+  const rank = new Map(deepAll(document, `[${ATTR}]`).map((el, i) => [el.getAttribute(ATTR), i]));
+  results.sort((a, b) => (rank.get(a.handle) ?? 0) - (rank.get(b.handle) ?? 0));
   return results;
 };
 
@@ -507,10 +672,12 @@ export async function extractFields(
 
     let options = r.options;
     if (
-      r.widget === 'react-select' &&
+      (r.widget === 'react-select' || r.widget === 'workday-dropdown') &&
       (opts.harvestComboboxOptions ?? true)
     ) {
       options = await harvestOptions(page, `[data-ja-field="${r.handle}"]`, opts.maxOptions ?? 400);
+      // Workday lists its own placeholder as the first option.
+      options = options.filter((o) => !/^(select one|select\.*|choose\.*)$/i.test(o.label));
     }
 
     const canonical = matchCanonical(r.label);

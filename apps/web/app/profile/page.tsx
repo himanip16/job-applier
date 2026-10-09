@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { API, api } from '../../lib/api';
 import { Icon, type IconName } from '../../components/Icon';
 import s from './profile.module.css';
+import { History } from './History';
 
 interface Fact { id: string; key: string; label: string; value: string }
 interface Resume { id: string; label: string; filename: string; bytes: number; isDefault: boolean }
@@ -118,6 +119,12 @@ export default function ProfilePage() {
       const res = await fetch(`${API}/api/resume`, { method: 'POST', body: fd, credentials: 'include' });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? 'Upload failed');
+      // A new resume replaces the current one: apply with it, and update the
+      // details from it rather than only filling blanks.
+      if (body.resume && !body.resume.isDefault) {
+        await switchResume(body.resume, body.warning);
+        return;
+      }
       const filled: Key[] = body.filled ?? [];
       await load();
       setFresh(filled);
@@ -133,6 +140,42 @@ export default function ProfilePage() {
       setNotice({ ok: false, text: (e as Error).message });
     } finally {
       setUploading(false);
+    }
+  }
+
+  /**
+   * Switch the resume used for applications, and bring the details in line
+   * with it. Unlike "Autofill from resume" this overwrites: picking a resume
+   * says it is the current one. A detail the resume does not state is left
+   * as it is rather than cleared.
+   */
+  async function switchResume(r: Pick<Resume, 'id' | 'filename'>, warning?: string) {
+    setNotice(null);
+    const caveat = warning ? ` Note: ${warning}` : '';
+    try {
+      await api(`/api/resume/${r.id}/default`, { method: 'POST' });
+      const d = await api<{ details: Record<string, string> }>('/api/profile/autofill');
+      const changed = Object.entries(d.details).filter(
+        ([k, v]) => trimmed(v) && trimmed(v) !== trimmed(profile[k as Key]),
+      );
+      await load();
+      if (!changed.length) {
+        setNotice({ ok: true, text: `Now using ${r.filename}. Your details already match it.${caveat}` });
+        return;
+      }
+      edit(Object.fromEntries(changed) as Partial<Profile>);
+      setFresh(changed.map(([k]) => k as Key));
+      setNotice({
+        ok: true,
+        text: `Now using ${r.filename}. Updated from it: ${changed
+          .map(([k, v]) => {
+            const was = trimmed(profile[k as Key]);
+            return was ? `${labelOf(k)} (was ${was}, now ${v})` : `${labelOf(k)} (${v})`;
+          })
+          .join('; ')}.${caveat}`,
+      });
+    } catch (e) {
+      setNotice({ ok: false, text: (e as Error).message });
     }
   }
 
@@ -261,10 +304,8 @@ export default function ProfilePage() {
                 ) : (
                   <button
                     className={s.ghostBtn}
-                    onClick={async () => {
-                      await api(`/api/resume/${r.id}/default`, { method: 'POST' });
-                      await load();
-                    }}
+                    onClick={() => switchResume(r)}
+                    title="Use this resume for applications, and update your details from it"
                   >
                     Use this one
                   </button>
@@ -333,6 +374,14 @@ export default function ProfilePage() {
           </div>
         </div>
       </section>
+
+      {profile.id && (
+        <History
+          key={profile.id}
+          facts={profile.facts ?? []}
+          onError={(text) => setNotice({ ok: false, text })}
+        />
+      )}
 
       <a href="/answers" className={`${s.section} ${s.linkCard}`}>
         <span className={s.sectionIcon}><Icon name="checkCircle" size={18} /></span>

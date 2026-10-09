@@ -19,6 +19,8 @@ export interface View {
   maxYears: string;
   tier: string;
   company: string;
+  /** Companies to leave out of the list. */
+  notCompanies: string[];
   autoApply: boolean;
   excludeSenior: boolean;
   hiring: boolean;
@@ -39,6 +41,7 @@ export const DEFAULT_VIEW: View = {
   maxYears: '',
   tier: '',
   company: '',
+  notCompanies: [],
   autoApply: false,
   excludeSenior: false,
   hiring: false,
@@ -93,21 +96,30 @@ export const TIER_LABELS: Record<string, string> = {
   'infra-saas': 'Infra & SaaS',
   'india-product': 'Indian product',
   'finance-gcc': 'Finance & GCC',
+  shortlist: 'Your shortlist',
+  global: 'Remote or visa',
 };
 
 export const WORK_MODE_LABELS: Record<View['remote'], string> = { any: 'Any work mode', yes: 'Remote', no: 'On-site' };
 
 /** Everything but the tab, the sort and the page size: what "Clear all" resets. */
 export const FILTER_KEYS = [
-  'q', 'minScore', 'postedWithin', 'country', 'city', 'remote', 'minPay', 'maxYears', 'tier', 'company', 'autoApply', 'excludeSenior', 'hiring', 'depth',
+  'q', 'minScore', 'postedWithin', 'country', 'city', 'remote', 'minPay', 'maxYears', 'tier', 'company', 'notCompanies', 'autoApply', 'excludeSenior', 'hiring', 'depth',
 ] as const satisfies readonly (keyof View)[];
 
-export const isDefault = (view: View, key: (typeof FILTER_KEYS)[number]) => view[key] === DEFAULT_VIEW[key];
+export const isDefault = (view: View, key: (typeof FILTER_KEYS)[number]) => {
+  const v = view[key];
+  return Array.isArray(v) ? v.length === 0 : v === DEFAULT_VIEW[key];
+};
 
 export function queryString(view: View, page: number): string {
   const params = new URLSearchParams({ status: view.status, sort: view.sort, limit: String(view.limit), page: String(page) });
   for (const key of FILTER_KEYS) {
-    if (!isDefault(view, key)) params.set(key, String(view[key]));
+    if (isDefault(view, key)) continue;
+    const v = view[key];
+    // One parameter per company: names can contain commas ("Acme, Inc.").
+    if (Array.isArray(v)) v.forEach((x) => params.append(key, x));
+    else params.set(key, String(v));
   }
   return params.toString();
 }
@@ -124,6 +136,7 @@ export function viewFromQuery(search: string): Partial<View> {
   }
   if (['any', 'yes', 'no'].includes(p.get('remote') ?? '')) out.remote = p.get('remote') as View['remote'];
   if (['any', 'deep', 'quick'].includes(p.get('depth') ?? '')) out.depth = p.get('depth') as View['depth'];
+  if (p.has('notCompanies')) out.notCompanies = p.getAll('notCompanies').filter(Boolean);
   if (p.has('autoApply')) out.autoApply = p.get('autoApply') === 'true';
   if (p.has('excludeSenior')) out.excludeSenior = p.get('excludeSenior') === 'true';
   if (p.has('hiring')) out.hiring = p.get('hiring') === 'true';
