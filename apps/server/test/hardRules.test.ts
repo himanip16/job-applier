@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import {
   applyHardRules,
   candidateConstraints,
   experienceVerdict,
   parseRequiredYears,
   parseYears,
+  offDomainVerdict,
   sponsorshipVerdict,
   parseSalary,
   parseSalaryExpectation,
@@ -201,6 +206,77 @@ describe('what the rules do to a score', () => {
     const withBlocker: FitAssessment = { ...fit(70), dealbreaker: 'Requires US security clearance.' };
     const job = { title: 'Engineer', location: 'Bengaluru, India', descriptionText: '9+ years.' };
     expect(applyHardRules(withBlocker, { ...ME, job }).dealbreaker).toBe('Requires US security clearance.');
+  });
+});
+
+
+describe('jobs in another profession', () => {
+  const drops = (title: string) => Boolean(offDomainVerdict(title));
+
+  it('drops the ones that share a word with engineering and nothing else', () => {
+    // A keyword scorer sees "Talent Acquisition Partner - Engineering" sharing
+    // "engineering" with the resume, and a model asked whether it fits hedges.
+    for (const title of [
+      'Talent Acquisition Partner - Engineering',
+      'Technical Recruiter',
+      'Sales Development Representative',
+      'Senior Account Executive - Credit & Lending Products',
+      'Senior Product Marketing Manager - Cards & Spend Management',
+      'Content Marketer',
+      'Customer Success Manager',
+      'Senior Internal Auditor - Finance',
+      'Counsel, Product & Regulatory - Payments & AML',
+      'Staff Visual Designer - Design Systems',
+      'Senior Product Designer - Cards & Credit',
+      'Senior Product Manager - Users',
+      'Senior Strategic Partnerships Manager - Enterprise',
+      'Technical Program Manager',
+      'Office Manager',
+    ]) {
+      expect(drops(title), title).toBe(true);
+    }
+  });
+
+  it('keeps engineering roles whatever team they serve', () => {
+    // "Software Engineer, Marketing Platform" is not a marketing job. The
+    // difference is whether the discipline is the noun or the qualifier.
+    for (const title of [
+      'Senior Backend Engineer - Product',
+      'Software Engineer - Infrastructure',
+      'Software Engineer, Marketing Platform',
+      'Senior Data Engineer, Sales Analytics',
+      'Staff Platform Engineer',
+      'Senior Full-Stack Engineer',
+      'Head of Data Engineering & Platform',
+      'Site Reliability Engineer',
+      'Engineer, Payments',
+      'Backend Developer',
+    ]) {
+      expect(drops(title), title).toBe(false);
+    }
+  });
+
+  it('leaves nothing but technical roles on a real board', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const { titles } = JSON.parse(
+      readFileSync(path.resolve(here, '../../../fixtures/mercury-board-titles.json'), 'utf8'),
+    ) as { titles: string[] };
+
+    const kept = titles.filter((t) => !drops(t));
+    // Fifty-five real openings; a backend engineer could hold about a sixth.
+    expect(kept.length).toBeGreaterThan(8);
+    expect(kept.length).toBeLessThan(22);
+    for (const title of kept) {
+      expect(title, `kept: ${title}`).toMatch(
+        /engineer|developer|architect|technolog|infrastructure|platform|security|data|technical/i,
+      );
+    }
+  });
+
+  it('reads as a blocker, with the profession named', () => {
+    const v = offDomainVerdict('Senior Recruiter');
+    expect(v?.dealbreaker).toMatch(/recruiting role/i);
+    expect(v?.against).toMatch(/Senior Recruiter/);
   });
 });
 

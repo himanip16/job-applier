@@ -294,6 +294,75 @@ export function sponsorshipVerdict(
   };
 }
 
+// ---------------------------------------------------------------- domain ---
+
+/**
+ * Titles that are simply somebody else's job.
+ *
+ * A backend engineer's queue should never contain a recruiter, a marketer or
+ * an account executive, and it kept containing them: a keyword scorer sees
+ * "Talent Acquisition Partner - Engineering" sharing the word "engineering"
+ * with the resume, and a model asked whether it fits will hedge rather than
+ * say no.
+ *
+ * Matched on the title only. A description mentions sales, marketing and
+ * recruiting in passing on almost every posting - "you will partner with
+ * sales" is on half the engineering jobs ever written - so reading the body
+ * for these words would throw away the good ones.
+ */
+const OFF_DOMAIN = [
+  ['recruiting', /\b(recruit(er|ing|ment)?|talent acquisition|sourcer|people (ops|operations|partner)|hr\b|human resources|hris)\b/i],
+  ['sales', /\b(sales|account (executive|manager|director)|business development|bdr\b|sdr\b|revenue (operations|ops)|quota|pre[- ]?sales)\b/i],
+  ['marketing', /\b(marketer|marketing|brand|content strateg|seo\b|demand gen|growth marketing|communications|social media|copywriter|public relations)\b/i],
+  ['customer support', /\b(customer (support|success|service|experience)|support (agent|specialist|advocate)|help ?desk|technical support)\b/i],
+  ['finance and legal', /\b(accountant|accounting|bookkeep|controller|auditor|counsel|paralegal|attorney|paraleg|compliance (officer|manager)|underwrit|actuar|tax\b)\b/i],
+  ['design', /\b(product|graphic|visual|brand|ux|ui) designer\b|\b(ux|ui) (researcher|writer)\b|\billustrator\b|\bcopy ?editor\b/i],
+  ['product management', /\bproduct (manager|owner|lead|management)\b|\bhead of product\b/i],
+  ['partnerships', /\bpartnerships?\b|\bbiz ?dev\b|\balliances\b/i],
+  ['program management', /\b(program|project|delivery) manager\b|\bprogram management\b|\bscrum master\b|\bchief of staff\b/i],
+  ['risk and operations', /\b(underwrit|actuar|risk (manager|strategist|analyst)|fraud (analyst|investigator)|operations (lead|manager|specialist|analyst))\b/i],
+  ['operations', /\b(office manager|executive assistant|administrative assistant|facilities|procurement|logistics coordinator|warehouse|events? (and|&) experiences?|events specialist)\b/i],
+] as const;
+
+/**
+ * Words that put a title back in scope even though an off-domain word matched.
+ *
+ * "Sales Engineering Manager" is still sales; "Software Engineer, Marketing
+ * Platform" is not marketing. The difference is whether the engineering word
+ * is the noun or the qualifier, which in practice means: does the title lead
+ * with a job this person does.
+ */
+const DISCIPLINE =
+  '(?:software|backend|back[- ]end|frontend|front[- ]end|full[- ]?stack|platform|infrastructure|systems?|data|machine learning|ml|ai|devops|site reliability|security|mobile|android|ios|cloud|embedded|qa|test)';
+const RANK = '(?:senior|staff|principal|lead|junior|associate|sr\\.?|jr\\.?|mid|ii+|[0-9])';
+const IN_DOMAIN_HEAD = new RegExp(
+  // "Senior Backend Engineer, Growth" - the discipline leads, the team follows.
+  `^(?:${RANK}\\s+)?${DISCIPLINE}\\b` +
+    // "Head of Data Engineering", "Director of Infrastructure" - the same job,
+    // one rung up, and still this person's profession.
+    `|^(?:head of|director of|vp of|vice president,? of)\\s+${DISCIPLINE}\\b` +
+    // A bare engineering title with no qualifier at all.
+    `|^(?:${RANK}\\s+)?(?:engineer|developer|architect|programmer)\\b`,
+  'i',
+);
+
+/** Is this title a job in another profession entirely? */
+export function offDomainVerdict(title: string): HardRuleVerdict | null {
+  const clean = title.trim();
+  // A title that starts by naming an engineering discipline is in scope, even
+  // when the team it serves is a sales or marketing one.
+  if (IN_DOMAIN_HEAD.test(clean)) return null;
+
+  for (const [domain, pattern] of OFF_DOMAIN) {
+    if (!pattern.test(clean)) continue;
+    return {
+      dealbreaker: `Not your profession - this is a ${domain} role.`,
+      against: `"${clean}" is a ${domain} job, not an engineering one.`,
+    };
+  }
+  return null;
+}
+
 // ----------------------------------------------------------------- apply ---
 
 /**
@@ -310,6 +379,7 @@ export function applyHardRules(
 ): FitAssessment {
   const text = `${args.job.title}\n${args.job.descriptionText ?? ''}`;
   const verdicts = [
+    offDomainVerdict(args.job.title),
     experienceVerdict(args.candidateYears, text),
     sponsorshipVerdict(args.needsSponsorship, args.job),
     salaryVerdict(args.salaryExpectations, args.currentCTC, args.job),
