@@ -1,6 +1,8 @@
 import { prisma } from '../lib/db.js';
 import { bus } from '../lib/events.js';
 import { runApplication } from './runner.js';
+import { markLeadProcessing, syncLead } from './leadSync.js';
+import { give, tryTake, whenSlotFrees } from './slots.js';
 
 /**
  * A deliberately small in-process queue.
@@ -11,18 +13,19 @@ import { runApplication } from './runner.js';
  * input is a poor fit for a visibility-timeout model. Postgres holds the state,
  * this holds the concurrency limit, and there is one less service to run.
  *
- * Concurrency is 1 by default and should stay there while HEADLESS=false:
- * parallel runs fight over window focus, and focus loss breaks combobox
- * interaction.
+ * Several forms fill at once, each in its own tab (RUN_CONCURRENCY, default
+ * 3). See slots.ts for why a run waiting on you does not count against that.
  */
-const CONCURRENCY = Number(process.env.RUN_CONCURRENCY ?? 1);
-
 const queued: string[] = [];
+/** Every run in flight, including ones parked on you. */
 const active = new Set<string>();
+
+whenSlotFrees(() => pump());
 
 export function enqueue(applicationId: string): void {
   if (active.has(applicationId) || queued.includes(applicationId)) return;
   queued.push(applicationId);
+  void markLeadProcessing(applicationId).catch(() => {});
   pump();
 }
 
@@ -31,7 +34,7 @@ export function activeRuns(): string[] {
 }
 
 function pump(): void {
-  while (active.size < CONCURRENCY && queued.length) {
+  while (queued.length && tryTake(queued[0]!)) {
     const id = queued.shift()!;
     active.add(id);
     void runApplication(id)
@@ -42,7 +45,9 @@ function pump(): void {
       })
       .finally(() => {
         active.delete(id);
-        pump();
+        give(id);
+        // Submitted -> Applied, failed -> back to For you, waiting on you -> stays Processing.
+        void syncLead(id).catch(() => {});
       });
   }
 }
@@ -54,11 +59,55 @@ function pump(): void {
  * change.
  */
 export async function recoverInterruptedRuns(): Promise<number> {
+  // Waiting for you at a wall needs the browser page, and that died with the
+  // old process. Nothing is waiting any more, so say it stopped - unless a
+  // submit may have landed, which a person has to check.
+  const orphaned = await prisma.application.findMany({
+    where: { status: 'NEEDS_HUMAN' },
+    select: { id: true, blockedReason: true },
+  });
+  for (const app of orphaned) {
+    if (/Submit was pressed|mid-submit|may have gone through/i.test(app.blockedReason ?? '')) continue;
+    const interrupted = /Auto-apply was interrupted/i.test(app.blockedReason ?? '');
+    await prisma.application.update({
+      where: { id: app.id },
+      data: {
+        status: 'FAILED',
+        blockedReason: interrupted
+          ? 'Auto-apply was interrupted by a server restart. Review is back on; retry it if you still want it.'
+          : `Stopped by a server restart while it was waiting for you (${(app.blockedReason ?? 'in the browser').slice(0, 160)}). Retry it.`,
+      },
+    });
+    await syncLead(app.id);
+  }
+
   const stuck = await prisma.application.findMany({
-    where: { status: { in: ['PREPARING', 'FILLING', 'NEEDS_INPUT', 'REVIEW', 'SUBMITTING'] } },
-    select: { id: true, status: true },
+    // QUEUED too: the queue is in memory, so a run waiting its turn when the
+    // process died is as orphaned as one that was mid-fill.
+    where: { status: { in: ['QUEUED', 'PREPARING', 'FILLING', 'NEEDS_INPUT', 'REVIEW', 'SUBMITTING'] } },
+    select: { id: true, status: true, requiresReview: true },
   });
   for (const app of stuck) {
+    // Autopilot never parks on questions: it set this aside and ended the run,
+    // so nothing died with the process. Answering still restarts it.
+    if (app.status === 'NEEDS_INPUT' && !app.requiresReview) continue;
+    // Auto-apply submits without asking, so it never resumes unattended after
+    // a restart: review goes back on and it waits for you to start it again.
+    if (!app.requiresReview) {
+      await prisma.application.update({
+        where: { id: app.id },
+        data: {
+          status: app.status === 'SUBMITTING' ? 'NEEDS_HUMAN' : 'FAILED',
+          requiresReview: true,
+          blockedReason:
+            app.status === 'SUBMITTING'
+              ? 'The server restarted mid-submit. Check the job board before retrying - it may have gone through.'
+              : 'Auto-apply was interrupted by a server restart. Review is back on; retry it if you still want it.',
+        },
+      });
+      await prisma.pendingQuestion.deleteMany({ where: { applicationId: app.id, answeredAt: null } });
+      continue;
+    }
     // SUBMITTING is the dangerous one: the click may have landed. Never retry
     // it automatically - a duplicate application is worse than a stalled one.
     const status = app.status === 'SUBMITTING' ? 'NEEDS_HUMAN' : 'QUEUED';
@@ -74,6 +123,8 @@ export async function recoverInterruptedRuns(): Promise<number> {
     });
     // Clear stale questions; they will be re-asked against the fresh page.
     await prisma.pendingQuestion.deleteMany({ where: { applicationId: app.id, answeredAt: null } });
+    // Marking it QUEUED is not the same as queueing it.
+    if (status === 'QUEUED') enqueue(app.id);
   }
   return stuck.length;
 }

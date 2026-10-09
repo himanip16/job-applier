@@ -21,6 +21,8 @@ export function renderCandidateContext(
   if (profile.linkedin) lines.push(`linkedin: ${profile.linkedin}`);
   if (profile.github) lines.push(`github: ${profile.github}`);
   if (profile.website) lines.push(`website: ${profile.website}`);
+  if (profile.currentCTC) lines.push(`currentCTC: ${profile.currentCTC}`);
+  if (profile.expectedCTC) lines.push(`expectedCTC: ${profile.expectedCTC}`);
   if (profile.summary) lines.push(`summary: ${profile.summary}`);
   lines.push('</candidate_profile>');
 

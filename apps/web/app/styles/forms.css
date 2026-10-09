@@ -1,0 +1,40 @@
+/* ---------------------------------------------------------------- forms */
+
+label.field { display: block; margin-bottom: 0.9rem; }
+label.field > span {
+  display: block; font-size: var(--fs-sm); font-weight: 560; color: var(--text-dim);
+  margin-bottom: 0.3rem;
+}
+
+input[type=text], input[type=email], input[type=url], input[type=password],
+input[type=number], input[type=search], input[type=date], select, textarea {
+  width: 100%; padding: 0.5rem 0.7rem;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font: inherit; font-size: var(--fs-md);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+input::placeholder, textarea::placeholder { color: var(--muted); }
+textarea { resize: vertical; min-height: 5.5rem; line-height: 1.5; }
+
+input:hover:not(:disabled), select:hover:not(:disabled), textarea:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: var(--panel);
+}
+input:disabled, select:disabled, textarea:disabled { opacity: 0.55; cursor: not-allowed; }
+input[type=checkbox], input[type=radio] {
+  width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer;
+  flex: none;
+}
+
+/* A checkbox and its wording as one clickable unit, aligned on the first line. */
+.check {
+  display: inline-flex; align-items: flex-start; gap: 0.5rem;
+  font-size: var(--fs-md); color: var(--text-dim); cursor: pointer; line-height: 1.45;
+}
+.check input { margin-top: 0.14rem; }

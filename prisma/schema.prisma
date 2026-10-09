@@ -19,25 +19,93 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Profile {
+/// A person who can sign in.
+///
+/// Kept separate from Profile on purpose. Profile is the candidate dossier -
+/// resume text, facts, answers - and it is what every run, lead and
+/// application already hangs off. User is only the credential and the session
+/// anchor, so signing in never touches the dossier and a future "two resumes,
+/// one login" needs no rework of the tables that matter.
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  /// scrypt, as "scrypt$N$r$p$salt$hash". Never the password.
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  lastLoginAt  DateTime?
+
+  profile       Profile?
+  sessions      Session[]
+  passwordResets PasswordReset[]
+
+  @@map("users")
+}
+
+/// One signed-in browser.
+///
+/// An opaque random token stored server-side rather than a self-describing
+/// one, so signing out actually ends the session instead of asking the holder
+/// nicely to forget it.
+model Session {
   id        String   @id @default(cuid())
-  email     String   @unique
-  fullName  String
-  firstName String
-  lastName  String
-  phone     String?
+  /// The value in the cookie. Random, 32 bytes, base64url.
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  userAgent String?
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+/// A password reset token.
+///
+/// These are short-lived, single-use tokens sent by email to let a user
+/// regain access to their account without knowing their current password.
+model PasswordReset {
+  id        String   @id @default(cuid())
+  /// SHA-256 hash of the random token sent to the user's email.
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  /// Set when the token is successfully used, to prevent reuse.
+  usedAt    DateTime?
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("password_resets")
+}
+
+model Profile {
+  id          String  @id @default(cuid())
+  /// Null only for the single profile that predates sign-in; the adopt script
+  /// attaches it to a user on first run.
+  userId      String? @unique
+  user        User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email       String  @unique
+  fullName    String
+  firstName   String
+  lastName    String
+  phone       String?
   // Structured location so adapters can fill city/state/country separately.
-  city      String?
-  region    String?
-  country   String?
-  countryCode String?  // ISO-2, for phone/country comboboxes
-  linkedin  String?
-  github    String?
-  website   String?
-  portfolio String?
+  city        String?
+  region      String?
+  country     String?
+  countryCode String? // ISO-2, for phone/country comboboxes
+  citizenship String? // Citizenship country for visa sponsorship determination
+  currentCTC  String? // Current salary/CTC
+  expectedCTC String? // Expected salary/CTC
+  linkedin    String?
+  github      String?
+  website     String?
+  portfolio   String?
 
   // Free-form narrative used to ground cover letters and answer inference.
-  summary   String?  @db.Text
+  summary    String? @db.Text
   // Full plain-text of the resume. Extracted once at upload; the LLM reads
   // this, never the raw PDF bytes.
   resumeText String? @db.Text
@@ -49,6 +117,9 @@ model Profile {
   resumes      ResumeFile[]
   answers      Answer[]
   applications Application[]
+  linkedinSyncs LinkedInSync[]
+  conversations LinkedInConversation[]
+  outreachItems OutreachItem[]
 
   @@map("profiles")
 }
@@ -56,12 +127,12 @@ model Profile {
 /// Atomic, checkable facts about the candidate. The LLM may only answer a
 /// form question if the answer is derivable from these + resumeText.
 model ProfileFact {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   profileId String
-  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
-  key       String   // e.g. "work_authorization.us"
-  label     String   // human-readable question this fact answers
+  key       String // e.g. "work_authorization.us"
+  label     String // human-readable question this fact answers
   value     String   @db.Text
   kind      FactKind @default(TEXT)
   createdAt DateTime @default(now())
@@ -81,14 +152,14 @@ enum FactKind {
 }
 
 model ResumeFile {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   profileId String
-  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
-  label     String   // "Default", "Backend-focused", ...
+  label     String // "Default", "Backend-focused", ...
   filename  String
   mimeType  String
-  path      String   // on-disk path under storage/resumes
+  path      String // on-disk path under storage/resumes
   bytes     Int
   isDefault Boolean  @default(false)
   text      String?  @db.Text
@@ -100,41 +171,41 @@ model ResumeFile {
 /// The persistent answer bank — the thing that makes application #2 faster
 /// than application #1.
 model Answer {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   profileId String
-  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
   /// Canonical key when a rule matched (e.g. "visa.sponsorship_required"),
   /// otherwise null and matching falls back to label similarity.
-  canonicalKey String?
+  canonicalKey    String?
   /// Normalised question text, used for exact-hash and fuzzy matching.
   normalizedLabel String
   /// The exact label as it appeared, for display.
-  rawLabel       String  @db.Text
+  rawLabel        String  @db.Text
   /// Sparse lexical vector for similarity search, stored as {term: weight}.
-  vector         Json
+  vector          Json
 
   /// The answer itself. `value` is the canonical machine value; `displayValue`
   /// is what gets typed/selected in a form.
   value        Json
-  displayValue String  @db.Text
+  displayValue String @db.Text
 
-  fieldKind   FieldKind
+  fieldKind FieldKind
   /// Option set this answer was given against, if any. Reusing an answer
   /// requires the new field's options to be compatible.
-  options     Json?
+  options   Json?
 
-  source      AnswerSource
-  confidence  Float        @default(1)
+  source     AnswerSource
+  confidence Float        @default(1)
   /// PER_COMPANY answers (essays like "why do you want to work here") are
   /// never reused verbatim across companies.
-  scope       AnswerScope  @default(GLOBAL)
-  companyKey  String?
+  scope      AnswerScope  @default(GLOBAL)
+  companyKey String?
 
-  timesUsed   Int      @default(0)
-  lastUsedAt  DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  timesUsed  Int       @default(0)
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@index([profileId, canonicalKey])
   @@index([profileId, normalizedLabel])
@@ -142,9 +213,9 @@ model Answer {
 }
 
 enum AnswerSource {
-  USER        // a human typed it. Highest trust, never overwritten silently.
-  PROFILE     // read straight off the structured profile
-  INFERRED    // LLM derived it from profile/resume with high confidence
+  USER // a human typed it. Highest trust, never overwritten silently.
+  PROFILE // read straight off the structured profile
+  INFERRED // LLM derived it from profile/resume with high confidence
 }
 
 enum AnswerScope {
@@ -170,14 +241,14 @@ enum FieldKind {
 }
 
 model Job {
-  id        String   @id @default(cuid())
-  url       String   @unique
-  ats       String   // greenhouse | lever | ashby | workable | generic
-  company   String
-  title     String
-  location  String?
-  descriptionText String? @db.Text
-  discoveredAt DateTime @default(now())
+  id              String   @id @default(cuid())
+  url             String   @unique
+  ats             String // greenhouse | lever | ashby | workable | generic
+  company         String
+  title           String
+  location        String?
+  descriptionText String?  @db.Text
+  discoveredAt    DateTime @default(now())
 
   applications Application[]
 
@@ -185,25 +256,30 @@ model Job {
 }
 
 model Application {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   profileId String
-  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
   jobId     String
-  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job       Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
-  status    AppStatus @default(QUEUED)
+  status        AppStatus @default(QUEUED)
   /// Set when status = NEEDS_INPUT / BLOCKED so the UI can explain itself.
-  blockedReason String?  @db.Text
+  blockedReason String?   @db.Text
 
   /// Snapshot of every field we discovered plus what we filled. This is the
   /// audit trail — you can prove exactly what was submitted on your behalf.
-  fieldPlan Json?
-  coverLetter String? @db.Text
+  fieldPlan    Json?
+  /// Whether to write one at all. Off by default: most applications do not
+  /// need a cover letter, and generating one for every job spends a model
+  /// call and thirty seconds on something nobody reads. A form that *requires*
+  /// one still gets one - the run says so in its log.
+  writeCoverLetter Boolean @default(false)
+  coverLetter  String? @db.Text
   resumeFileId String?
 
-  requiresReview Boolean @default(true)
-  submittedAt   DateTime?
-  confirmation  String?  @db.Text
+  requiresReview Boolean   @default(true)
+  submittedAt    DateTime?
+  confirmation   String?   @db.Text
 
   attempts  Int      @default(0)
   createdAt DateTime @default(now())
@@ -213,19 +289,19 @@ model Application {
   /// Where this stands with the employer, as opposed to `status`, which is
   /// where the automation got to. A run can be SUBMITTED and the outcome
   /// REJECTED; they are different facts and conflating them loses both.
-  outcome      Outcome  @default(IN_PROGRESS)
-  outcomeAt    DateTime?
-  outcomeNote  String?  @db.Text
+  outcome          Outcome   @default(IN_PROGRESS)
+  outcomeAt        DateTime?
+  outcomeNote      String?   @db.Text
   /// The tailored resume that actually went out, if one did.
   tailoredResumeId String?
   /// Free-form notes: recruiter name, referral, salary discussed.
-  notes        String?  @db.Text
+  notes            String?   @db.Text
 
-  events   ApplicationEvent[]
-  pending  PendingQuestion[]
+  events    ApplicationEvent[]
+  pending   PendingQuestion[]
   artifacts Artifact[]
-  rounds   InterviewRound[]
-  lessons  Lesson[]
+  rounds    InterviewRound[]
+  lessons   Lesson[]
 
   @@unique([profileId, jobId])
   @@index([status])
@@ -234,11 +310,11 @@ model Application {
 
 enum AppStatus {
   QUEUED
-  PREPARING      // fetching page, parsing form, writing cover letter
+  PREPARING // fetching page, parsing form, writing cover letter
   FILLING
-  NEEDS_INPUT    // blocked on a human answering a question
-  NEEDS_HUMAN    // blocked on captcha / login / email verification
-  REVIEW         // filled and waiting for the human's go-ahead
+  NEEDS_INPUT // blocked on a human answering a question
+  NEEDS_HUMAN // blocked on captcha / login / email verification
+  REVIEW // filled and waiting for the human's go-ahead
   SUBMITTING
   SUBMITTED
   FAILED
@@ -247,42 +323,42 @@ enum AppStatus {
 
 /// An open question the run is blocked on. Answering it writes to Answer.
 model PendingQuestion {
-  id            String   @id @default(cuid())
+  id            String      @id @default(cuid())
   applicationId String
   application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
   /// The run-scoped handle the runner addresses this control by.
   fieldId       String
   fieldSelector String
-  rawLabel      String   @db.Text
-  helpText      String?  @db.Text
+  rawLabel      String    @db.Text
+  helpText      String?   @db.Text
   fieldKind     FieldKind
   options       Json?
-  required      Boolean  @default(true)
+  required      Boolean   @default(true)
 
   /// Why we are asking rather than answering: NO_MATCH | LOW_CONFIDENCE | POLICY
-  reason        String
+  reason              String
   /// The LLM's best guess, shown as a prefill the human can accept or correct.
-  suggestion    Json?
+  suggestion          Json?
   suggestionRationale String? @db.Text
 
-  answeredAt    DateTime?
-  answerValue   Json?
+  answeredAt  DateTime?
+  answerValue Json?
   /// Whether the human wants this remembered for future applications.
-  remember      Boolean  @default(true)
+  remember    Boolean   @default(true)
 
-  createdAt     DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@index([applicationId, answeredAt])
   @@map("pending_questions")
 }
 
 model ApplicationEvent {
-  id            String   @id @default(cuid())
+  id            String      @id @default(cuid())
   applicationId String
   application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
-  type      String   // STATUS | LOG | FIELD_FILLED | QUESTION_ASKED | ...
+  type      String // STATUS | LOG | FIELD_FILLED | QUESTION_ASKED | ...
   message   String   @db.Text
   data      Json?
   createdAt DateTime @default(now())
@@ -292,11 +368,11 @@ model ApplicationEvent {
 }
 
 model Artifact {
-  id            String   @id @default(cuid())
+  id            String      @id @default(cuid())
   applicationId String
   application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
-  kind      String   // screenshot | dom | payload
+  kind      String // screenshot | dom | payload
   label     String
   path      String
   createdAt DateTime @default(now())
@@ -313,18 +389,18 @@ model Artifact {
 /// postings API - the boards publish them so aggregators can read them - which
 /// is far kinder and far more reliable than scraping the rendered page.
 model Company {
-  id        String   @id @default(cuid())
-  name      String
+  id            String    @id @default(cuid())
+  name          String
   /// greenhouse | lever | ashby | workable | careers-page
-  source    String
+  source        String
   /// Board slug for API sources, or the careers-page URL for crawling.
-  handle    String
-  enabled   Boolean  @default(true)
+  handle        String
+  enabled       Boolean   @default(true)
   lastCrawledAt DateTime?
-  lastCrawlNote String? @db.Text
-  createdAt DateTime @default(now())
+  lastCrawlNote String?   @db.Text
+  createdAt     DateTime  @default(now())
 
-  leads     JobLead[]
+  leads JobLead[]
 
   @@unique([source, handle])
   @@map("companies")
@@ -337,30 +413,30 @@ model JobLead {
   companyId String?
   company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
 
-  url       String
-  ats       String
-  title     String
-  companyName String
-  location  String?
-  remote    Boolean  @default(false)
-  descriptionText String? @db.Text
-  postedAt  DateTime?
+  url             String
+  ats             String
+  title           String
+  companyName     String
+  location        String?
+  remote          Boolean   @default(false)
+  descriptionText String?   @db.Text
+  postedAt        DateTime?
 
   /// 0-100. Lexical prior blended with the model's read of the description.
-  score     Float    @default(0)
+  score        Float     @default(0)
   /// Short human-readable reasons behind the score, good and bad.
   scoreReasons Json?
-  scoredAt  DateTime?
+  scoredAt     DateTime?
   /// True once a model has looked at it; false means lexical score only.
-  deepScored Boolean @default(false)
+  deepScored   Boolean   @default(false)
 
-  status    LeadStatus @default(NEW)
+  status         LeadStatus @default(NEW)
   /// Free-text reason the candidate gave when rejecting. Optional by design -
   /// a forced reason produces noise, and noise trains the scorer badly.
-  rejectReason String? @db.Text
+  rejectReason   String?    @db.Text
   /// Coarse bucket the reason maps to, used as a training signal.
   rejectCategory String?
-  decidedAt DateTime?
+  decidedAt      DateTime?
 
   /// Set once this lead turns into a real application.
   applicationId String?
@@ -385,7 +461,7 @@ enum LeadStatus {
 /// Kept as explicit, inspectable rows rather than opaque weights: you can read
 /// why a job was ranked down, and delete a signal that has gone stale.
 model PreferenceSignal {
-  id        String   @id @default(cuid())
+  id        String @id @default(cuid())
   profileId String
 
   /// A term, phrase or attribute, e.g. "on-site", "series a", "php".
@@ -413,26 +489,26 @@ model PreferenceSignal {
 /// that the base resume did not contain, together with the evidence that let
 /// us add it. Nothing lands in a tailored resume without a line in there.
 model TailoredResume {
-  id        String   @id @default(cuid())
-  profileId String
-  jobId     String?
+  id           String  @id @default(cuid())
+  profileId    String
+  jobId        String?
   baseResumeId String
 
-  label     String
-  text      String   @db.Text
+  label    String
+  text     String  @db.Text
   /// Paths to the generated files, relative to the storage dir.
-  txtPath   String?
-  docxPath  String?
+  txtPath  String?
+  docxPath String?
 
   /// [{ keyword, evidence, sourceField }]
-  insertions Json
+  insertions  Json
   /// Keywords the job wants that could NOT be grounded, and so were left out.
   /// Surfaced to the candidate as honest gaps, never written into the resume.
   unsupported Json
   /// [{ keyword, where }] - already present before tailoring.
-  covered   Json
+  covered     Json
   /// 0-100 estimate of keyword coverage against the job description.
-  coverage  Float @default(0)
+  coverage    Float @default(0)
 
   createdAt DateTime @default(now())
 
@@ -455,19 +531,19 @@ enum Outcome {
 }
 
 model InterviewRound {
-  id        String   @id @default(cuid())
+  id            String      @id @default(cuid())
   applicationId String
-  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
-  name      String   // "Recruiter screen", "Technical", "Onsite", ...
-  sequence  Int      @default(0)
-  scheduledAt DateTime?
-  completedAt DateTime?
+  name         String // "Recruiter screen", "Technical", "Onsite", ...
+  sequence     Int       @default(0)
+  scheduledAt  DateTime?
+  completedAt  DateTime?
   /// SCHEDULED | PASSED | FAILED | CANCELLED | PENDING_RESULT
-  status    String   @default("SCHEDULED")
+  status       String    @default("SCHEDULED")
   interviewers String?
-  format    String?  // phone, video, onsite, take-home
-  notes     String?  @db.Text
+  format       String? // phone, video, onsite, take-home
+  notes        String?   @db.Text
 
   questions InterviewQuestion[]
   lessons   Lesson[]
@@ -482,16 +558,16 @@ model InterviewRound {
 /// A question you were actually asked. Worth recording twice over: it tells you
 /// what this company probes for, and the good answers become reusable material.
 model InterviewQuestion {
-  id        String   @id @default(cuid())
-  roundId   String
-  round     InterviewRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  id      String         @id @default(cuid())
+  roundId String
+  round   InterviewRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
 
-  question  String   @db.Text
-  myAnswer  String?  @db.Text
+  question   String   @db.Text
+  myAnswer   String?  @db.Text
   /// How it went, in your own judgement: GOOD | OK | POOR
   selfRating String?
-  category  String?  // behavioural, system-design, coding, culture, ...
-  createdAt DateTime @default(now())
+  category   String? // behavioural, system-design, coding, culture, ...
+  createdAt  DateTime @default(now())
 
   @@index([roundId])
   @@map("interview_questions")
@@ -499,14 +575,14 @@ model InterviewQuestion {
 
 /// "What I think I got wrong." The most useful table in here after six months.
 model Lesson {
-  id        String   @id @default(cuid())
+  id            String          @id @default(cuid())
   applicationId String
-  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  roundId   String?
-  round     InterviewRound? @relation(fields: [roundId], references: [id], onDelete: SetNull)
+  application   Application     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  roundId       String?
+  round         InterviewRound? @relation(fields: [roundId], references: [id], onDelete: SetNull)
 
   text      String   @db.Text
-  category  String?  // preparation, communication, technical, fit, logistics
+  category  String? // preparation, communication, technical, fit, logistics
   createdAt DateTime @default(now())
 
   @@index([applicationId])
@@ -525,4 +601,268 @@ model Setting {
   updatedAt DateTime @updatedAt
 
   @@map("settings")
+}
+
+// ---------------------------------------------------------------------------
+// LinkedIn outreach
+// ---------------------------------------------------------------------------
+
+/// Someone at a company worth talking to alongside the application.
+///
+/// Scoped to a profile rather than global, because "who I found while looking
+/// for work" is part of one person's search and not a shared directory. The
+/// unique key is the profile URL, which is the only stable identifier
+/// LinkedIn exposes without an API - names collide and headlines change
+/// weekly.
+model Contact {
+  id        String @id @default(cuid())
+  profileId String
+
+  fullName    String
+  headline    String? @db.Text
+  companyName String
+  /// Lowercased, punctuation-stripped company name, so "Mercury," and
+  /// "mercury" are one company when grouping messages.
+  companyKey  String
+  location    String?
+  /// Canonicalised to https://www.linkedin.com/in/<slug> - the search results
+  /// carry tracking query strings that would otherwise defeat the unique key.
+  profileUrl  String
+  role        ContactRole
+  /// The words that produced the classification, so a wrong one is debuggable
+  /// from the UI instead of from the regex.
+  roleReason  String?
+  /// "1st" | "2nd" | "3rd+", as LinkedIn reports it. This decides whether the
+  /// approach is a connection request or a direct message, so it is recorded
+  /// rather than guessed at send time.
+  degree      String?
+
+  discoveredAt DateTime @default(now())
+
+  // Sync state
+  isConnection      Boolean @default(false)
+  lastSyncedAt      DateTime?
+
+  /// When you decided this conversation is finished.
+  ///
+  /// Nothing infers this. A thread that has gone quiet is not the same as one
+  /// that ended - being ghosted by a recruiter looks identical in the message
+  /// history to a polite "we'll keep you in mind", and only you know which it
+  /// was. So it is set by an explicit action and never by a timer, which also
+  /// makes it reversible: reopening is just clearing the date.
+  conversationClosedAt DateTime?
+
+  messages OutreachMessage[]
+  conversations LinkedInConversation[]
+  outreachItems OutreachItem[]
+
+  @@unique([profileId, profileUrl])
+  @@index([profileId, companyKey])
+  @@map("contacts")
+}
+
+enum ContactRole {
+  /// Recruiter, talent acquisition, sourcer, people team.
+  TALENT
+  /// Engineering manager, director, VP, head of engineering, CTO.
+  ENGINEERING
+  OTHER
+}
+
+/// One drafted approach, waiting for you.
+///
+/// Nothing in this table is ever sent by a background job. `status` leaves
+/// DRAFT only inside a request a human initiated, and the row keeps both what
+/// the model wrote (`draftBody`) and what was actually approved (`finalBody`)
+/// so the two can be compared after the fact. That separation is the audit
+/// trail for anything that went out under your name.
+model OutreachMessage {
+  id        String @id @default(cuid())
+  profileId String
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  /// The posting this is about. Denormalised on purpose: the lead can be
+  /// rejected, expire or be deleted, and a sent message still has to be able
+  /// to say what it was about.
+  leadId      String?
+  jobTitle    String
+  jobUrl      String
+  companyName String
+
+  channel   OutreachChannel
+  /// What the model wrote. Never overwritten by an edit.
+  draftBody String  @db.Text
+  /// What you approved. Null until you approve it.
+  finalBody String? @db.Text
+  /// The channel's hard cap, so the editor can enforce the same number the
+  /// send step will.
+  charLimit Int
+
+  status       OutreachStatus @default(DRAFT)
+  /// Why it is SKIPPED or FAILED. Null otherwise.
+  statusReason String?        @db.Text
+
+  /// Whether approving this should also queue the job application. Per-message
+  /// rather than a global setting: reaching out about a role you are not ready
+  /// to apply to is a normal thing to want.
+  alsoApply     Boolean @default(true)
+  applicationId String?
+
+  editedAt   DateTime?
+  approvedAt DateTime?
+  sentAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([profileId, contactId, jobUrl])
+  @@index([profileId, status, createdAt])
+  @@map("outreach_messages")
+}
+
+enum OutreachChannel {
+  /// Invitation with a note. 300 characters, and only for people you are not
+  /// already connected to.
+  CONNECTION_NOTE
+  /// Already connected, so the message box is open.
+  DIRECT_MESSAGE
+  /// Costs a credit. Drafted, never sent automatically.
+  INMAIL
+}
+
+enum OutreachStatus {
+  DRAFT
+  APPROVED
+  SENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+// ---------------------------------------------------------------------------
+// LinkedIn sync
+// ---------------------------------------------------------------------------
+
+model LinkedInSync {
+  id        String   @id @default(cuid())
+  profileId String
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  syncType  SyncType
+  lastSyncAt DateTime?
+  status    SyncStatus @default(PENDING)
+  error     String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([profileId, syncType])
+  @@map("linkedin_sync")
+}
+
+enum SyncType {
+  CONNECTIONS
+  MESSAGES
+}
+
+enum SyncStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model LinkedInConversation {
+  id          String   @id @default(cuid())
+  profileId   String
+  profile     Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  contactId   String
+  contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  linkedinConversationId String
+  linkedinProfileUrl     String
+
+  lastMessageAt DateTime?
+  lastSyncedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages LinkedInMessage[]
+  outreachItems OutreachItem[]
+
+  @@unique([profileId, linkedinConversationId])
+  @@index([profileId, lastMessageAt])
+  @@index([contactId])
+  @@map("linkedin_conversations")
+}
+
+model LinkedInMessage {
+  id              String   @id @default(cuid())
+  conversationId  String
+  conversation    LinkedInConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  linkedinMessageId String
+  senderProfileUrl String
+  isFromMe         Boolean
+  body             String   @db.Text
+  sentAt           DateTime
+
+  createdAt DateTime @default(now())
+
+  @@unique([conversationId, linkedinMessageId])
+  @@index([conversationId, sentAt])
+  @@map("linkedin_messages")
+}
+
+// ---------------------------------------------------------------------------
+// Outreach queue (unified cold/reply/follow-up)
+// ---------------------------------------------------------------------------
+
+model OutreachItem {
+  id        String @id @default(cuid())
+  profileId String
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  type      OutreachType
+
+  leadId      String?
+  jobTitle    String?
+  jobUrl      String?
+  companyName String?
+
+  channel   OutreachChannel
+  draftBody String  @db.Text
+  finalBody String? @db.Text
+  charLimit Int
+
+  status       OutreachStatus @default(DRAFT)
+  statusReason String?        @db.Text
+
+  conversationId String?
+  conversation   LinkedInConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  lastMessages   Json?
+
+  editedAt   DateTime?
+  approvedAt DateTime?
+  sentAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([profileId, contactId, type, jobUrl])
+  @@index([profileId, status, type, createdAt])
+  @@index([contactId])
+  @@map("outreach_items")
+}
+
+enum OutreachType {
+  COLD
+  REPLY
+  FOLLOW_UP
 }

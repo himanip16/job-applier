@@ -1,0 +1,42 @@
+/* -------------------------------------------------------------- surfaces */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem 1.35rem;
+  margin-bottom: 1rem;
+  box-shadow: var(--shadow-sm);
+}
+.panel h2 { margin: 0 0 0.2rem; font-size: var(--fs-lg); }
+.panel .sub { color: var(--muted); font-size: var(--fs-md); margin: 0 0 0.9rem; line-height: 1.5; max-width: 68ch; }
+.panel > .sub:last-child { margin-bottom: 0; }
+
+/*
+ * A panel's title bar.
+ *
+ * Every page had a heading on the left and an action on the right, laid out
+ * inline eight different ways. This is that pattern, once, with the rule
+ * that the actions never squash the title.
+ */
+.panel-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 1rem; margin-bottom: 0.9rem;
+}
+.panel-head > :first-child { min-width: 0; }
+.panel-head .sub { margin-bottom: 0; }
+.panel-head-actions { display: flex; gap: 0.45rem; flex: none; align-items: center; flex-wrap: wrap; }
+
+.card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+}
+
+@media (max-width: 900px) {
+  .panel-head { flex-direction: column; gap: 0.6rem; }
+}
+@media (max-width: 640px) {
+  .panel { padding: 1rem 1.05rem; }
+}

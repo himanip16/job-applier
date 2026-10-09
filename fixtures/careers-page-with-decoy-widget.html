@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Senior Software Engineer - Backend @ Contoso</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto; display: flex; gap: 2rem; }
+  main { flex: 2; }
+  aside { flex: 1; }
+  label { display: block; font-weight: 600; margin: .6rem 0 .2rem; }
+  input[type=text], input[type=email], input[type=tel] { width: 100%; padding: .4rem; }
+  #real-application { display: none; }
+</style>
+</head>
+<body>
+<!--
+  Offline stand-in for weareroku.com's careers page shape, reproducing a live
+  failure: a run filled a "Join our Talent Community" sidebar sign-up under
+  the candidate's name instead of the actual job application.
+
+  Two things about the real page matter here, both reproduced:
+
+    1. The real application is already IN THE PAGE on load - not behind a
+       navigation - just hidden (display:none) until "Apply" is clicked. A
+       naive "are there fillable inputs yet" check finds the sidebar's three
+       text inputs and settles for them without ever looking further.
+
+    2. Both the sidebar sign-up and the real application are their own
+       <form> element. Once "Apply" reveals the real one, both forms are
+       on screen at the same time - so even after clicking, a field
+       extractor that reads every <form> on the page and merges the
+       results would still put the newsletter's fields in the same list as
+       the job application's.
+-->
+<main>
+  <h1>Senior Software Engineer, Backend</h1>
+  <p>Contoso is hiring for the payments platform team.</p>
+  <button type="button" id="apply-btn">Apply</button>
+  <button type="button">View More Jobs</button>
+
+  <div id="real-application">
+    <h2>Submit your application</h2>
+    <form id="new_form_submission_real">
+      <label for="app-first">First Name</label>
+      <input type="text" id="app-first" required>
+      <label for="app-last">Last Name</label>
+      <input type="text" id="app-last" required>
+      <label for="app-email">Email</label>
+      <input type="email" id="app-email" required>
+      <label for="app-phone">Phone</label>
+      <input type="tel" id="app-phone" required>
+      <label for="app-resume">Resume<span aria-hidden="true">*</span></label>
+      <input type="file" id="app-resume" required>
+      <label for="app-cover">Cover Letter</label>
+      <input type="file" id="app-cover">
+      <label for="app-linkedin">LinkedIn Profile</label>
+      <input type="text" id="app-linkedin">
+      <button type="submit" id="app-submit">Submit Application</button>
+    </form>
+  </div>
+</main>
+
+<aside>
+  <h2>Join our Talent Community</h2>
+  <form id="new_form_submission_talent_community">
+    <label for="tc-first">First Name</label>
+    <input type="text" id="tc-first" required>
+    <label for="tc-last">Last Name</label>
+    <input type="text" id="tc-last" required>
+    <label for="tc-email">Email</label>
+    <input type="email" id="tc-email" required>
+    <button type="submit" id="tc-submit">Submit</button>
+  </form>
+</aside>
+
+<script>
+document.getElementById('apply-btn').addEventListener('click', () => {
+  document.getElementById('real-application').style.display = 'block';
+});
+</script>
+</body>
+</html>

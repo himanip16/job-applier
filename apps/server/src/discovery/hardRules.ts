@@ -26,6 +26,154 @@ export interface HardRuleVerdict {
   for?: string;
 }
 
+// ------------------------------------------------------------------ salary ---
+
+/**
+ * Parse salary/compensation from text.
+ * Returns the annual salary in USD if found, null otherwise.
+ */
+export function parseSalary(text: string): number | null {
+  const patterns = [
+    // $100,000 - $150,000 per year
+    /\$\s*([0-9,]+(?:\.[0-9]+)?)\s*[-–]\s*\$?\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:per\s+year|annual|annually|year|yr)/i,
+    // $100k - $150k
+    /\$\s*([0-9,]+(?:\.[0-9]+)?)\s*[-–]\s*\$?\s*([0-9,]+(?:\.[0-9]+)?)\s*k\b/i,
+    // $100,000 per year
+    /\$\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:per\s+year|annual|annually|year|yr)/i,
+    // 100k - 150k
+    /([0-9,]+(?:\.[0-9]+)?)\s*[-–]\s*([0-9,]+(?:\.[0-9]+)?)\s*k\b/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      // For ranges, use the upper bound as the potential salary
+      const value = match[2] ? match[2] : match[1];
+      if (!value) continue;
+      // Remove commas and handle 'k' suffix
+      let numStr = value.replace(/,/g, '').toLowerCase();
+      if (numStr.endsWith('k')) {
+        numStr = numStr.slice(0, -1);
+        return Number(numStr) * 1000;
+      }
+      return Number(numStr);
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse salary expectation from profile.
+ * Checks both the expectedCTC field and facts.
+ */
+export function parseSalaryExpectation(profile: {
+  expectedCTC?: string | null;
+  facts?: { key: string; value: string }[];
+}): { min: number | null; max: number | null } {
+  // Check facts first for min/max
+  const minFact = profile.facts?.find((f) => 
+    /compensation.*expectation.*min|salary.*expectation.*min|min.*salary|min.*compensation/i.test(f.key)
+  );
+  const maxFact = profile.facts?.find((f) => 
+    /compensation.*expectation.*max|salary.*expectation.*max|max.*salary|max.*compensation/i.test(f.key)
+  );
+  const generalFact = profile.facts?.find((f) => 
+    /compensation.*expectation|salary.*expectation|expected.*salary|expected.*ctc/i.test(f.key)
+  );
+
+  const minSalary = minFact ? parseSalary(minFact.value) : null;
+  const maxSalary = maxFact ? parseSalary(maxFact.value) : null;
+  const generalSalary = generalFact ? parseSalary(generalFact.value) : null;
+  const expectedCTC = profile.expectedCTC ? parseSalary(profile.expectedCTC) : null;
+
+  // Use the most specific information available
+  const min = minSalary ?? generalSalary ?? expectedCTC;
+  const max = maxSalary ?? generalSalary ?? expectedCTC;
+
+  return { min, max };
+}
+
+/**
+ * Parse current CTC from profile.
+ * Checks both the currentCTC field and facts.
+ */
+export function parseCurrentCTC(profile: {
+  currentCTC?: string | null;
+  facts?: { key: string; value: string }[];
+}): number | null {
+  // Check facts first
+  const currentFact = profile.facts?.find((f) => 
+    /current.*salary|current.*ctc|current.*compensation|existing.*salary|existing.*ctc/i.test(f.key)
+  );
+  const currentSalary = currentFact ? parseSalary(currentFact.value) : null;
+  const currentCTC = profile.currentCTC ? parseSalary(profile.currentCTC) : null;
+
+  return currentSalary ?? currentCTC;
+}
+
+/**
+ * Check if job salary matches candidate's expectations and current CTC.
+ */
+export function salaryVerdict(
+  expectations: { min: number | null; max: number | null },
+  currentCTC: number | null,
+  job: ScorableJob,
+): HardRuleVerdict | null {
+  if (!expectations.min && !expectations.max && !currentCTC) return null;
+
+  const text = `${job.title}\n${job.descriptionText ?? ''}`;
+  const jobSalary = parseSalary(text);
+  
+  if (!jobSalary) return null; // Can't determine job salary
+
+  // First check against current CTC - this is a hard requirement
+  if (currentCTC && jobSalary < currentCTC) {
+    return {
+      dealbreaker: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) is below your current CTC ($${(currentCTC / 1000).toFixed(0)}k).`,
+      against: `Salary offered is lower than your current compensation.`,
+    };
+  }
+
+  // If we have both min and max expectations
+  if (expectations.min && expectations.max) {
+    if (jobSalary < expectations.min) {
+      return {
+        dealbreaker: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) is below your minimum expectation ($${(expectations.min / 1000).toFixed(0)}k).`,
+        against: `Salary offered is lower than your minimum requirement.`,
+      };
+    }
+    if (jobSalary > expectations.max) {
+      return {
+        against: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) is above your maximum expectation ($${(expectations.max / 1000).toFixed(0)}k).`,
+      };
+    }
+    return { for: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) matches your expectations.` };
+  }
+
+  // If we only have minimum expectation
+  if (expectations.min && jobSalary < expectations.min) {
+    return {
+      dealbreaker: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) is below your minimum expectation ($${(expectations.min / 1000).toFixed(0)}k).`,
+      against: `Salary offered is lower than your minimum requirement.`,
+    };
+  }
+
+  // If we only have maximum expectation and job exceeds it significantly
+  if (expectations.max && jobSalary > expectations.max * 1.2) {
+    return {
+      against: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) is significantly above your maximum expectation ($${(expectations.max / 1000).toFixed(0)}k).`,
+    };
+  }
+
+  // If we only have current CTC and job is above it
+  if (currentCTC && jobSalary >= currentCTC) {
+    const premium = ((jobSalary - currentCTC) / currentCTC * 100).toFixed(0);
+    return { for: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) is ${premium}% above your current CTC ($${(currentCTC / 1000).toFixed(0)}k).` };
+  }
+
+  return { for: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) aligns with your expectations.` };
+}
+
 /**
  * Years, with the decimal kept.
  *
@@ -227,13 +375,14 @@ export function offDomainVerdict(title: string): HardRuleVerdict | null {
  */
 export function applyHardRules(
   fit: FitAssessment,
-  args: { candidateYears: number | null; needsSponsorship: boolean; job: ScorableJob },
+  args: { candidateYears: number | null; needsSponsorship: boolean; salaryExpectations: { min: number | null; max: number | null }; currentCTC: number | null; job: ScorableJob },
 ): FitAssessment {
   const text = `${args.job.title}\n${args.job.descriptionText ?? ''}`;
   const verdicts = [
     offDomainVerdict(args.job.title),
     experienceVerdict(args.candidateYears, text),
     sponsorshipVerdict(args.needsSponsorship, args.job),
+    salaryVerdict(args.salaryExpectations, args.currentCTC, args.job),
   ].filter(Boolean) as HardRuleVerdict[];
   if (!verdicts.length) return fit;
 
@@ -259,10 +408,13 @@ export function applyHardRules(
 export function candidateConstraints(profile: {
   country?: string | null;
   countryCode?: string | null;
+  citizenship?: string | null;
+  currentCTC?: string | null;
+  expectedCTC?: string | null;
   summary?: string | null;
   resumeText?: string | null;
   facts?: { key: string; value: string }[];
-}): { candidateYears: number | null; needsSponsorship: boolean } {
+}): { candidateYears: number | null; needsSponsorship: boolean; salaryExpectations: { min: number | null; max: number | null }; currentCTC: number | null } {
   const stated = profile.facts?.find((f) => /experience.*years|years.*experience|yoe/i.test(f.key));
   // A stated fact is usually just the number - "4.5", not "4.5 years" - so it
   // is read as one before falling back to the prose patterns.
@@ -272,12 +424,25 @@ export function candidateConstraints(profile: {
     parseYears(normalizeLabel(profile.summary ?? '')) ??
     parseYears(normalizeLabel((profile.resumeText ?? '').slice(0, 1500)));
 
-  // Anyone not already in the US needs sponsoring for a US role. Stated as
-  // "not US" rather than "is India" so it stays true if they move.
-  const code = (profile.countryCode ?? '').toUpperCase();
+  // Anyone not a US citizen needs sponsoring for a US role. Citizenship is the
+  // primary factor - location matters less. Stated as "not US citizen" rather
+  // than "is India" so it stays true if they move.
+  const citizenship = normalizeLabel(profile.citizenship ?? '');
+  const countryCode = (profile.countryCode ?? '').toUpperCase();
   const country = normalizeLabel(profile.country ?? '');
-  const inUS = code === 'US' || /^(united states|usa|us)$/.test(country);
-  return { candidateYears, needsSponsorship: !inUS };
+  
+  // Check if citizenship is US
+  const isUSCitizen = /^(united states|usa|us|american)$/i.test(citizenship) || 
+                      citizenship.toUpperCase() === 'US' ||
+                      citizenship === 'United States';
+  
+  // If citizenship is not set, fall back to location check
+  const inUS = countryCode === 'US' || /^(united states|usa|us)$/.test(country);
+  
+  const salaryExpectations = parseSalaryExpectation(profile);
+  const currentCTC = parseCurrentCTC(profile);
+  
+  return { candidateYears, needsSponsorship: !isUSCitizen, salaryExpectations, currentCTC };
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;

@@ -93,19 +93,101 @@ Answer the question above using only the candidate context.`;
     if (!parsed) {
       return blank('The model returned no parseable answer.');
     }
-    // Belt and braces: even if the model claims an option, verify it exists.
-    if (parsed.answerable && field.options?.length) {
-      const valid = new Set(field.options.map((o) => o.label.trim().toLowerCase()));
-      const claimed = parsed.values.length ? parsed.values : [parsed.value];
-      const bad = claimed.filter((v: string) => v && !valid.has(v.trim().toLowerCase()));
-      if (bad.length) {
-        return blank(`Model proposed option(s) that are not on the form: ${bad.join(', ')}`);
-      }
-    }
-    return parsed;
+    return checkOptions(parsed, field);
   } catch (err) {
     return blank(describeLlmError(err));
   }
+}
+
+const BatchSchema = z.object({
+  answers: z.array(InferenceSchema.extend({ id: z.string().describe('The question id, copied exactly.') })),
+});
+
+export interface InferAnswersInput extends Omit<InferAnswerInput, 'field'> {
+  fields: FormField[];
+}
+
+/**
+ * Every question on a form page that needs the model, in one call.
+ *
+ * Asking per field sent the whole candidate context once per question - a
+ * page with six unknowns paid for the resume six times and waited on six
+ * round trips. The rules are the same; only the envelope changes. A single
+ * field goes through `inferAnswer` unchanged.
+ */
+export async function inferAnswers(input: InferAnswersInput): Promise<Map<string, Inference>> {
+  const { fields, ...rest } = input;
+  const out = new Map<string, Inference>();
+  if (!fields.length) return out;
+  if (fields.length === 1) {
+    out.set(fields[0]!.id, await inferAnswer({ ...rest, field: fields[0]! }));
+    return out;
+  }
+
+  // Short ids: field handles can be long selectors, and the model must copy them back.
+  const byRef = new Map(fields.map((f, i) => [`q${i + 1}`, f]));
+  const questions = [...byRef]
+    .map(([ref, f]) => {
+      const options = f.options?.length
+        ? `\n<options>\n${f.options.map((o) => `- ${o.label}`).join('\n')}\n</options>`
+        : '';
+      return `<question id="${ref}">
+label: ${f.label}
+${f.helpText ? `help_text: ${f.helpText}\n` : ''}input_type: ${f.kind}
+required: ${f.required}${options}
+</question>`;
+    })
+    .join('\n\n');
+
+  const prompt = `${rest.candidateContext}
+
+<application>
+company: ${rest.companyName}
+role: ${rest.jobTitle}
+</application>
+
+${questions}
+
+Answer each question above independently, using only the candidate context. Return exactly one entry per question id.`;
+
+  let parsed: z.infer<typeof BatchSchema> | null = null;
+  let failure = 'The model returned no parseable answer.';
+  try {
+    parsed = await generate({
+      task: 'answerInference',
+      system: SYSTEM,
+      prompt,
+      schema: BatchSchema,
+      maxTokens: 800 + 400 * fields.length,
+    });
+  } catch (err) {
+    failure = describeLlmError(err);
+  }
+
+  const returned = new Map((parsed?.answers ?? []).map((a) => [a.id.trim(), a]));
+  for (const [ref, field] of byRef) {
+    const answer = returned.get(ref);
+    if (!answer) {
+      out.set(field.id, blank(parsed ? 'The model skipped this question.' : failure));
+      continue;
+    }
+    const { id: _id, ...inference } = answer;
+    out.set(field.id, checkOptions(inference, field));
+  }
+  return out;
+}
+
+/** Even if the model claims an option, verify it exists. */
+function checkOptions(parsed: Inference, field: FormField): Inference {
+  if (parsed.answerable && field.options?.length) {
+    const valid = new Set(field.options.map((o) => o.label.trim().toLowerCase()));
+    const claimed = parsed.values.length ? parsed.values : [parsed.value];
+    const bad = claimed.filter((v: string) => v && !valid.has(v.trim().toLowerCase()));
+    if (bad.length) {
+      return blank(`Model proposed option(s) that are not on the form: ${bad.join(', ')}`);
+    }
+  }
+  return parsed;
 }
 
 function blank(reason: string): Inference {

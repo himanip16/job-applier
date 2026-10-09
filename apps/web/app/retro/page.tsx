@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
+import { Loading } from '../../components/Loading';
 
 interface Retro {
   lessons: { id: string; text: string; category: string | null; job: string; round: string | null }[];
@@ -26,7 +27,7 @@ export default function RetroPage() {
   }, []);
 
   if (error) return <div className="panel"><div className="notice bad">{error}</div></div>;
-  if (!data) return <p className="muted">Loading…</p>;
+  if (!data) return <Loading />;
 
   const total = Object.values(data.outcomes).reduce((a, b) => a + b, 0);
   const offers = (data.outcomes.OFFER ?? 0) + (data.outcomes.ACCEPTED ?? 0);
@@ -37,7 +38,7 @@ export default function RetroPage() {
       <div className="panel">
         <h2>How the search is going</h2>
         {total === 0 ? (
-          <p className="muted small">No applications tracked yet.</p>
+          <div className="empty-state">No applications tracked yet.</div>
         ) : (
           <div className="row" style={{ gap: '2rem', marginTop: '.5rem' }}>
             <Stat label="applications" value={total} />
@@ -59,7 +60,7 @@ export default function RetroPage() {
           have actually rehearsed.
         </p>
         {data.recurringQuestions.length === 0 ? (
-          <p className="muted small">Nothing recorded yet. Add questions as you go in the tracker.</p>
+          <div className="empty-state">Nothing recorded yet. Add questions as you go in the tracker.</div>
         ) : (
           <table>
             <thead>
@@ -97,10 +98,10 @@ export default function RetroPage() {
           </div>
         )}
         {data.lessons.length === 0 ? (
-          <p className="muted small">
+          <div className="empty-state">
             Nothing written down yet. After each interview, note what you would do differently
             while you still remember it.
-          </p>
+          </div>
         ) : (
           <table>
             <tbody>

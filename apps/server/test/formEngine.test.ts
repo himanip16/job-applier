@@ -415,3 +415,78 @@ describe('a location that is more specific than the list', () => {
     expect(bestOption(options, 'Pune, Maharashtra, India')).toBeNull();
   });
 });
+
+
+describe("Lever's custom questions, as jobs.lever.co actually serves them", () => {
+  /**
+   * A live run against a fampay posting filled almost nothing.
+   *
+   * Lever's built-in fields wrap their input in a <label>, so an implicit
+   * association works and those filled fine. Its custom "card" questions do
+   * not: the caption is a sibling <div class="application-label"> with no
+   * for=, no id, no aria-label and no placeholder, so nothing standard
+   * connects it to the textarea. Every one of them came out with an empty
+   * label, which means nothing could match them to the profile or the answer
+   * bank - and they are all required.
+   */
+  it('reads the caption of a card question that has no <label> at all', async () => {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/lever-custom-questions.html`, { waitUntil: 'domcontentloaded' });
+
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const labels = fields.map((f) => f.label);
+
+    for (const expected of [
+      'Current CTC (Please mention the CTC breakup)',
+      'Expected CTC',
+      'Notice Period',
+      'Current Designation',
+    ]) {
+      expect(labels, `missing: ${expected}`).toContain(expected);
+    }
+    // And nothing arrives nameless, which is what made them unanswerable.
+    expect(fields.filter((f) => !f.label.trim())).toEqual([]);
+    await page.close();
+  }, 60_000);
+
+  it('names a multiple-choice card after the question, not its first option', async () => {
+    // Every radio is wrapped in its own <label> holding the option text, so
+    // the wrapping label names the group "Less than 2 yrs".
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/lever-custom-questions.html`, { waitUntil: 'domcontentloaded' });
+
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const group = fields.find((f) => f.widget === 'radio-group');
+
+    expect(group).toBeTruthy();
+    expect(group!.label).toBe('Years of Exp');
+    expect(group!.options?.map((o) => o.label)).toEqual([
+      'Less than 2 yrs',
+      '3yrs - 4yrs',
+      '5yrs - 6yrs',
+      '7 yrs - 9 yrs',
+      '10yrs - 13 yrs',
+      '14+ yrs',
+    ]);
+    await page.close();
+  }, 60_000);
+
+  it('still reads the built-in fields, and keeps the two "current company" apart', async () => {
+    // Lever asks for the employer twice - once as a built-in field and once as
+    // a card question - and they differ only by case. Filling one must not
+    // resolve to the other.
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/lever-custom-questions.html`, { waitUntil: 'domcontentloaded' });
+
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    const both = fields.filter((f) => /current company/i.test(f.label));
+
+    expect(both).toHaveLength(2);
+    expect(new Set(both.map((f) => f.name))).toEqual(new Set(['org', 'cards[38109191][field3]']));
+
+    expect(fields.find((f) => f.name === 'name')?.label).toBe('Full name');
+    expect(fields.find((f) => f.name === 'urls[LinkedIn]')?.label).toBe('LinkedIn URL');
+    expect(fields.find((f) => f.name === 'urls[GitHub]')?.required).toBe(false);
+    await page.close();
+  }, 60_000);
+});

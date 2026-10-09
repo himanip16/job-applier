@@ -24,22 +24,22 @@ interface SetupStep {
 }
 
 interface Health {
-  llmConfigured: boolean;
-  headless: boolean;
-  provider: string;
-  writing: string;
-  judgement: string;
-  estimatedCosts: { perApplication: number; perTailoring: number; perDeepScoredLead: number; free: boolean };
+  ok: boolean;
 }
 
 export default function Home() {
   const { data: ov, error } = useOverview();
   const [health, setHealth] = useState<Health | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
 
   // Health is separate and barely changes — a key being added is the only
   // thing that moves it, and that already forces a reload of this page.
   useEffect(() => {
-    api<Health>('/api/health').then(setHealth).catch(() => {});
+    api<Health>('/api/health')
+      .then(setHealth)
+      .catch((err) => {
+        setHealthError(err.message || 'Failed to load status');
+      });
   }, []);
 
   if (error) {
@@ -47,28 +47,32 @@ export default function Home() {
       <div className="panel">
         <h2>Cannot reach the server</h2>
         <div className="notice bad">{error}</div>
-        <p className="small muted" style={{ marginTop: '.6rem' }}>
-          Start it with <code>pnpm dev:server</code>. It listens on :8787.
-        </p>
+        <div className="row" style={{ gap: '.6rem', marginTop: '.6rem' }}>
+          <button onClick={() => navigator.clipboard.writeText('pnpm dev:server')}>
+            Copy start command
+          </button>
+          <span className="small muted">Server runs on port 8787</span>
+        </div>
       </div>
     );
   }
 
-  const outstanding = ov?.needsYou.total ?? 0;
+  const outstanding = ov?.needsYou.needsInput ?? 0;
 
   return (
     <>
       <Hero ov={ov} />
 
+      <NotAppliedYet ov={ov} />
+
       {ov && !ov.ready && <SetupPanel setup={ov.setup} />}
 
-      <details className="panel">
-        <summary style={{ cursor: 'pointer' }}>
-          <strong>How it works</strong>{' '}
-          <span className="muted small">
-            — four parts, each usable on its own
-          </span>
+      <details className="panel disclosure">
+        <summary>
+          <strong>How it works</strong>
+          <span className="muted small">four parts, each usable on its own</span>
         </summary>
+        <div className="disclosure-body">
 
         <Feature
           step="1"
@@ -121,11 +125,12 @@ export default function Home() {
           wrong.
           {ov?.counts.upcomingRounds ? ` ${ov.counts.upcomingRounds} round(s) scheduled.` : ''}
         </Feature>
+        </div>
       </details>
 
       <div className="panel">
         <h2>Also here</h2>
-        <div className="grid2">
+        <div className="stats" style={{ marginTop: '.7rem' }}>
           <Small
             href="/retro"
             title="Retrospective"
@@ -152,29 +157,81 @@ export default function Home() {
         </div>
       </div>
 
-      {health && <StatusPanel health={health} submitted={ov?.counts.submitted ?? 0} />}
+      {healthError ? (
+        <div className="panel">
+          <h2>Status unavailable</h2>
+          <div className="notice bad">{healthError}</div>
+        </div>
+      ) : health ? (
+        <StatusPanel health={health} submitted={ov?.counts.submitted ?? 0} />
+      ) : null}
     </>
   );
 }
 
 
 /**
- * The first screen.
+ * The one list worth putting first.
  *
- * This used to open with "Four parts. They work independently" - an accurate
- * description of the architecture and the wrong thing to lead with. What
- * someone opening this at 9am wants is the state of their job hunt in one
- * glance: how many jobs are waiting, how many are worth their time, and what
- * needs them right now. The architecture is still on the page, one click down,
- * for the moment it becomes interesting.
+ * The front page used to open on five counters and a "how it works"
+ * accordion, which describes the tool rather than the job search. The useful
+ * question on opening it is "which companies match me that I have not applied
+ * to yet" - so that is the list, by name, with the buttons on it.
  *
- * Every number is a link, because a number you cannot act on is decoration.
+ * Everything already applied to is deliberately not here. It is history, and
+ * history belongs in the tracker.
  */
+function NotAppliedYet({ ov }: { ov: Overview | null }) {
+  const matches = ov?.topMatches ?? [];
+  if (!ov || matches.length === 0) return null;
+  const total = ov.counts.notApplied;
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>Matches you have not applied to</h2>
+          <p className="sub">{total} saved or new. Best {matches.length} first.</p>
+        </div>
+        <a href="/discover" className="btn primary">
+          See all {total}
+        </a>
+      </div>
+
+      <div className="list">
+        {matches.map((m) => {
+          const score = Math.round(m.score);
+          const band = score >= 70 ? 'high' : score >= 45 ? 'mid' : 'low';
+          return (
+            <a key={m.id} href={`/jobs/${m.id}`} className="list-row">
+              <span className="list-row-main">
+                <span className={`score ${band}`}>{score}</span>
+                <span className="list-row-title">{m.title}</span>
+                <span className="muted small">{m.companyName}</span>
+                {m.remote && <span className="src">remote</span>}
+                {m.location && <span className="muted small">{m.location}</span>}
+                {m.status === 'SHORTLISTED' && <span className="src">saved</span>}
+                {!m.deepScored && (
+                  <span className="src" title="Ranked on keywords only, not read in full">
+                    quick score
+                  </span>
+                )}
+              </span>
+              <span className="btn small">Open</span>
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Hero({ ov }: { ov: Overview | null }) {
   const c = ov?.counts;
   const y = ov?.needsYou;
   const outstanding = y?.total ?? 0;
-  const nothingYet = (c?.leadsTotal ?? 0) === 0 && (c?.submitted ?? 0) === 0;
+  const loading = !ov;
+  const nothingYet = !loading && (c?.leadsTotal ?? 0) === 0 && (c?.submitted ?? 0) === 0;
 
   return (
     <div className="panel">
@@ -186,30 +243,41 @@ function Hero({ ov }: { ov: Overview | null }) {
         applications, and stops to ask you only when it genuinely cannot answer honestly.
       </p>
 
-      {nothingYet ? (
+      {loading ? (
+        <div className="stats" style={{ marginTop: '1.1rem' }}>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="skel" style={{ height: '4.5rem' }} />
+          ))}
+        </div>
+      ) : nothingYet ? (
         <div className="row" style={{ gap: '.6rem', marginTop: '1rem' }}>
-          <a href="/discover">
-            <button className="primary">Find jobs for me</button>
+          <a href="/discover" className="btn primary">
+            Find jobs for me
           </a>
-          <a href="/runs">
-            <button>Or paste a job URL</button>
+          <a href="/runs" className="btn">
+            Or paste a job URL
           </a>
         </div>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(9rem, 1fr))',
-            gap: '.75rem',
-            marginTop: '1.1rem',
-          }}
-        >
-          <Big href="/discover" value={c?.leadsTotal ?? 0} label="jobs found" />
+        <div className="stats" style={{ marginTop: '1.1rem' }}>
+          {/*
+            Ordered by what you can do something about. "Not applied yet" is
+            first because it is the only number that is a to-do list; the ones
+            after it are progress, and "submitted" is history - which is why it
+            links away to the tracker rather than living here.
+          */}
+          <Big
+            href="/discover"
+            value={c?.notApplied ?? 0}
+            label="not applied yet"
+            tone={(c?.notApplied ?? 0) > 0 ? 'var(--accent)' : undefined}
+          />
           <Big
             href="/discover"
             value={c?.strongMatches ?? 0}
             label="strong matches"
             tone={(c?.strongMatches ?? 0) > 0 ? 'var(--good)' : undefined}
+            hint="Scored 70 or higher by the ranking, automatically - not the same as saved or applied to."
           />
           <Big href="/runs" value={y?.inReview ?? 0} label="applications ready" />
           <Big
@@ -218,7 +286,7 @@ function Hero({ ov }: { ov: Overview | null }) {
             label="waiting for you"
             tone={outstanding > 0 ? 'var(--warn)' : undefined}
           />
-          <Big href="/tracker" value={c?.submitted ?? 0} label="submitted" />
+          <Big href="/tracker" value={c?.submitted ?? 0} label="already applied" />
         </div>
       )}
 
@@ -240,8 +308,8 @@ function Hero({ ov }: { ov: Overview | null }) {
                   .join(' · ')}
               </div>
             </div>
-            <a href="/runs">
-              <button className="primary">Open them</button>
+            <a href="/runs" className="btn primary">
+              Open them
             </a>
           </div>
         </div>
@@ -255,69 +323,82 @@ function Big({
   value,
   label,
   tone,
+  hint,
 }: {
   href: string;
   value: number;
   label: string;
   tone?: string;
+  hint?: string;
 }) {
   return (
-    <a
-      href={href}
-      style={{
-        textDecoration: 'none',
-        border: '1px solid var(--border)',
-        borderRadius: '.5rem',
-        padding: '.7rem .8rem',
-        display: 'block',
-      }}
-    >
-      <div
-        style={{
-          fontSize: '2rem',
-          fontWeight: 650,
-          lineHeight: 1.05,
-          fontVariantNumeric: 'tabular-nums',
-          color: tone ?? 'inherit',
-        }}
-      >
+    <a href={href} className="stat" title={hint}>
+      <div className="stat-value" style={{ color: tone ?? 'inherit' }}>
         {value}
       </div>
-      <div className="muted small">{label}</div>
+      <div className="stat-label">{label}</div>
     </a>
   );
 }
 
 function SetupPanel({ setup }: { setup: SetupStep[] }) {
-  const remaining = setup.filter((s) => !s.done).length;
+  const todo = setup.filter((s) => !s.done);
+  const done = setup.filter((s) => s.done);
+
+  /*
+   * The unfinished steps are the panel; the finished ones are a receipt.
+   *
+   * Listing all six at equal weight made a tall blue slab in which the two
+   * steps you can actually act on were the hardest to pick out - a checklist
+   * that grows more prominent the more of it you complete has it backwards.
+   */
   return (
-    <div className="panel" style={{ borderColor: 'var(--accent)' }}>
-      <h2>Finish setting up</h2>
-      <p className="sub">
-        {remaining} step{remaining === 1 ? '' : 's'} left. Each one removes work later.
-      </p>
-      {setup.map((s) => (
-        <div
-          key={s.id}
-          className="spread"
-          style={{ padding: '.45rem 0', borderTop: '1px solid var(--border)' }}
-        >
-          <div>
-            <span style={{ color: s.done ? 'var(--good)' : 'var(--muted)', marginRight: '.5rem' }}>
-              {s.done ? '✓' : '○'}
-            </span>
-            <strong style={{ opacity: s.done ? 0.6 : 1 }}>{s.label}</strong>
-            <div className="muted small" style={{ marginLeft: '1.4rem' }}>
-              {s.detail}
-            </div>
-          </div>
-          {!s.done && s.href && (
-            <a href={s.href}>
-              <button>Fix</button>
-            </a>
-          )}
+    <div className="panel" style={{ borderColor: 'var(--accent-border)' }}>
+      <div className="panel-head">
+        <div>
+          <h2>Finish setting up</h2>
+          <p className="sub">
+            {todo.length} step{todo.length === 1 ? '' : 's'} left. Each one removes work later.
+          </p>
         </div>
-      ))}
+        <span className="muted small nums">
+          {done.length}/{setup.length} done
+        </span>
+      </div>
+
+      <div className="list">
+        {todo.map((s) => (
+          <div key={s.id} className="list-row">
+            <span className="list-row-main" style={{ flexWrap: 'nowrap' }}>
+              <span className="setup-dot" aria-hidden="true" />
+              <span style={{ minWidth: 0 }}>
+                <span className="list-row-title">{s.label}</span>
+                <span className="muted small" style={{ display: 'block' }}>
+                  {s.detail}
+                </span>
+              </span>
+            </span>
+            {s.href && (
+              <a href={s.href} className="btn small primary">
+                {s.label.startsWith('Upload') ? 'Upload' : 'Fill in'}
+              </a>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {done.length > 0 && (
+        <div className="row setup-done">
+          {done.map((s) => (
+            <span key={s.id} className="muted small" title={s.detail}>
+              <span className="setup-tick" aria-hidden="true">
+                ✓
+              </span>
+              {s.label}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -375,8 +456,8 @@ function Feature({
           </p>
         </div>
       </div>
-      <a href={href} style={{ flex: 'none' }}>
-        <button>{cta}</button>
+      <a href={href} className="btn small">
+        {cta}
       </a>
     </div>
   );
@@ -384,55 +465,24 @@ function Feature({
 
 function Small({ href, title, note }: { href: string; title: string; note: string }) {
   return (
-    <a href={href} style={{ textDecoration: 'none', display: 'block', padding: '.6rem 0' }}>
+    <a href={href} className="stat">
       <strong>{title}</strong>
-      <div className="muted small">{note}</div>
+      <div className="stat-label">{note}</div>
     </a>
   );
 }
 
 function StatusPanel({ health, submitted }: { health: Health; submitted: number }) {
-  const c = health.estimatedCosts;
+  /*
+   * One line, not a panel. "0 applications submitted / operational" was
+   * taking a full-width card to say nothing you would act on; it belongs at
+   * the bottom of the page in the size of a footnote.
+   */
   return (
-    <div className="panel">
-      <h2>Status</h2>
-      <div className="row" style={{ gap: '2rem', marginTop: '.4rem', alignItems: 'flex-start' }}>
-        <Stat label="applications submitted" value={submitted} />
-        <Stat
-          label="model"
-          value={health.provider}
-          note={
-            health.writing === health.judgement
-              ? health.writing
-              : `${health.writing} · ${health.judgement}`
-          }
-        />
-        <Stat
-          label={c.free ? 'cost' : 'per application'}
-          value={c.free ? 'free tier' : `$${c.perApplication.toFixed(3)}`}
-          note={c.free ? 'limited by requests, not spend' : `$${c.perTailoring.toFixed(2)} per resume tailor`}
-        />
-        <Stat
-          label="browser"
-          value={health.headless ? 'headless' : 'visible'}
-          note={health.headless ? 'set HEADLESS=false so you can take over on a captcha' : 'you can take over when needed'}
-        />
-      </div>
-      {!health.llmConfigured && (
-        <div className="notice bad" style={{ marginTop: '.9rem' }}>
-          No model key configured. Set <code>GEMINI_API_KEY</code> (free at aistudio.google.com/apikey)
-          or <code>ANTHROPIC_API_KEY</code> in <code>.env</code> and restart the server. Form filling
-          from your profile still works without one; cover letters and inference do not.
-        </div>
-      )}
-      {health.headless && (
-        <div className="notice" style={{ marginTop: '.9rem' }}>
-          Running headless. Set <code>HEADLESS=false</code> — a visible, persistent browser profile
-          passes invisible CAPTCHA far more often, and it is the only way you can take over when a
-          challenge appears.
-        </div>
-      )}
-    </div>
+    <p className="muted small" style={{ textAlign: 'center', marginTop: '1.5rem' }}>
+      <span className="nums">{submitted}</span> application{submitted === 1 ? '' : 's'} submitted ·
+      server {health.ok ? 'operational' : 'degraded'}
+    </p>
   );
 }
 

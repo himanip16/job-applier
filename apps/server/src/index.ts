@@ -1,33 +1,100 @@
 import path from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
-import Fastify from 'fastify';
+import { mkdir } from 'node:fs/promises';
+import Fastify, { type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
-import { z } from 'zod';
 import { config, artifactsDir, resumesDir } from './lib/config.js';
-import { prisma, type Prisma } from './lib/db.js';
-import { bus } from './lib/events.js';
-import { enqueue, recoverInterruptedRuns, activeRuns } from './engine/queue.js';
-import { submitAnswers, decideReview, continueRun } from './engine/runner.js';
-import { rememberAnswer } from './engine/answerBank.js';
-import { adapterFor } from './ats/registry.js';
-import { extractResumeText, assessResumeText } from './lib/resumeText.js';
+import { prisma } from './lib/db.js';
+import { recoverInterruptedRuns, activeRuns } from './engine/queue.js';
+import { reconcileLeads } from './engine/leadSync.js';
 import { estimateActivityCosts, activeModels } from './llm/models.js';
-import { provider, isConfigured } from './llm/client.js';
+import { isConfigured, LlmUnavailableError } from './llm/client.js';
 import { schemaProblem, cachedSchemaProblem } from './lib/schemaCheck.js';
-import { matchCanonical, normalizeLabel, type RunEvent } from '@ja/shared';
-import { registerDiscoveryRoutes } from './routes/discovery.js';
-import { registerSettingsRoutes } from './routes/settings.js';
-import { registerJobDetailRoutes } from './routes/jobDetail.js';
+import { currentUser } from './auth/sessions.js';
 import { loadSettings } from './lib/secrets.js';
 import { isFirecrawlConfigured } from './discovery/firecrawl.js';
+import { ZodError } from 'zod';
+import { requireProfile, requireUser, type RequireUser } from './auth/requireProfile.js';
+import { registerAuthRoutes } from './routes/auth.js';
+import { registerCompanyRoutes } from './routes/companies.js';
+import { registerDiscoveryRoutes } from './routes/discovery.js';
+import { registerLeadRoutes } from './routes/leads.js';
+import { registerPreferenceRoutes } from './routes/preferences.js';
+import { registerSettingsRoutes } from './routes/settings.js';
+import { registerJobDetailRoutes } from './routes/jobDetail.js';
 import { registerTrackerRoutes } from './routes/tracker.js';
 import { registerResumeRoutes } from './routes/resume.js';
+import { registerOutreachRoutes } from './routes/outreach.js';
+import { registerConnectionRoutes } from './routes/connections.js';
+import { registerProfileRoutes } from './routes/profile.js';
+import { registerFactsRoutes } from './routes/facts.js';
+import { registerApplicationRoutes } from './routes/applications.js';
+import { registerAnswerRoutes } from './routes/answers.js';
+import { registerStreamRoutes } from './routes/stream.js';
+import { registerResumeUploadRoutes } from './routes/resumeUpload.js';
+import { registerOverviewRoutes } from './routes/overview.js';
 
 const app = Fastify({ logger: { level: 'warn' } });
-await app.register(cors, { origin: true });
+/**
+ * Reflect the caller's origin, and allow credentials.
+ *
+ * The session cookie is the whole authentication mechanism, and a browser
+ * will not send one cross-origin unless the server says credentials are
+ * allowed - which it may only do for a named origin, never for `*`. WEB_ORIGIN
+ * pins it in production; reflecting is right in development, where the port
+ * moves around.
+ */
+const allowedOrigins = (process.env.WEB_ORIGIN ?? '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+await app.register(cors, {
+  origin: allowedOrigins.length ? allowedOrigins : true,
+  credentials: true,
+});
+
 await app.register(multipart, { limits: { fileSize: 15 * 1024 * 1024 } });
+
+/**
+ * Static files also require authentication.
+ *
+ * Resumes and artifacts contain personal information, so they must be
+ * protected behind the same auth checks as the API. This hook runs before
+ * the static file handlers to ensure auth is checked first.
+ */
+const PROTECTED_STATIC = ['/artifacts/', '/files/resumes/'];
+app.addHook('onRequest', async (req, reply) => {
+  const path = req.url.split('?')[0] ?? '';
+  const protectedArray = Array.isArray(PROTECTED_STATIC) ? PROTECTED_STATIC : [];
+  if (protectedArray.some(prefix => path.startsWith(prefix))) {
+    if (await currentUser(req)) return;
+    return reply.code(401).send({ error: 'Sign in to use this.' });
+  }
+});
+
+/**
+ * Nothing under /api answers a stranger.
+ *
+ * Deliberately a hook rather than a check inside each handler. There are
+ * forty-odd routes and one of them will always be the one somebody forgets;
+ * a default-deny list of four public paths cannot be forgotten.
+ */
+const PUBLIC_API = new Set([
+  '/api/auth/me',
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/logout',
+  '/api/auth/reset-request',
+  '/api/auth/reset-complete',
+  '/api/health',
+]);
+app.addHook('preHandler', async (req, reply) => {
+  const path = req.url.split('?')[0] ?? '';
+  if (!path.startsWith('/api/') || PUBLIC_API.has(path)) return;
+  if (await currentUser(req)) return;
+  return reply.code(401).send({ error: 'Sign in to use this.' });
+});
 await mkdir(artifactsDir, { recursive: true });
 await mkdir(resumesDir, { recursive: true });
 await app.register(fastifyStatic, { root: artifactsDir, prefix: '/artifacts/' });
@@ -37,376 +104,6 @@ await app.register(fastifyStatic, {
   prefix: '/files/resumes/',
   decorateReply: false,
 });
-
-// --------------------------------------------------------------- profile ---
-
-const ProfileInput = z.object({
-  email: z.string().email(),
-  fullName: z.string().min(1),
-  firstName: z.string().min(1),
-  lastName: z.string().min(1),
-  phone: z.string().optional(),
-  city: z.string().optional(),
-  region: z.string().optional(),
-  country: z.string().optional(),
-  countryCode: z.string().optional(),
-  linkedin: z.string().optional(),
-  github: z.string().optional(),
-  website: z.string().optional(),
-  portfolio: z.string().optional(),
-  summary: z.string().optional(),
-});
-
-app.get('/api/profile', async () => {
-  const profile = await prisma.profile.findFirst({
-    include: { facts: { orderBy: { key: 'asc' } }, resumes: { orderBy: { createdAt: 'desc' } } },
-  });
-  return { profile };
-});
-
-app.put('/api/profile', async (req) => {
-  const body = ProfileInput.parse(req.body);
-  const existing = await prisma.profile.findFirst();
-  const profile = existing
-    ? await prisma.profile.update({ where: { id: existing.id }, data: body })
-    : await prisma.profile.create({ data: body });
-  return { profile };
-});
-
-const FactInput = z.object({
-  key: z.string().min(1),
-  label: z.string().min(1),
-  value: z.string(),
-  kind: z.enum(['TEXT', 'BOOLEAN', 'NUMBER', 'DATE', 'ENUM', 'LIST']).default('TEXT'),
-});
-
-app.post('/api/facts', async (req, reply) => {
-  const profile = await requireProfile(reply);
-  if (!profile) return;
-  const body = FactInput.parse(req.body);
-  const fact = await prisma.profileFact.upsert({
-    where: { profileId_key: { profileId: profile.id, key: body.key } },
-    create: { ...body, profileId: profile.id },
-    update: { label: body.label, value: body.value, kind: body.kind },
-  });
-  return { fact };
-});
-
-app.delete<{ Params: { id: string } }>('/api/facts/:id', async (req) => {
-  await prisma.profileFact.delete({ where: { id: req.params.id } });
-  return { ok: true };
-});
-
-// ---------------------------------------------------------------- resume ---
-
-app.post('/api/resume', async (req, reply) => {
-  const profile = await requireProfile(reply);
-  if (!profile) return;
-
-  const file = await req.file();
-  if (!file) return reply.code(400).send({ error: 'No file uploaded.' });
-
-  const buf = await file.toBuffer();
-  const safeName = file.filename.replace(/[^\w.\-]+/g, '_');
-  const dest = path.join(resumesDir, `${Date.now()}-${safeName}`);
-  await writeFile(dest, buf);
-
-  let text = '';
-  let warning: string | undefined;
-  try {
-    text = await extractResumeText(dest, file.mimetype);
-    warning = assessResumeText(text).warning;
-  } catch (err) {
-    warning = (err as Error).message;
-  }
-
-  const isFirst = (await prisma.resumeFile.count({ where: { profileId: profile.id } })) === 0;
-  const record = await prisma.resumeFile.create({
-    data: {
-      profileId: profile.id,
-      label: (file.fields.label as { value?: string } | undefined)?.value ?? 'Default',
-      filename: file.filename,
-      mimeType: file.mimetype,
-      path: dest,
-      bytes: buf.length,
-      isDefault: isFirst,
-      text,
-    },
-  });
-  if (isFirst) {
-    await prisma.profile.update({ where: { id: profile.id }, data: { resumeText: text } });
-  }
-  return { resume: { ...record, text: undefined }, words: text.split(/\s+/).filter(Boolean).length, warning };
-});
-
-app.post<{ Params: { id: string } }>('/api/resume/:id/default', async (req, reply) => {
-  const profile = await requireProfile(reply);
-  if (!profile) return;
-  await prisma.resumeFile.updateMany({ where: { profileId: profile.id }, data: { isDefault: false } });
-  const r = await prisma.resumeFile.update({ where: { id: req.params.id }, data: { isDefault: true } });
-  await prisma.profile.update({ where: { id: profile.id }, data: { resumeText: r.text } });
-  return { ok: true };
-});
-
-// ----------------------------------------------------------- applications ---
-
-app.post<{ Body: unknown }>('/api/applications', async (req, reply) => {
-  const profile = await requireProfile(reply);
-  if (!profile) return;
-
-  const { url, autoStart, requiresReview } = z
-    .object({
-      url: z.string().url(),
-      autoStart: z.boolean().default(true),
-      requiresReview: z.boolean().default(config.requireReview),
-    })
-    .parse(req.body);
-
-  const adapter = adapterFor(url);
-  const job = await prisma.job.upsert({
-    where: { url },
-    create: { url, ats: adapter.id, company: 'pending', title: 'pending' },
-    update: {},
-  });
-
-  const existing = await prisma.application.findUnique({
-    where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
-  });
-  if (existing && existing.status === 'SUBMITTED') {
-    return reply.code(409).send({
-      error: 'You already applied to this job.',
-      applicationId: existing.id,
-      submittedAt: existing.submittedAt,
-    });
-  }
-
-  const application =
-    existing ??
-    (await prisma.application.create({
-      data: { profileId: profile.id, jobId: job.id, requiresReview },
-    }));
-
-  if (existing) {
-    await prisma.application.update({
-      where: { id: existing.id },
-      data: { status: 'QUEUED', blockedReason: null, requiresReview },
-    });
-    await prisma.pendingQuestion.deleteMany({ where: { applicationId: existing.id, answeredAt: null } });
-  }
-
-  if (autoStart) enqueue(application.id);
-  return { applicationId: application.id, ats: adapter.id, notes: adapter.notes };
-});
-
-app.get('/api/applications', async () => {
-  const applications = await prisma.application.findMany({
-    include: { job: true, _count: { select: { pending: { where: { answeredAt: null } } } } },
-    orderBy: { updatedAt: 'desc' },
-    take: 100,
-  });
-  return { applications, active: activeRuns() };
-});
-
-app.get<{ Params: { id: string } }>('/api/applications/:id', async (req, reply) => {
-  const application = await prisma.application.findUnique({
-    where: { id: req.params.id },
-    include: {
-      job: true,
-      events: { orderBy: { createdAt: 'asc' }, take: 500 },
-      pending: { orderBy: { createdAt: 'asc' } },
-      artifacts: { orderBy: { createdAt: 'asc' } },
-    },
-  });
-  if (!application) return reply.code(404).send({ error: 'Not found' });
-  return { application };
-});
-
-app.post<{ Params: { id: string } }>('/api/applications/:id/start', async (req) => {
-  await prisma.application.update({
-    where: { id: req.params.id },
-    data: { status: 'QUEUED', blockedReason: null },
-  });
-  enqueue(req.params.id);
-  return { ok: true };
-});
-
-/**
- * The answer popup posts here. Answers land in the bank straight away when the
- * user asks to remember them, so the knowledge survives even if this
- * particular application is later abandoned.
- */
-app.post<{ Params: { id: string } }>('/api/applications/:id/answers', async (req, reply) => {
-  const profile = await requireProfile(reply);
-  if (!profile) return;
-
-  const { answers } = z
-    .object({
-      answers: z.array(
-        z.object({
-          fieldId: z.string(),
-          questionId: z.string().optional(),
-          value: z.union([z.string(), z.array(z.string())]),
-          remember: z.boolean().default(true),
-        }),
-      ),
-    })
-    .parse(req.body);
-
-  for (const a of answers) {
-    if (a.questionId) {
-      const q = await prisma.pendingQuestion.update({
-        where: { id: a.questionId },
-        data: {
-          answeredAt: new Date(),
-          answerValue: a.value as Prisma.InputJsonValue,
-          remember: a.remember,
-        },
-      });
-      if (a.remember) {
-        // Match the runner's identity rules exactly, or the same answer lands
-        // twice: once now, once after a confirmed submit.
-        const canonical = matchCanonical(q.rawLabel);
-        const application = await prisma.application.findUnique({
-          where: { id: req.params.id },
-          include: { job: true },
-        });
-        await rememberAnswer({
-          profileId: profile.id,
-          canonicalKey: canonical?.key,
-          rawLabel: q.rawLabel,
-          value: a.value,
-          displayValue: Array.isArray(a.value) ? a.value.join(', ') : a.value,
-          fieldKind: q.fieldKind,
-          options: (q.options ?? undefined) as { label: string }[] | undefined,
-          source: 'USER',
-          confidence: 1,
-          scope: canonical?.perCompany ? 'PER_COMPANY' : 'GLOBAL',
-          companyKey: application ? normalizeLabel(application.job.company) : undefined,
-        });
-      }
-    }
-  }
-
-  const delivered = submitAnswers(req.params.id, answers.map((a) => ({
-    fieldId: a.fieldId,
-    value: a.value,
-    remember: a.remember,
-  })));
-
-  if (!delivered) {
-    return reply.code(409).send({
-      error: 'That run is not currently waiting for answers. They were saved to your answer bank; restart the application to use them.',
-    });
-  }
-  return { ok: true };
-});
-
-app.post<{ Params: { id: string } }>('/api/applications/:id/review', async (req, reply) => {
-  const { approved, note } = z
-    .object({ approved: z.boolean(), note: z.string().optional() })
-    .parse(req.body);
-  const delivered = decideReview(req.params.id, approved, note);
-  if (!delivered) return reply.code(409).send({ error: 'That run is not waiting for review.' });
-  return { ok: true };
-});
-
-/**
- * "I have signed in / solved the captcha — keep going."
- *
- * A run stopped at a wall is parked, not dead: the browser is still open on
- * the page and the wizard is still half-filled. This is how the human says
- * they have dealt with it.
- */
-app.post<{ Params: { id: string } }>('/api/applications/:id/continue', async (req, reply) => {
-  const { carryOn, note } = z
-    .object({ carryOn: z.boolean().default(true), note: z.string().optional() })
-    .parse(req.body ?? {});
-  const delivered = continueRun(req.params.id, carryOn, note);
-  if (!delivered) {
-    return reply.code(409).send({
-      error:
-        'That run is not waiting at a wall. If it stopped before this server started, the ' +
-        'browser page is gone — start it again and it will pick up the signed-in session.',
-    });
-  }
-  return { ok: true };
-});
-
-// -------------------------------------------------------- live event feed ---
-
-app.get<{ Params: { id: string } }>('/api/applications/:id/stream', async (req, reply) => {
-  // Writing to reply.raw bypasses Fastify's onSend hooks, which is where
-  // @fastify/cors injects its headers - so an SSE response reaches the browser
-  // with no Access-Control-Allow-Origin and the EventSource is rejected before
-  // a single event is delivered. Set them here by hand.
-  const origin = (req.headers.origin as string | undefined) ?? '*';
-  reply.raw.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
-    'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Credentials': 'true',
-    Vary: 'Origin',
-  });
-
-  const send = (evt: RunEvent) => {
-    reply.raw.write(`data: ${JSON.stringify(evt)}\n\n`);
-  };
-
-  // Replay history so a refresh does not lose the narrative.
-  const history = await prisma.applicationEvent.findMany({
-    where: { applicationId: req.params.id },
-    orderBy: { createdAt: 'asc' },
-    take: 500,
-  });
-  for (const e of history) {
-    send({
-      applicationId: e.applicationId,
-      type: e.type,
-      message: e.message,
-      data: e.data,
-      at: e.createdAt.toISOString(),
-    });
-  }
-
-  const channel = `app:${req.params.id}`;
-  bus.on(channel, send);
-  const heartbeat = setInterval(() => reply.raw.write(': ping\n\n'), 15_000);
-
-  req.raw.on('close', () => {
-    clearInterval(heartbeat);
-    bus.off(channel, send);
-  });
-});
-
-// ------------------------------------------------------------ answer bank ---
-
-app.get('/api/answers', async (_req, reply) => {
-  const profile = await requireProfile(reply);
-  if (!profile) return;
-  const answers = await prisma.answer.findMany({
-    where: { profileId: profile.id },
-    orderBy: [{ timesUsed: 'desc' }, { updatedAt: 'desc' }],
-  });
-  return { answers: answers.map(({ vector: _vector, ...rest }) => rest) };
-});
-
-app.patch<{ Params: { id: string } }>('/api/answers/:id', async (req) => {
-  const { displayValue } = z.object({ displayValue: z.string() }).parse(req.body);
-  const answer = await prisma.answer.update({
-    where: { id: req.params.id },
-    data: { displayValue, value: displayValue, source: 'USER', confidence: 1 },
-  });
-  return { answer };
-});
-
-app.delete<{ Params: { id: string } }>('/api/answers/:id', async (req) => {
-  await prisma.answer.delete({ where: { id: req.params.id } });
-  return { ok: true };
-});
-
-// ------------------------------------------------- discovery, resume, tracker ---
 
 /**
  * An empty body is not a malformed body.
@@ -427,235 +124,72 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body,
   }
 });
 
+// --------------------------------------------------------------- error handling ---
+
+/**
+ * Global error handler for LLM, Zod validation, and other known error types.
+ *
+ * This ensures that:
+ * - Rate limit errors return 429 instead of 500
+ * - Zod validation errors return 400 with detailed issues
+ * - Other LLM errors return appropriate status codes with user-friendly messages
+ */
+app.setErrorHandler((err, req, reply) => {
+  // Handle Zod validation errors
+  if (err instanceof ZodError) {
+    return reply.code(400).send({
+      error: 'Invalid request',
+      issues: (err as any).issues,
+    });
+  }
+
+  if (err instanceof LlmUnavailableError) {
+    // Rate limit errors should return 429
+    if (err.retryable && /rate limit|quota exhausted|429/i.test(err.message)) {
+      return reply.code(429).send({ error: err.message });
+    }
+    // Other LLM unavailability errors (bad key, no key, etc.) return 400
+    return reply.code(400).send({ error: err.message });
+  }
+
+  // Log unexpected errors and return 500
+  req.log.error(err);
+  return reply.code(500).send({ error: 'Internal server error' });
+});
+
+// --------------------------------------------------------------- routes ---
+
+registerAuthRoutes(app);
+registerCompanyRoutes(app, requireProfile);
 registerDiscoveryRoutes(app, requireProfile);
+registerLeadRoutes(app, requireProfile);
+registerPreferenceRoutes(app, requireProfile);
 registerResumeRoutes(app, requireProfile);
 registerTrackerRoutes(app, requireProfile);
 registerSettingsRoutes(app);
-registerJobDetailRoutes(app);
+registerJobDetailRoutes(app, requireProfile);
+registerOutreachRoutes(app);
+registerProfileRoutes(app, requireProfile);
+registerConnectionRoutes(app, requireProfile);
+registerFactsRoutes(app, requireProfile);
+registerApplicationRoutes(app, requireProfile);
+registerAnswerRoutes(app, requireProfile);
+registerStreamRoutes(app, requireProfile);
+registerResumeUploadRoutes(app, requireProfile);
+registerOverviewRoutes(app);
 
 // ----------------------------------------------------------------- health ---
 
+/**
+ * Public health check - minimal information only.
+ *
+ * Detailed diagnostics are available to authenticated users via /api/system.
+ */
 app.get('/api/health', async () => ({
   ok: true,
-  llmConfigured: isConfigured(),
-  searchConfigured: isFirecrawlConfigured(),
-  ...activeModels(),
-  // Rough, local, and always an estimate - the real figure is on your console.
-  estimatedCosts: estimateActivityCosts(),
-  headless: config.headless,
-  requireReview: config.requireReview,
-  activeRuns: activeRuns(),
 }));
 
-/**
- * Everything the home page needs to explain itself.
- *
- * Two jobs. It reports what is still unconfigured, so a fresh install tells
- * you what to do next instead of failing later with a stack trace. And it
- * counts everything currently waiting on a human, across all four features,
- * because "three things need you" is the one number worth putting at the top
- * of a page.
- */
-app.get('/api/overview', async () => {
-  const profile = await prisma.profile.findFirst({
-    include: { facts: true, resumes: true, _count: { select: { answers: true } } },
-  });
-
-  // Every count is guarded. This endpoint is the one that reports a broken
-  // install, so it has to survive one - a stale client or a missing table must
-  // degrade a number to zero, not take the whole dashboard down with a
-  // TypeError the user cannot act on.
-  const [
-    companies,
-    leadsNew,
-    needsInput,
-    needsHuman,
-    inReview,
-    submitted,
-    upcomingRounds,
-    lessons,
-    strongMatches,
-    leadsTotal,
-    shortlisted,
-    runsInFlight,
-  ] =
-    await Promise.all([
-      safeCount(() => prisma.company.count({ where: { enabled: true } })),
-      profile
-        ? safeCount(() => prisma.jobLead.count({ where: { profileId: profile.id, status: 'NEW' } }))
-        : 0,
-      safeCount(() => prisma.application.count({ where: { status: 'NEEDS_INPUT' } })),
-      safeCount(() => prisma.application.count({ where: { status: 'NEEDS_HUMAN' } })),
-      safeCount(() => prisma.application.count({ where: { status: 'REVIEW' } })),
-      safeCount(() => prisma.application.count({ where: { status: 'SUBMITTED' } })),
-      safeCount(() => prisma.interviewRound.count({ where: { status: 'SCHEDULED' } })),
-      safeCount(() => prisma.lesson.count()),
-      // The headline numbers. "Strong" is the same threshold the lead cards
-      // colour green at, so the front page and the queue never disagree.
-      safeCount(() =>
-        profile
-          ? prisma.jobLead.count({ where: { profileId: profile.id, status: 'NEW', score: { gte: 70 } } })
-          : Promise.resolve(0),
-      ),
-      safeCount(() => (profile ? prisma.jobLead.count({ where: { profileId: profile.id } }) : Promise.resolve(0))),
-      safeCount(() => prisma.jobLead.count({ where: { status: 'SHORTLISTED' } })),
-      // Anything moving on its own. The dashboard polls fast only while this
-      // is non-zero, because that is the only time the numbers can change
-      // without the person doing something.
-      //
-      // Bounded by recency on purpose: a run whose process died mid-fill keeps
-      // its FILLING status for ever, and counting it would pin the dashboard
-      // at its fast interval permanently. Nothing that has not moved in ten
-      // minutes is in flight in any sense worth polling for.
-      safeCount(() =>
-        prisma.application.count({
-          where: {
-            status: { in: ['QUEUED', 'PREPARING', 'FILLING', 'SUBMITTING'] },
-            updatedAt: { gt: new Date(Date.now() - 10 * 60_000) },
-          },
-        }),
-      ),
-    ]);
-
-  const schema = await cachedSchemaProblem();
-
-  // Which run to send them to. A banner that says "1 thing needs you" and
-  // makes you go and find it is only half a nudge, so the overview names the
-  // most urgent one. Ordered by how blocking it is: a question stops the run
-  // dead, a review is ready and waiting, a wall needs you in the browser.
-  const urgent = await prisma.application
-    .findFirst({
-      where: { status: { in: ['NEEDS_INPUT', 'NEEDS_HUMAN', 'REVIEW'] } },
-      orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
-      include: { job: { select: { title: true, company: true } } },
-    })
-    .catch(() => null);
-
-  const standingAnswers = profile?.facts.length ?? 0;
-
-  // Ordered: each step is genuinely blocked by the one above it.
-  const setup = [
-    {
-      id: 'schema',
-      label: 'Sync the database',
-      done: schema === null,
-      detail: schema ?? 'Client, schema and tables all match.',
-      href: null,
-    },
-    {
-      id: 'model',
-      label: 'Connect a model',
-      done: isConfigured(),
-      detail: isConfigured()
-        ? `${activeModels().provider} · ${activeModels().writing}`
-        : 'Gemini has a free tier. Paste the key on the settings page — no restart needed.',
-      href: '/settings',
-    },
-    {
-      id: 'profile',
-      label: 'Fill in your profile',
-      done: Boolean(profile?.email && profile?.fullName),
-      detail: profile ? `${profile.fullName} · ${profile.email}` : 'Name, contact and links fill half of every form directly.',
-      href: '/profile',
-    },
-    {
-      id: 'resume',
-      label: 'Upload your resume',
-      done: (profile?.resumes.length ?? 0) > 0,
-      detail: profile?.resumes.length
-        ? `${profile.resumes.length} on file`
-        : 'Attached to applications, and the only thing claims can be grounded in.',
-      href: '/profile',
-    },
-    {
-      id: 'facts',
-      label: 'Answer the standing questions',
-      done: standingAnswers >= 5,
-      detail:
-        standingAnswers >= 5
-          ? `${standingAnswers} recorded`
-          : `${standingAnswers} of ~11 filled. Each one is a popup you will not see later.`,
-      href: '/profile',
-    },
-    {
-      id: 'search',
-      label: 'Turn on job search',
-      done: isFirecrawlConfigured(),
-      detail: isFirecrawlConfigured()
-        ? companies > 0
-          ? `Ready. ${companies} board(s) found so far.`
-          : 'Ready. Hit "Find jobs for me" and it will go looking.'
-        : 'Paste a Firecrawl key on the settings page and it will find openings on its own.',
-      href: '/settings',
-    },
-  ];
-
-  return {
-    setup,
-    ready: setup.slice(0, 4).every((s) => s.done),
-    needsYou: {
-      needsInput,
-      inReview,
-      needsHuman,
-      total: needsInput + inReview + needsHuman,
-      first: urgent
-        ? {
-            id: urgent.id,
-            status: urgent.status,
-            title: urgent.job.title,
-            company: urgent.job.company,
-            reason: urgent.blockedReason,
-          }
-        : null,
-    },
-    counts: {
-      leadsNew,
-      leadsTotal,
-      strongMatches,
-      shortlisted,
-      submitted,
-      upcomingRounds,
-      lessons,
-      answerBank: profile?._count.answers ?? 0,
-      runsInFlight,
-      companies,
-    },
-  };
-});
-
-/**
- * What this API key can actually reach.
- *
- * Model ids move — Gemini has renamed and deprecated several inside a year —
- * so rather than trusting a hard-coded default, ask the provider and let the
- * UI show real options.
- */
-app.get('/api/models', async () => {
-  try {
-    const p = provider();
-    return { provider: p.id, models: await p.listModels(), active: activeModels() };
-  } catch (err) {
-    return { provider: null, models: [], error: (err as Error).message };
-  }
-});
-
-/** A count that reports zero rather than taking the page down. */
-async function safeCount(fn: () => Promise<number>): Promise<number> {
-  try {
-    return await fn();
-  } catch {
-    return 0;
-  }
-}
-
-async function requireProfile(reply: { code: (n: number) => { send: (b: unknown) => unknown } }) {
-  const profile = await prisma.profile.findFirst();
-  if (!profile) {
-    reply.code(400).send({ error: 'Create your profile first (PUT /api/profile).' });
-    return null;
-  }
-  return profile;
-}
+// --------------------------------------------------------------- startup ---
 
 // Say it once at boot, loudly, rather than once per request. A stale generated
 // client produces "Cannot read properties of undefined" from whichever endpoint
@@ -680,6 +214,10 @@ const recovered = await recoverInterruptedRuns();
 if (recovered) {
   process.stdout.write(`Requeued ${recovered} run(s) interrupted by a restart.\n`);
 }
+
+// Cards a run moved before Applied meant submitted go where their run says now.
+const moved = Object.entries(await reconcileLeads().catch(() => ({})));
+if (moved.length) process.stdout.write(`Re-sorted job cards: ${moved.map(([tab, n]) => `${n} to ${tab}`).join(', ')}.\n`);
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
 process.stdout.write(`API on http://localhost:${config.port}\n`);

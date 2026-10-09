@@ -1,0 +1,56 @@
+/* ------------------------------------------------------------------ helpers */
+
+.muted { color: var(--muted); }
+.small { font-size: var(--fs-sm); }
+.nums { font-variant-numeric: tabular-nums; }
+.truncate { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shot { max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.7rem; }
+
+.stat {
+  display: block; text-decoration: none; color: inherit;
+  padding: 0.85rem 1rem; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--panel-2);
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.stat:hover { border-color: var(--border-strong); background: var(--panel-hover); text-decoration: none; transform: translateY(-1px); }
+.stat .stat-value {
+  font-size: var(--fs-2xl); font-weight: 700; line-height: 1.1;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+}
+.stat .stat-label { color: var(--muted); font-size: var(--fs-sm); margin-top: 0.15rem; }
+
+.lead-row:hover { background: var(--panel-2); }
+
+.empty-state {
+  text-align: center; padding: 2.5rem 1.5rem; color: var(--muted);
+  border: 1px dashed var(--border); border-radius: var(--radius); font-size: var(--fs-base);
+}
+
+.spinner {
+  width: 1em; height: 1em; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  display: inline-block; animation: spin 700ms linear infinite; flex: none;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.skel {
+  background: linear-gradient(90deg, var(--panel-2) 25%, var(--panel-hover) 37%, var(--panel-2) 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: var(--radius-sm);
+}
+@keyframes shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+.fade-in { animation: fadein 220ms var(--ease); }
+
+/* Disclosure chevrons, mirrored icons and spinning icons, on any page. */
+.chev { transition: transform var(--fast) var(--ease); }
+.chev.open, details[open] > summary .chev { transform: rotate(180deg); }
+.flip { transform: scaleY(-1); }
+.spin { animation: spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .spin { animation: none; }
+  .chev { transition: none; }
+}
