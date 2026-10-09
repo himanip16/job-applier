@@ -45,7 +45,21 @@ export interface Overview {
     companies: number;
     /** Applications currently being driven. Non-zero means the state moves on its own. */
     runsInFlight: number;
+    /** Matches still waiting on a decision - the number the front page is about. */
+    notApplied: number;
   };
+  /** The best few of those, so the front page can show them rather than count them. */
+  topMatches: {
+    id: string;
+    title: string;
+    companyName: string;
+    location: string | null;
+    remote: boolean;
+    score: number;
+    deepScored: boolean;
+    status: string;
+    url: string;
+  }[];
 }
 
 type Listener = (state: { data: Overview | null; error: string | null }) => void;

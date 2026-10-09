@@ -1,3 +1,4 @@
+import { fileHint } from '../types.js';
 import type { AtsAdapter, JobMeta } from '../types.js';
 import { extractFields } from '../../browser/extract.js';
 import { openApplicationForm } from '../../browser/openForm.js';
@@ -44,8 +45,8 @@ export const genericAdapter: AtsAdapter = {
   fileInputs(fields) {
     const files = fields.filter((f) => f.kind === 'FILE');
     return {
-      resume: files.find((f) => /resume|cv/i.test(f.label)) ?? files[0],
-      coverLetter: files.find((f) => /cover/i.test(f.label)),
+      resume: files.find((f) => /resume|cv/i.test(fileHint(f))) ?? files[0],
+      coverLetter: files.find((f) => /cover/i.test(fileHint(f))),
     };
   },
 

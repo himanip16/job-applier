@@ -1,8 +1,10 @@
+import type { Country } from '@ja/shared';
 import { z } from 'zod';
 import { normalizeLabel, tokenize } from '@ja/shared';
 import { prisma } from '../lib/db.js';
 import { generate, isConfigured } from '../llm/client.js';
 import { MAX_QUERY_LENGTH } from './firecrawl.js';
+import { candidateRejections } from './decisionHistory.js';
 
 /**
  * Turning "who am I" into "what to search for".
@@ -63,7 +65,7 @@ Rules:
 
 export async function buildSearchPlan(
   profileId: string,
-  opts: { maxQueries?: number } = {},
+  opts: { maxQueries?: number; country?: Country } = {},
 ): Promise<SearchPlan> {
   const maxQueries = opts.maxQueries ?? 6;
 
@@ -81,7 +83,7 @@ export async function buildSearchPlan(
       select: { title: true, companyName: true, location: true },
     }),
     prisma.jobLead.findMany({
-      where: { profileId, status: 'REJECTED' },
+      where: { profileId, ...candidateRejections },
       orderBy: { decidedAt: 'desc' },
       take: 15,
       select: { title: true, rejectReason: true, rejectCategory: true },
@@ -102,20 +104,21 @@ export async function buildSearchPlan(
     );
   }
 
-  const country = profile.countryCode || undefined;
+  // The country you picked for this search wins over the profile's own.
+  const country = opts.country?.code ?? (profile.countryCode || undefined);
 
   if (isConfigured()) {
     try {
       const plan = await generate({
         task: 'searchPlanning',
         system: PLAN_SYSTEM,
-        prompt: renderPlanPrompt({ profile, summary, resume, accepted, rejected }),
+        prompt: renderPlanPrompt({ profile, summary, resume, accepted, rejected, searchCountry: opts.country?.name }),
         schema: PlanSchema,
         maxTokens: 1200,
       });
       const queries = cleanQueries(plan?.queries ?? [], maxQueries);
       const roleTitles = (plan?.roleTitles ?? []).map((t) => t.trim()).filter(Boolean).slice(0, 8);
-      if (queries.length) {
+      if (queries.length && roleTitles.length) {
         return { roleTitles, queries, country, source: 'model', notes };
       }
       notes.push('The model returned no usable queries, so these were derived from your profile.');
@@ -130,7 +133,11 @@ export async function buildSearchPlan(
   }
 
   const fallback = profileDerivedPlan({ profile, summary, resume, accepted, maxQueries });
-  return { ...fallback, country, source: 'profile', notes };
+  const place = opts.country?.name;
+  const queries = place
+    ? fallback.queries.map((q) => (q.toLowerCase().includes(place.toLowerCase()) ? q : `${q} ${place}`))
+    : fallback.queries;
+  return { ...fallback, queries, country, source: 'profile', notes };
 }
 
 function renderPlanPrompt(args: {
@@ -139,6 +146,7 @@ function renderPlanPrompt(args: {
   resume: string;
   accepted: { title: string; companyName: string; location: string | null }[];
   rejected: { title: string; rejectReason: string | null; rejectCategory: string | null }[];
+  searchCountry?: string;
 }): string {
   const where = [args.profile.city, args.profile.region, args.profile.country]
     .filter(Boolean)
@@ -150,6 +158,9 @@ function renderPlanPrompt(args: {
 
   return [
     `<candidate_location>${where || 'not stated'}</candidate_location>`,
+    args.searchCountry
+      ? `<search_country>${args.searchCountry}</search_country>\nThe candidate chose to search only in ${args.searchCountry}. Every query must target ${args.searchCountry} (name the country or one of its cities), or be for remote roles open there.`
+      : '',
     relevantFacts.length
       ? `<stated_facts>\n${relevantFacts.map((f) => `- ${f.label}: ${f.value}`).join('\n')}\n</stated_facts>`
       : '',
@@ -193,10 +204,13 @@ function profileDerivedPlan(args: {
   const seniority = detectSeniority(text);
   const city = args.profile.city?.trim();
 
-  // Titles the candidate has already chosen to pursue beat anything inferred.
-  const chosen = dedupe(args.accepted.map((a) => a.title.trim()).filter(Boolean)).slice(0, 4);
+  // Titles the candidate has already chosen to pursue beat anything inferred -
+  // but as the role, not the posting. "Software Engineer (Cybersecurity
+  // Integrations) - Armis" verbatim matches one job at one company, and the
+  // career-site sources that only search the first few titles came back empty.
+  const chosen = args.accepted.map((a) => baseRoleTitle(a.title)).filter(Boolean);
 
-  const roleTitles = dedupe([
+  const roleTitles = dedupeRoles([
     ...chosen,
     ...detectRoleFamilies(text).map((r) => (seniority ? `${seniority} ${r}` : r)),
   ]).slice(0, 6);
@@ -293,15 +307,38 @@ function cleanQueries(raw: string[], max: number): string[] {
   return out;
 }
 
-const dedupe = (xs: string[]): string[] => {
-  const seen = new Set<string>();
-  return xs.filter((x) => {
-    const k = x.toLowerCase();
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-};
+/**
+ * The role a posting title names, without its team, product or company:
+ * "Software Development Engineer II, India HealthCare" -> "Software
+ * Development Engineer II", "Senior Software Engineer - Fullstack" -> "Senior
+ * Software Engineer".
+ */
+function baseRoleTitle(title: string): string {
+  return title
+    .replace(/\([^)]*\)/g, ' ')
+    .split(/\s[-–—|]\s|,|:/)[0]!
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * One title per kind of role. "Software Engineer", "Senior Software Engineer"
+ * and "SDE II" are the same search to a career site; keeping all three spends
+ * the slots that the sources which read only the first few titles have. The
+ * variant without a level wins, since it finds every level.
+ */
+function dedupeRoles(titles: string[]): string[] {
+  const byKind = new Map<string, string>();
+  for (const title of titles) {
+    const kind = withoutLevel(normalizeTitle(title));
+    if (!kind) continue;
+    const kept = byKind.get(kind);
+    if (!kept || withoutLevel(normalizeLabel(title)) === normalizeLabel(title) && title.length < kept.length) {
+      byKind.set(kind, title);
+    }
+  }
+  return [...byKind.values()];
+}
 
 /**
  * Does a posting we found incidentally look like something this candidate
@@ -315,17 +352,21 @@ const dedupe = (xs: string[]): string[] => {
  */
 export function titleMatchesPlan(title: string, roleTitles: string[]): boolean {
   if (!roleTitles.length) return false;
-  const titleTokens = new Set(tokenize(normalizeLabel(title)));
-  const normalisedTitle = normalizeLabel(title);
+  const normalisedTitle = normalizeTitle(title);
+  const titleTokens = new Set(tokenize(normalisedTitle));
 
   return roleTitles.some((role) => {
-    const roleTokens = tokenize(normalizeLabel(role));
+    const normalisedRole = normalizeTitle(role);
+    const roleTokens = tokenize(normalisedRole);
     const distinctive = roleTokens.filter((t) => !GENERIC_TITLE_TOKENS.has(t));
     const kind = roleTokens.filter((t) => GENERIC_TITLE_TOKENS.has(t));
 
     // Every token was generic ("Software Engineer"), so token matching would
     // wave through the entire company. Fall back to the phrase itself.
-    if (!distinctive.length) return normalisedTitle.includes(normalizeLabel(role));
+    if (!distinctive.length) {
+      const roleKind = withoutLevel(normalisedRole);
+      return !!roleKind && withoutLevel(normalisedTitle).includes(roleKind);
+    }
 
     // The distinctive words all have to be there...
     if (!distinctive.every((t) => titleTokens.has(t))) return false;
@@ -339,6 +380,47 @@ export function titleMatchesPlan(title: string, roleTitles: string[]): boolean {
     // across the whole org, and the role word is what separates them.
     if (!kind.length) return true;
     return kind.some((t) => titleTokens.has(t));
+  });
+}
+
+/**
+ * Companies name the same job differently: Amazon posts "SDE-2", Salesforce
+ * "SMTS", everyone else "Senior Software Engineer". Plan titles and posting
+ * titles are both rewritten into one vocabulary before they are compared, or
+ * a plan for "Backend Engineer" never sees a "Backend Developer". Applied in
+ * order, to text already through normalizeLabel.
+ */
+const TITLE_VOCABULARY: [RegExp, string][] = [
+  [/\b(back[ -]end|server[ -]side)\b/g, 'backend'],
+  [/\bfront[ -]end\b/g, 'frontend'],
+  [/\bfull[ -]stack\b/g, 'fullstack'],
+  [/\b(smts|senior member of technical staff)\b/g, 'senior software engineer'],
+  [/\b(mts|member of technical staff)\b/g, 'software engineer'],
+  [/\b(software development engineer|sde)(?:[- ]?(?:iii|ii|i|[1-3]))?\b/g, 'software engineer'],
+  [/\bdevelopers?\b/g, 'engineer'],
+];
+
+export function normalizeTitle(title: string): string {
+  let s = normalizeLabel(title);
+  for (const [pattern, replacement] of TITLE_VOCABULARY) s = s.replace(pattern, replacement);
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+const withoutLevel = (title: string) => title
+  .replace(/\b(senior|junior|staff|principal|lead|associate|mid|level|i|ii|iii|iv|[1-5])\b/g, ' ')
+  .replace(/\s+/g, ' ').trim();
+
+/** Generic software titles can describe a speciality in the actual job text. */
+export function jobMatchesPlan(job: { title: string; descriptionText?: string | null }, roles: string[]): boolean {
+  if (titleMatchesPlan(job.title, roles)) return true;
+  // A sales role mentioning backend teams, or an explicitly frontend title,
+  // must not pass just because the description contains a matching keyword.
+  if (withoutLevel(normalizeTitle(job.title)) !== 'software engineer') return false;
+  const description = normalizeTitle((job.descriptionText ?? '').slice(0, 12000));
+  return roles.some((role) => {
+    const normalized = normalizeTitle(role);
+    if (!/\b(?:software|backend|frontend|fullstack|platform) engineer\b/.test(normalized)) return false;
+    return titleMatchesPlan(`software engineer ${description}`, [normalized]);
   });
 }
 

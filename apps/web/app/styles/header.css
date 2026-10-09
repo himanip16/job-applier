@@ -1,0 +1,108 @@
+/* --------------------------------------------------------------- header */
+
+header.top {
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  position: sticky; top: 0; z-index: 30;
+}
+header.top .inner {
+  max-width: var(--content); margin: 0 auto; padding: 0.55rem 1.5rem;
+  display: flex; align-items: center; gap: 1.25rem;
+}
+.brand {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  color: var(--text); font-weight: 700; font-size: var(--fs-md);
+  letter-spacing: -0.01em; flex: none;
+}
+.brand:hover { text-decoration: none; color: var(--text); }
+.brand .brand-mark {
+  width: 26px; height: 26px; border-radius: 8px;
+  background: linear-gradient(155deg, var(--accent), var(--accent-active));
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; box-shadow: var(--shadow-sm);
+  flex: none;
+}
+
+/*
+ * One row, always.
+ *
+ * Nine links and an account block did not fit, so the row wrapped and the
+ * second line sat under the logo looking like a rendering fault. The nav now
+ * scrolls sideways instead of wrapping: a nav that runs off the edge reads as
+ * "there is more this way", a nav that wraps reads as broken.
+ */
+header.top nav {
+  display: flex; gap: 0.1rem; margin-right: auto; font-size: var(--fs-sm);
+  align-items: center; flex-wrap: nowrap;
+  min-width: 0; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+}
+header.top nav::-webkit-scrollbar { display: none; }
+header.top nav a {
+  color: var(--muted); text-decoration: none;
+  padding: 0.38rem 0.6rem; border-radius: var(--radius-sm);
+  display: inline-flex; align-items: center; gap: 0.38rem;
+  white-space: nowrap; flex: none;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+  position: relative;
+}
+header.top nav a svg { flex: none; opacity: 0.85; }
+header.top nav a:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
+header.top nav a.active { color: var(--text); background: var(--accent-soft); font-weight: 600; }
+header.top nav a.active svg { opacity: 1; color: var(--accent); }
+
+.nav-badge {
+  background: var(--warn); color: var(--warn-contrast);
+  font-size: 0.68rem; font-weight: 700; line-height: 1;
+  padding: 0.16rem 0.36rem; border-radius: 999px; min-width: 1.15rem; text-align: center;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ------------------------------------------------------------- account */
+
+.account { position: relative; flex: none; }
+.account-btn {
+  padding: 0.2rem 0.35rem 0.2rem 0.2rem; gap: 0.3rem;
+  background: transparent; border-color: transparent;
+}
+.account-btn:hover:not(:disabled) { background: var(--panel-2); border-color: var(--border); }
+.account-avatar {
+  flex: none; width: 1.65rem; height: 1.65rem; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.72rem; font-weight: 700;
+}
+.account-caret {
+  width: 0.4rem; height: 0.4rem; flex: none;
+  border-right: 1.6px solid var(--muted); border-bottom: 1.6px solid var(--muted);
+  transform: translateY(-2px) rotate(45deg);
+}
+.account-menu {
+  position: absolute; right: 0; top: calc(100% + 0.45rem);
+  min-width: 15rem; padding: 0.3rem;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-md);
+  z-index: 40; animation: fadein var(--fast) var(--ease);
+}
+.account-menu-head {
+  padding: 0.5rem 0.6rem 0.6rem; margin-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border); font-size: var(--fs-sm);
+}
+.account-menu-item {
+  display: block; width: 100%; text-align: left;
+  padding: 0.45rem 0.6rem; border-radius: var(--radius-sm);
+  font-size: var(--fs-md); color: var(--text); background: transparent;
+  border: 0; cursor: pointer; text-decoration: none;
+  font: inherit; font-size: var(--fs-md);
+}
+.account-menu-item:hover { background: var(--panel-2); text-decoration: none; color: var(--text); }
+.account-menu-item.danger { color: var(--bad); }
+.account-menu-item.danger:hover { background: var(--bad-soft); }
+
+@media (max-width: 900px) {
+  header.top .inner { gap: 0.75rem; }
+}

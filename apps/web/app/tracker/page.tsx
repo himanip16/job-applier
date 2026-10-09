@@ -78,23 +78,28 @@ export default function TrackerPage() {
           automation got; <em>outcome</em> is where you stand with the employer — they are different
           facts and both are worth keeping.
         </p>
-        <div className="row">
-          {['ALL', ...OUTCOMES].map((o) => (
-            <button
-              key={o}
-              onClick={() => setFilter(o)}
-              style={filter === o ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined}
-            >
-              {o.replace('_', ' ').toLowerCase()} {o === 'ALL' ? `(${total})` : stats[o] ? `(${stats[o]})` : ''}
-            </button>
-          ))}
+        <div className="tabs" role="tablist">
+          {['ALL', ...OUTCOMES].map((o) => {
+            const n = o === 'ALL' ? total : stats[o];
+            return (
+              <button
+                key={o}
+                role="tab"
+                aria-selected={filter === o}
+                onClick={() => setFilter(o)}
+              >
+                {o.replace('_', ' ').toLowerCase()}
+                {n ? <span className="muted nums"> {n}</span> : null}
+              </button>
+            );
+          })}
         </div>
         {error && <div className="notice bad" style={{ marginTop: '.8rem' }}>{error}</div>}
       </div>
 
       {rows.length === 0 ? (
         <div className="panel">
-          <p className="muted small">Nothing tracked yet.</p>
+          <div className="empty-state">Nothing tracked yet. Applications appear here once you apply.</div>
         </div>
       ) : (
         rows.map((row) => (

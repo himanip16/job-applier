@@ -32,9 +32,10 @@ import { firecrawlSearch, isFirecrawlConfigured } from '../discovery/firecrawl.j
 export function registerSettingsRoutes(app: FastifyInstance) {
   app.get('/api/settings', async () => ({
     settings: (Object.keys(EDITABLE_SETTINGS) as SettingKey[]).map((key) => describe(key)),
+    // Masked: a saved key must never reach the browser in full.
     namedKeys: {
-      anthropic: namedProviderState('anthropic'),
-      gemini: namedProviderState('gemini'),
+      anthropic: maskedProviderState('anthropic'),
+      gemini: maskedProviderState('gemini'),
     },
     // What the current combination actually gets you, so the page can say
     // which features are live rather than leaving you to work it out.
@@ -141,6 +142,11 @@ export function registerSettingsRoutes(app: FastifyInstance) {
   });
 }
 
+function maskedProviderState(provider: 'anthropic' | 'gemini') {
+  const { activeId, keys } = namedProviderState(provider);
+  return { activeId, keys: keys.map((k) => ({ id: k.id, name: k.name, preview: maskSecret(k.value) })) };
+}
+
 /** Everything about a setting except the value itself. */
 function describe(key: SettingKey) {
   const meta = EDITABLE_SETTINGS[key];
@@ -155,13 +161,16 @@ function describe(key: SettingKey) {
     origin,
     // Masked for the secrets; LLM_PROVIDER is not one, and hiding it would
     // just make the page harder to read.
-    preview: meta.secret ? maskSecret(value) : value,
+    // Not even four characters of a password.
+    preview: key === 'JOB_SITE_PASSWORD' ? (value ? '••••' : '') : meta.secret ? maskSecret(value) : value,
     set: Boolean(value),
   };
 }
 
 /** Does this key actually work? One real call, with a message worth reading. */
 async function verify(key: SettingKey): Promise<{ ok: boolean; detail: string }> {
+  // Nothing to call: it is checked by the first account wall it meets.
+  if (key === 'JOB_SITE_PASSWORD') return { ok: true, detail: 'Saved.' };
   try {
     if (key === 'FIRECRAWL_API_KEY') {
       // The cheapest real request the API offers. Two credits to find out now

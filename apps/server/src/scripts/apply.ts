@@ -41,6 +41,14 @@ const job = await prisma.job.upsert({
   create: { url, ats: adapter.id, company: 'pending', title: 'pending' },
   update: {},
 });
+const already = await prisma.application.findUnique({
+  where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
+  select: { status: true, submittedAt: true },
+});
+if (already?.status === 'SUBMITTED') {
+  console.error(`You already applied to this job (${already.submittedAt?.toISOString() ?? 'date unknown'}).`);
+  process.exit(1);
+}
 const application = await prisma.application.upsert({
   where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
   create: { profileId: profile.id, jobId: job.id },
@@ -70,7 +78,8 @@ const serialise = (work: () => Promise<void>, onFailure: () => void) => {
     });
 };
 
-bus.on(`app:${application.id}`, (evt: { type: string; data?: unknown }) => {
+const eventName = `app:${application.id}`;
+const handler = (evt: { type: string; data?: unknown }) => {
   if (evt.type === 'QUESTION_ASKED') {
     serialise(answerPending, () => submitAnswers(application.id, []));
   }
@@ -79,7 +88,8 @@ bus.on(`app:${application.id}`, (evt: { type: string; data?: unknown }) => {
       decideReview(application.id, false, 'the terminal could not read your answer'),
     );
   }
-});
+};
+bus.on(eventName, handler);
 
 async function answerPending(): Promise<void> {
   const pending = await prisma.pendingQuestion.findMany({
@@ -177,10 +187,14 @@ async function confirm(prompt: string, byDefault: boolean): Promise<boolean> {
 
 const truncate = (s: string, n = 40) => (s.length <= n ? s : `${s.slice(0, n - 1)}…`);
 
-await runApplication(application.id);
-// Let any handler still in flight finish before tearing down the terminal and
-// the database connection underneath it.
-await queue;
-rl.close();
-await closeContext();
-await prisma.$disconnect();
+try {
+  await runApplication(application.id);
+} finally {
+  // Let any handler still in flight finish before tearing down the terminal and
+  // the database connection underneath it.
+  await queue;
+  bus.off(eventName, handler);
+  rl.close();
+  await closeContext();
+  await prisma.$disconnect();
+}

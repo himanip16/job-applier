@@ -134,8 +134,80 @@ export async function newPage(): Promise<Page> {
   return page;
 }
 
+/**
+ * Tabs a finished run left open for you to finish by hand, by application.
+ *
+ * Without this the app cannot say whether "it is open in the browser" is still
+ * true, and every retry of a set-aside application stacks up another tab of
+ * the same form.
+ */
+const leftOpen = new Map<string, Page>();
+
+export function leaveOpen(applicationId: string, page: Page): void {
+  leftOpen.set(applicationId, page);
+  page.once('close', () => {
+    if (leftOpen.get(applicationId) === page) leftOpen.delete(applicationId);
+  });
+}
+
+export function tabLeftOpen(applicationId: string): boolean {
+  const page = leftOpen.get(applicationId);
+  return !!page && !page.isClosed();
+}
+
+/** A new run replaces the tab the last one left; you would not want both. */
+export async function closeLeftOpen(applicationId: string): Promise<void> {
+  const page = leftOpen.get(applicationId);
+  leftOpen.delete(applicationId);
+  await page?.close().catch(() => {});
+}
+
+/**
+ * The tab a run was driving has gone - someone closed it, or the whole window.
+ *
+ * Distinct from every other failure because nothing on the page can be read or
+ * retried: without it, each field reports "not found in DOM" and the run then
+ * dies screenshotting a page that no longer exists.
+ */
+export class PageClosedError extends Error {
+  constructor(while_: string) {
+    super(
+      `The browser tab was closed ${while_}. Start the application again - answers you ` +
+        'already gave are kept and will not be asked twice.',
+    );
+    this.name = 'PageClosedError';
+  }
+}
+
+/** Throw PageClosedError if the tab has gone. */
+export function assertOpen(page: Page, while_: string): void {
+  if (page.isClosed()) throw new PageClosedError(while_);
+}
+
+/**
+ * Wait on a person, unless the tab closes first.
+ *
+ * A run parked on a question or the review gate otherwise sits there forever,
+ * and when the reply does come there is nothing left to fill.
+ */
+export async function unlessClosed<T>(page: Page, wait: Promise<T>, while_: string): Promise<T> {
+  let onClose = () => {};
+  const closed = new Promise<never>((_, reject) => {
+    onClose = () => reject(new PageClosedError(while_));
+    if (page.isClosed()) onClose();
+    else page.once('close', onClose);
+  });
+  try {
+    return await Promise.race([wait, closed]);
+  } finally {
+    page.off('close', onClose);
+  }
+}
+
 /** Save a screenshot into the artifact store and return its relative path. */
 export async function screenshot(page: Page, applicationId: string, label: string): Promise<string> {
+  // '' tells artifact() there is nothing to record.
+  if (!config.saveScreenshots) return '';
   const dir = path.join(artifactsDir, applicationId);
   await fs.mkdir(dir, { recursive: true });
   const safe = label.replace(/[^a-z0-9-_]+/gi, '-').toLowerCase();

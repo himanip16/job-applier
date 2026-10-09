@@ -1,167 +1,36 @@
-:root {
-  --bg: #0e1116;
-  --panel: #161b22;
-  --panel-2: #1c232c;
-  --border: #2a313c;
-  --text: #e6edf3;
-  --muted: #8b949e;
-  --accent: #4c8dff;
-  --good: #3fb950;
-  --warn: #d29922;
-  --bad: #f85149;
-  --radius: 10px;
-}
+/*
+ * Design system.
+ *
+ * One token set drives every page: colour, spacing, radius, shadow and
+ * motion are all variables so a page never hardcodes a look of its own.
+ *
+ * The rule this file exists to enforce: a page writes class names, not
+ * styles. Anything a page needs more than once - a button, a filter bar, a
+ * row in a list, a disclosure - is themed once here so changing what a
+ * button looks like is one edit instead of forty. Components are element
+ * agnostic on purpose: `.btn` looks the same on <a>, <button> and <label>,
+ * because "a link that acts like a button" is a thing every page has and
+ * styling it inline is how they drifted apart in the first place.
+ *
+ * This file only assembles the pieces, which live in ./styles, one concern
+ * per file. Import order matters for exactly one reason: tokens.css defines
+ * every var(--...) the files below it read, so it has to come first.
+ * Everything else is ordered roughly in the sequence a page composes it,
+ * page-specific overrides last.
+ */
 
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f6f8fa;
-    --panel: #ffffff;
-    --panel-2: #f0f3f6;
-    --border: #d0d7de;
-    --text: #1f2328;
-    --muted: #636c76;
-  }
-}
-
-* { box-sizing: border-box; }
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-
-.wrap { max-width: 1040px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
-
-header.top {
-  border-bottom: 1px solid var(--border);
-  background: var(--panel);
-  position: sticky; top: 0; z-index: 20;
-}
-header.top .inner {
-  max-width: 1040px; margin: 0 auto; padding: .8rem 1.25rem;
-  display: flex; align-items: center; gap: 1.25rem;
-}
-header.top strong { font-size: 1rem; letter-spacing: -.01em; }
-header.top nav {
-  display: flex; gap: .15rem; margin-left: auto; font-size: .875rem;
-  flex-wrap: wrap; justify-content: flex-end;
-}
-header.top nav a {
-  color: var(--muted); text-decoration: none;
-  padding: .3rem .55rem; border-radius: 6px;
-  display: inline-flex; align-items: center; gap: .35rem;
-  white-space: nowrap;
-}
-header.top nav a:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
-header.top nav a.active { color: var(--text); background: var(--panel-2); font-weight: 600; }
-/* The badge is how you discover a run is sitting waiting for an answer. */
-.nav-badge {
-  background: var(--warn); color: #1a1300;
-  font-size: .7rem; font-weight: 700; line-height: 1;
-  padding: .15rem .35rem; border-radius: 999px; min-width: 1.1rem; text-align: center;
-}
-
-@media (max-width: 720px) {
-  header.top .inner { flex-direction: column; align-items: flex-start; gap: .5rem; }
-  header.top nav { margin-left: 0; justify-content: flex-start; }
-}
-
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.1rem 1.2rem;
-  margin-bottom: 1.1rem;
-}
-.panel h2 { margin: 0 0 .2rem; font-size: 1rem; }
-.panel .sub { color: var(--muted); font-size: .85rem; margin: 0 0 .9rem; }
-
-label.field { display: block; margin-bottom: .8rem; }
-label.field > span { display: block; font-size: .8rem; color: var(--muted); margin-bottom: .25rem; }
-
-input[type=text], input[type=email], input[type=url], select, textarea {
-  width: 100%; padding: .5rem .6rem;
-  background: var(--panel-2); color: var(--text);
-  border: 1px solid var(--border); border-radius: 7px;
-  font: inherit;
-}
-textarea { resize: vertical; min-height: 5rem; }
-input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-
-button {
-  font: inherit; font-weight: 550;
-  padding: .5rem .9rem; border-radius: 7px;
-  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
-  cursor: pointer;
-}
-button:hover:not(:disabled) { border-color: var(--accent); }
-button:disabled { opacity: .5; cursor: not-allowed; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.danger { color: var(--bad); }
-
-.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 1rem; }
-.row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
-.spread { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-
-.pill {
-  display: inline-block; font-size: .72rem; font-weight: 600; letter-spacing: .03em;
-  padding: .15rem .45rem; border-radius: 999px; border: 1px solid var(--border);
-  text-transform: uppercase;
-}
-.pill.QUEUED, .pill.PREPARING, .pill.FILLING, .pill.SUBMITTING { color: var(--accent); border-color: var(--accent); }
-.pill.NEEDS_INPUT, .pill.NEEDS_HUMAN, .pill.REVIEW { color: var(--warn); border-color: var(--warn); }
-.pill.SUBMITTED { color: var(--good); border-color: var(--good); }
-.pill.FAILED, .pill.CANCELLED { color: var(--bad); border-color: var(--bad); }
-
-.src {
-  font-size: .68rem; letter-spacing: .04em; text-transform: uppercase;
-  color: var(--muted); border: 1px solid var(--border);
-  border-radius: 4px; padding: 0 .3rem;
-}
-.src.USER, .src.PROFILE, .src.RULE { color: var(--good); }
-.src.INFERRED, .src.MEMORY_FUZZY { color: var(--warn); }
-.src.GENERATED { color: var(--accent); }
-
-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
-th { text-align: left; color: var(--muted); font-weight: 550; font-size: .78rem;
-     text-transform: uppercase; letter-spacing: .04em; padding: .4rem .5rem; }
-td { padding: .5rem; border-top: 1px solid var(--border); vertical-align: top; }
-
-.log {
-  font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-  background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px;
-  padding: .7rem; max-height: 22rem; overflow: auto;
-}
-.log .line { display: flex; gap: .6rem; padding: .1rem 0; }
-.log .t { color: var(--muted); flex: none; }
-.log .ERROR { color: var(--bad); }
-.log .WARNING { color: var(--warn); }
-.log .STATUS { color: var(--accent); }
-.log .MEMORY_WRITTEN, .log .FIELD_RESOLVED { color: var(--good); }
-
-.modal-backdrop {
-  position: fixed; inset: 0; background: rgba(0,0,0,.6);
-  display: flex; align-items: flex-start; justify-content: center;
-  padding: 3rem 1rem; overflow: auto; z-index: 50;
-}
-.modal {
-  background: var(--panel); border: 1px solid var(--border);
-  border-radius: 12px; padding: 1.3rem; width: min(680px, 100%);
-}
-.q { border-top: 1px solid var(--border); padding: .9rem 0; }
-.q:first-of-type { border-top: 0; }
-.q .why { font-size: .82rem; color: var(--muted); margin: .2rem 0 .5rem; }
-.q .why.policy { color: var(--warn); }
-
-.muted { color: var(--muted); }
-.small { font-size: .85rem; }
-.shot { max-width: 100%; border: 1px solid var(--border); border-radius: 7px; }
-.notice { border-left: 3px solid var(--warn); padding: .5rem .75rem; background: var(--panel-2);
-          border-radius: 0 7px 7px 0; font-size: .88rem; }
-.notice.bad { border-left-color: var(--bad); }
-.notice.good { border-left-color: var(--good); }
+@import "./styles/tokens.css";
+@import "./styles/base.css";
+@import "./styles/header.css";
+@import "./styles/surfaces.css";
+@import "./styles/forms.css";
+@import "./styles/buttons.css";
+@import "./styles/layout.css";
+@import "./styles/status.css";
+@import "./styles/table.css";
+@import "./styles/log.css";
+@import "./styles/modal.css";
+@import "./styles/notice.css";
+@import "./styles/misc.css";
+@import "./styles/pages/discover.css";
+@import "./styles/pages/outreach.css";

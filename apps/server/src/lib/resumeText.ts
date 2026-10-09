@@ -18,7 +18,12 @@ export async function extractResumeText(filePath: string, mimeType: string): Pro
     const buf = await readFile(filePath);
     const pdf = await getDocumentProxy(new Uint8Array(buf));
     const { text } = await extractText(pdf, { mergePages: true });
-    return clean(Array.isArray(text) ? text.join('\n') : text);
+    // "LinkedIn" and "GitHub" on a resume are usually clickable words whose
+    // addresses live only in the PDF's link annotations, not its text. Without
+    // them the profile cannot be filled and the model never sees the links.
+    const links = await pdfLinks(pdf).catch(() => [] as string[]);
+    const body = clean(Array.isArray(text) ? text.join('\n') : text);
+    return links.length ? `${body}\nLinks: ${links.join(' ')}` : body;
   }
 
   if (ext === '.docx' || mimeType.includes('officedocument.wordprocessingml')) {
@@ -34,6 +39,21 @@ export async function extractResumeText(filePath: string, mimeType: string): Pro
   throw new Error(
     `Cannot read text out of ${ext || mimeType}. Upload a PDF, DOCX or TXT resume.`,
   );
+}
+
+/** Every web link in the document, in order, once each. */
+async function pdfLinks(pdf: {
+  numPages: number;
+  getPage(n: number): Promise<{ getAnnotations(): Promise<Array<{ url?: string }>> }>;
+}): Promise<string[]> {
+  const seen = new Set<string>();
+  for (let n = 1; n <= pdf.numPages; n++) {
+    const page = await pdf.getPage(n);
+    for (const a of await page.getAnnotations()) {
+      if (a.url && /^https?:\/\//i.test(a.url)) seen.add(a.url);
+    }
+  }
+  return [...seen];
 }
 
 function clean(s: string): string {

@@ -33,7 +33,9 @@ export type Task =
   /** Write a cover letter. */
   | 'coverLetter'
   /** Answer one short employer-specific question. */
-  | 'essay';
+  | 'essay'
+  /** Write one outreach message to a named person at a company. */
+  | 'outreach';
 
 const CHEAP: Task[] = ['answerInference', 'fitScoring', 'searchPlanning'];
 
@@ -76,6 +78,8 @@ export function effortFor(task: Task): 'low' | 'medium' | 'high' {
     case 'searchPlanning':
       return 'medium';
     case 'essay':
+      return 'medium';
+    case 'outreach':
       return 'medium';
     default:
       return 'high';

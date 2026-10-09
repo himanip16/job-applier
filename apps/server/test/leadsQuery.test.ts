@@ -19,7 +19,7 @@ const { requireTestDatabase } = await import('./testDb.js');
 requireTestDatabase();
 
 const { prisma } = await import('../src/lib/db.js');
-const { registerDiscoveryRoutes, MAX_RESCORE_BATCH } = await import('../src/routes/discovery.js');
+const { registerLeadRoutes, MAX_RESCORE_BATCH } = await import('../src/routes/leads.js');
 const Fastify = (await import('fastify')).default;
 
 type App = ReturnType<typeof Fastify>;
@@ -79,7 +79,7 @@ beforeEach(async () => {
   }
 
   app = Fastify();
-  registerDiscoveryRoutes(app, async () => ({ id: profileId }));
+  registerLeadRoutes(app, async () => ({ id: profileId }));
   await app.ready();
 });
 

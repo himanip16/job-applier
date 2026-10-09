@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/db.js';
+import type { RequireProfile } from './types.js';
 import { canonicalUrl } from '../discovery/findJobs.js';
 
 /**
@@ -38,9 +39,11 @@ interface PlanEntry {
   error?: string;
 }
 
-export function registerJobDetailRoutes(app: FastifyInstance) {
+export function registerJobDetailRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   app.get<{ Params: { id: string } }>('/api/jobs/:id', async (req, reply) => {
-    const found = await locate(req.params.id);
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    const found = await locate(profile.id, req.params.id);
     if (!found) return reply.code(404).send({ error: 'No job, lead or application with that id.' });
 
     const { lead, application } = found;
@@ -163,18 +166,26 @@ const FULL = {
   lessons: true,
 };
 
-async function locate(id: string) {
-  const lead = await prisma.jobLead.findUnique({ where: { id } });
+/**
+ * The id in the URL can name a lead or an application; either way it has to be
+ * the caller's own. Scoped at every lookup rather than checked once at the
+ * end, so no branch through here can return a stranger's row.
+ */
+async function locate(profileId: string, id: string) {
+  const lead = await prisma.jobLead.findFirst({ where: { id, profileId } });
   if (lead) {
     const application = lead.applicationId
-      ? await prisma.application.findUnique({ where: { id: lead.applicationId }, include: FULL })
+      ? await prisma.application.findFirst({
+          where: { id: lead.applicationId, profileId },
+          include: FULL,
+        })
       : // A lead applied to before applicationId was linked, or linked by URL
         // alone: match on the job's canonical URL rather than losing the join.
-        await findApplicationByUrl(lead.url);
+        await findApplicationByUrl(profileId, lead.url);
     return { lead, application };
   }
 
-  const application = await prisma.application.findUnique({ where: { id }, include: FULL });
+  const application = await prisma.application.findFirst({ where: { id, profileId }, include: FULL });
   if (!application) return null;
 
   const byId = await prisma.jobLead.findFirst({ where: { applicationId: application.id } });
@@ -186,7 +197,7 @@ async function locate(id: string) {
   return { lead: byUrl, application };
 }
 
-async function findApplicationByUrl(url: string) {
+async function findApplicationByUrl(profileId: string, url: string) {
   let job = await prisma.job.findFirst({ where: { url } });
   if (!job) {
     // Try the canonical form too: a lead stored from search and a job created
@@ -199,7 +210,7 @@ async function findApplicationByUrl(url: string) {
     job = await prisma.job.findUnique({ where: { id: hit.id } });
     if (!job) return null;
   }
-  return prisma.application.findFirst({ where: { jobId: job.id }, include: FULL });
+  return prisma.application.findFirst({ where: { jobId: job.id, profileId }, include: FULL });
 }
 
 /**

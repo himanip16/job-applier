@@ -4,7 +4,8 @@ import { prisma, type Prisma } from '../lib/db.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
 import { tailorResume } from '../resume/tailor.js';
 import { renderResume } from '../resume/render.js';
-import type { RequireProfile } from './discovery.js';
+import type { RequireProfile } from './types.js';
+import { NOT_YOURS, ownedApplication, ownedTailoredResume } from '../auth/ownership.js';
 
 export function registerResumeRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   /**
@@ -16,7 +17,7 @@ export function registerResumeRoutes(app: FastifyInstance, requireProfile: Requi
    * output even on the days you do not send the resume.
    */
   app.post('/api/resume/tailor', async (req, reply) => {
-    const profile = await requireProfile(reply);
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
 
     const body = z
@@ -115,8 +116,8 @@ export function registerResumeRoutes(app: FastifyInstance, requireProfile: Requi
     };
   });
 
-  app.get('/api/resume/tailored', async (_req, reply) => {
-    const profile = await requireProfile(reply);
+  app.get('/api/resume/tailored', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
     if (!profile) return;
     const rows = await prisma.tailoredResume.findMany({
       where: { profileId: profile.id },
@@ -127,14 +128,24 @@ export function registerResumeRoutes(app: FastifyInstance, requireProfile: Requi
   });
 
   app.get<{ Params: { id: string } }>('/api/resume/tailored/:id', async (req, reply) => {
-    const row = await prisma.tailoredResume.findUnique({ where: { id: req.params.id } });
-    if (!row) return reply.code(404).send({ error: 'Not found' });
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    const row = await ownedTailoredResume(profile.id, req.params.id);
+    if (!row) return reply.code(404).send(NOT_YOURS);
     return { tailored: row };
   });
 
   /** Attach a tailored resume to an application, so the tracker records it. */
-  app.post<{ Params: { id: string } }>('/api/tracker/:id/resume', async (req) => {
+  app.post<{ Params: { id: string } }>('/api/tracker/:id/resume', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
     const { tailoredResumeId } = z.object({ tailoredResumeId: z.string() }).parse(req.body);
+    // Both halves have to be yours: the application it is attached to, and the
+    // tailored resume being attached.
+    if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
+    if (!(await ownedTailoredResume(profile.id, tailoredResumeId))) {
+      return reply.code(404).send(NOT_YOURS);
+    }
     const application = await prisma.application.update({
       where: { id: req.params.id },
       data: { tailoredResumeId },

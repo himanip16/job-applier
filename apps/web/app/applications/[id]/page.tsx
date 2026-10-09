@@ -2,20 +2,14 @@
 
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { API, api } from '../../../lib/api';
+import { Loading } from '../../../components/Loading';
+import {
+  QuestionField,
+  initialRemember,
+  initialValue,
+  type PendingQuestion,
+} from '../../../components/QuestionField';
 
-interface PendingQuestion {
-  id: string;
-  fieldId: string;
-  rawLabel: string;
-  helpText: string | null;
-  fieldKind: string;
-  options: { label: string; value?: string }[] | null;
-  required: boolean;
-  reason: 'NO_MATCH' | 'LOW_CONFIDENCE' | 'POLICY';
-  suggestion: string | string[] | null;
-  suggestionRationale: string | null;
-  answeredAt: string | null;
-}
 
 interface PlanRow {
   label: string;
@@ -41,17 +35,34 @@ interface AppDetail {
 
 interface Evt { type: string; message: string; at: string }
 
+/** Which kind of NEEDS_HUMAN this is; see handoffKind in the server's routes/applications.ts. */
+type Handoff = 'WALL' | 'CAPTCHA_ON_SUBMIT' | 'UNCONFIRMED' | 'SET_ASIDE' | 'STOPPED';
+
 export default function RunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [detail, setDetail] = useState<AppDetail | null>(null);
+  const [handoff, setHandoff] = useState<Handoff | null>(null);
+  const [tabOpen, setTabOpen] = useState(false);
   const [events, setEvents] = useState<Evt[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // A failed button press. Shown beside the buttons, never in place of the page.
+  const [actionError, setActionError] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(
-    () => api<{ application: AppDetail }>(`/api/applications/${id}`)
-      .then((d) => setDetail(d.application))
-      .catch((e) => setError(e.message)),
+    () => api<{ application: AppDetail; handoff?: Handoff | null; tabOpen?: boolean }>(`/api/applications/${id}`)
+      .then((d) => {
+        setDetail(d.application);
+        setHandoff(d.handoff ?? null);
+        setTabOpen(Boolean(d.tabOpen));
+        setError(null);
+      })
+      // Once the page has loaded, a failed refresh (the API restarting, say)
+      // keeps what is on screen; only a first load with nothing to show errors.
+      .catch((e) => setDetail((cur) => {
+        if (!cur) setError(e.message);
+        return cur;
+      })),
     [id],
   );
 
@@ -59,7 +70,10 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
     refresh();
     // The run publishes to this stream as it works; history is replayed on
     // connect so a refresh mid-run does not lose the story.
-    const es = new EventSource(`${API}/api/applications/${id}/stream`);
+    // withCredentials, or the session cookie is not sent and the stream is
+    // refused - EventSource omits cookies cross-origin by default, and the API
+    // is on another origin in both development and production.
+    const es = new EventSource(`${API}/api/applications/${id}/stream`, { withCredentials: true });
     es.onmessage = (m) => {
       const evt = JSON.parse(m.data) as Evt;
       setEvents((prev) => [...prev, evt]);
@@ -73,11 +87,10 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [events]);
 
-  if (error) return <div className="panel"><div className="notice bad">{error}</div></div>;
-  if (!detail) return <p className="muted">Loading…</p>;
+  if (error && !detail) return <div className="panel"><div className="notice bad">{error}</div></div>;
+  if (!detail) return <Loading />;
 
   const open = detail.pending.filter((q) => !q.answeredAt);
-  const shots = detail.artifacts.filter((a) => a.kind === 'screenshot');
 
   return (
     <>
@@ -89,9 +102,52 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
               {detail.job.company} · <a href={detail.job.url} target="_blank" rel="noreferrer">{detail.job.ats}</a>
             </p>
           </div>
-          <span className={`pill ${detail.status}`}>{detail.status.replace('_', ' ')}</span>
+          <div className="row" style={{ gap: '.5rem', alignItems: 'center' }}>
+            <span className={`pill ${detail.status}`}>{detail.status.replace('_', ' ')}</span>
+            {/* For an application finished by hand, outside the run - at any point. */}
+            {detail.status !== 'SUBMITTED' && (
+              <button
+                className="ghost"
+                onClick={async () => {
+                  if (!window.confirm(`Mark ${detail.job.company} as submitted?`)) return;
+                  setActionError(null);
+                  try {
+                    await api(`/api/applications/${id}/outcome`, {
+                      method: 'POST',
+                      body: JSON.stringify({ submitted: true }),
+                    });
+                    await refresh();
+                  } catch (e) {
+                    setActionError(`Could not mark it as submitted: ${(e as Error).message}. Try again in a moment.`);
+                  }
+                }}
+                style={{ fontSize: '.85rem', padding: '.3rem .6rem' }}
+              >
+                Mark as submitted
+              </button>
+            )}
+            {detail.status === 'FAILED' && (
+              <button
+                className="primary"
+                onClick={async () => {
+                  try {
+                    setActionError(null);
+                    await api(`/api/applications/${id}/start`, { method: 'POST' });
+                    await refresh();
+                  } catch (e) {
+                    setActionError(`Could not resume: ${(e as Error).message}. Try again in a moment.`);
+                  }
+                }}
+                style={{ fontSize: '.85rem', padding: '.3rem .6rem' }}
+              >
+                Resume
+              </button>
+            )}
+          </div>
         </div>
-        {detail.blockedReason && (
+        {actionError && <div className="notice bad" style={{ marginTop: '.9rem' }}>{actionError}</div>}
+        {/* NEEDS_HUMAN explains itself in its own panel below; saying it twice is noise. */}
+        {detail.blockedReason && detail.status !== 'NEEDS_HUMAN' && (
           <div
             className={`notice ${detail.status === 'FAILED' ? 'bad' : detail.status === 'SUBMITTED' ? 'good' : ''}`}
             style={{ marginTop: '.9rem' }}
@@ -101,9 +157,22 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
         )}
       </div>
 
-      {detail.status === 'NEEDS_HUMAN' && <WallPanel applicationId={id} detail={detail} onDone={refresh} />}
+      {detail.status === 'NEEDS_HUMAN' &&
+        (handoff === 'WALL' ? (
+          <WallPanel applicationId={id} detail={detail} onDone={refresh} />
+        ) : handoff === 'CAPTCHA_ON_SUBMIT' ? (
+          <div className="panel" style={{ borderColor: 'var(--warn-border)', background: 'var(--warn-soft)' }}>
+            <h2>Solve the captcha in the browser</h2>
+            <p className="sub" style={{ maxWidth: '44rem' }}>{detail.blockedReason}</p>
+          </div>
+        ) : handoff === 'UNCONFIRMED' ? (
+          <OutcomePanel applicationId={id} detail={detail} onDone={refresh} />
+        ) : (
+          <StoppedPanel applicationId={id} detail={detail} setAside={handoff === 'SET_ASIDE'} tabOpen={tabOpen} onDone={refresh} />
+        ))}
 
-      {open.length > 0 && <QuestionModal applicationId={id} questions={open} onDone={refresh} />}
+      {/* Questions from a run that has since ended are stale: a restart re-asks them. */}
+      {open.length > 0 && detail.status === 'NEEDS_INPUT' && <QuestionModal applicationId={id} questions={open} onDone={refresh} />}
 
       {detail.status === 'REVIEW' && <ReviewPanel applicationId={id} detail={detail} onDone={refresh} />}
 
@@ -130,18 +199,6 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
         </div>
       </div>
 
-      {shots.length > 0 && (
-        <div className="panel">
-          <h2>What the browser saw</h2>
-          <p className="sub">Screenshots captured at each step — your record of what was submitted.</p>
-          {shots.slice(-3).reverse().map((a) => (
-            <figure key={a.id} style={{ margin: '0 0 1rem' }}>
-              <img className="shot" src={`${API}/artifacts/${a.path}`} alt={a.label} />
-              <figcaption className="muted small">{a.label}</figcaption>
-            </figure>
-          ))}
-        </div>
-      )}
     </>
   );
 }
@@ -161,10 +218,10 @@ function QuestionModal({
   onDone: () => void;
 }) {
   const [values, setValues] = useState<Record<string, string | string[]>>(() =>
-    Object.fromEntries(questions.map((q) => [q.id, q.suggestion ?? (isMulti(q) ? [] : '')])),
+    Object.fromEntries(questions.map((q) => [q.id, initialValue(q)])),
   );
   const [remember, setRemember] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(questions.map((q) => [q.id, q.reason !== 'POLICY'])),
+    Object.fromEntries(questions.map((q) => [q.id, initialRemember(q)])),
   );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -205,98 +262,31 @@ function QuestionModal({
         </p>
 
         {questions.map((q) => (
-          <div className="q" key={q.id}>
-            <strong>{q.rawLabel}{q.required && <span style={{ color: 'var(--bad)' }}> *</span>}</strong>
-            {q.helpText && <div className="why">{q.helpText}</div>}
-            <div className={`why ${q.reason === 'POLICY' ? 'policy' : ''}`}>
-              {q.reason === 'POLICY'
-                ? 'Never answered automatically.'
-                : q.reason === 'LOW_CONFIDENCE'
-                  ? 'A guess was possible but not certain enough to submit under your name.'
-                  : 'Not derivable from what we know about you.'}
-              {q.suggestionRationale ? ` ${q.suggestionRationale}` : ''}
-            </div>
-
-            {renderInput(q, values[q.id], (v) => setValues((s) => ({ ...s, [q.id]: v })))}
-
-            <label className="row small" style={{ marginTop: '.45rem' }}>
-              <input
-                type="checkbox"
-                style={{ width: 'auto' }}
-                checked={remember[q.id] ?? false}
-                onChange={(e) => setRemember((s) => ({ ...s, [q.id]: e.target.checked }))}
-              />
-              <span className="muted">Remember this answer for future applications</span>
-            </label>
-          </div>
+          <QuestionField
+            key={q.id}
+            q={q}
+            value={values[q.id]}
+            remember={remember[q.id] ?? false}
+            onValue={(v) => setValues((s) => ({ ...s, [q.id]: v }))}
+            onRemember={(r) => setRemember((s) => ({ ...s, [q.id]: r }))}
+          />
         ))}
 
         {err && <div className="notice bad" style={{ margin: '.8rem 0' }}>{err}</div>}
         <div className="row" style={{ marginTop: '1rem' }}>
           <button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Continue'}</button>
+          <button
+            type="button"
+            className="ghost"
+            disabled={busy}
+            onClick={() => onDone()}
+            style={{ marginLeft: '.5rem' }}
+          >
+            Close
+          </button>
         </div>
       </form>
     </div>
-  );
-}
-
-function isMulti(q: PendingQuestion) {
-  return q.fieldKind === 'MULTISELECT' || q.fieldKind === 'CHECKBOX_GROUP';
-}
-
-function renderInput(
-  q: PendingQuestion,
-  value: string | string[] | undefined,
-  onChange: (v: string | string[]) => void,
-) {
-  if (q.options?.length) {
-    if (isMulti(q)) {
-      const chosen = Array.isArray(value) ? value : [];
-      return (
-        <div>
-          {q.options.map((o) => (
-            <label className="row small" key={o.label}>
-              <input
-                type="checkbox"
-                style={{ width: 'auto' }}
-                checked={chosen.includes(o.label)}
-                onChange={(e) =>
-                  onChange(
-                    e.target.checked
-                      ? [...chosen, o.label]
-                      : chosen.filter((c) => c !== o.label),
-                  )
-                }
-              />
-              <span>{o.label}</span>
-            </label>
-          ))}
-        </div>
-      );
-    }
-    return (
-      <select value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Select…</option>
-        {q.options.map((o) => (
-          <option key={o.label} value={o.label}>{o.label}</option>
-        ))}
-      </select>
-    );
-  }
-  if (q.fieldKind === 'TEXTAREA') {
-    return (
-      <textarea
-        value={typeof value === 'string' ? value : ''}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    );
-  }
-  return (
-    <input
-      type="text"
-      value={typeof value === 'string' ? value : ''}
-      onChange={(e) => onChange(e.target.value)}
-    />
   );
 }
 
@@ -337,7 +327,10 @@ function WallPanel({
   }
 
   return (
-    <div className="panel" style={{ borderColor: 'var(--warn)' }}>
+    <div
+      className="panel"
+      style={{ borderColor: 'var(--warn-border)', background: 'var(--warn-soft)' }}
+    >
       <h2>Waiting for you in the browser</h2>
       <p className="sub" style={{ maxWidth: '44rem' }}>
         {detail.blockedReason ?? 'Something on the page needs a person.'}
@@ -354,6 +347,163 @@ function WallPanel({
         </button>
         <button className="danger" disabled={busy !== null} onClick={() => send(false)}>
           Cancel this application
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The run is over and nobody could see whether the submit landed.
+ *
+ * "Carry on" means nothing here - there is no paused run to carry on. The
+ * only useful thing is for you to look, and tell us which it was.
+ */
+function OutcomePanel({
+  applicationId,
+  detail,
+  onDone,
+}: {
+  applicationId: string;
+  detail: AppDetail;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState<'yes' | 'no' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function record(submitted: boolean) {
+    setBusy(submitted ? 'yes' : 'no');
+    setError(null);
+    try {
+      await api(`/api/applications/${applicationId}/outcome`, {
+        method: 'POST',
+        body: JSON.stringify({ submitted }),
+      });
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Older runs stored the whole page's text here; show only the first sentence.
+  const reason = (detail.blockedReason ?? '').startsWith('Could not confirm')
+    ? 'Submit was pressed but no confirmation appeared.'
+    : detail.blockedReason;
+
+  return (
+    <div className="panel" style={{ borderColor: 'var(--warn-border)', background: 'var(--warn-soft)' }}>
+      <h2>Did this application go through?</h2>
+      <p className="sub" style={{ maxWidth: '44rem' }}>
+        {reason ?? 'We could not tell whether the submit worked.'}
+      </p>
+      <p className="small muted" style={{ maxWidth: '44rem' }}>
+        Look at the browser window, or check your email for a confirmation from{' '}
+        {detail.job.company}. Then tell us which it was.{' '}
+        <a href={detail.job.url} target="_blank" rel="noreferrer">Open the job page</a>
+      </p>
+      {error && <div className="notice bad">{error}</div>}
+      <div className="row" style={{ gap: '.5rem', marginTop: '.6rem' }}>
+        <button className="primary" disabled={busy !== null} onClick={() => record(true)}>
+          {busy === 'yes' ? 'Saving…' : 'Yes, it was submitted'}
+        </button>
+        <button className="ghost" disabled={busy !== null} onClick={() => record(false)}>
+          {busy === 'no' ? 'Saving…' : 'No, it didn’t go through'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** First sentence of a long diagnosis, with the rest behind a disclosure. */
+function Reason({ text }: { text: string | null }) {
+  if (!text) return null;
+  const first = /^.{20,220}?[.!?](\s|$)/.exec(text)?.[0]?.trim() ?? text.slice(0, 220);
+  const rest = text.slice(first.length).trim();
+  return (
+    <>
+      <p className="sub" style={{ maxWidth: '44rem' }}>{first}</p>
+      {rest && (
+        <details className="small muted" style={{ maxWidth: '44rem', marginBottom: '.6rem' }}>
+          <summary>Details</summary>
+          <p style={{ wordBreak: 'break-word' }}>{rest}</p>
+        </details>
+      )}
+    </>
+  );
+}
+
+/**
+ * The run is over and nothing was sent. Either autopilot left a filled form in
+ * a tab for you (set aside), or the run stopped short of the form.
+ *
+ * "Try again" alone was the wrong answer to a set-aside: it re-runs into the
+ * same captcha and sets it aside again. When the form is sitting there filled,
+ * finishing it by hand is the quick way, so that comes first.
+ */
+function StoppedPanel({
+  applicationId,
+  detail,
+  setAside,
+  tabOpen,
+  onDone,
+}: {
+  applicationId: string;
+  detail: AppDetail;
+  setAside: boolean;
+  tabOpen: boolean;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState<'retry' | 'done' | 'drop' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function act(kind: 'retry' | 'done' | 'drop') {
+    setBusy(kind);
+    setError(null);
+    try {
+      if (kind === 'retry') await api(`/api/applications/${applicationId}/start`, { method: 'POST' });
+      else
+        await api(`/api/applications/${applicationId}/outcome`, {
+          method: 'POST',
+          body: JSON.stringify({ submitted: kind === 'done' }),
+        });
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const reason = detail.blockedReason
+    ?.replace(/^UNKNOWN:\s*/, '')
+    .replace(/\s*Autopilot moved on to the next job\.$/, '') ?? null;
+  const finishByHand = setAside && tabOpen;
+
+  return (
+    <div className="panel" style={{ borderColor: 'var(--warn-border)', background: 'var(--warn-soft)' }}>
+      <h2>{setAside ? 'Set aside for you to finish' : 'This application stopped before submitting'}</h2>
+      <Reason text={reason} />
+      <p className="small muted" style={{ maxWidth: '44rem' }}>
+        Nothing has been sent to {detail.job.company} yet.{' '}
+        {tabOpen
+          ? 'The browser tab it was working in is still open: finish it there and tell us, or run it again (that replaces the tab).'
+          : 'The browser tab it was working in has closed, so run it again to refill the form.'}{' '}
+        <a href={detail.job.url} target="_blank" rel="noreferrer">Open the job page</a>
+      </p>
+      {error && <div className="notice bad">{error}</div>}
+      <div className="row" style={{ gap: '.5rem', marginTop: '.6rem' }}>
+        {finishByHand && (
+          <button className="primary" disabled={busy !== null} onClick={() => act('done')}>
+            {busy === 'done' ? 'Saving…' : 'I submitted it in the browser'}
+          </button>
+        )}
+        <button className={finishByHand ? 'ghost' : 'primary'} disabled={busy !== null} onClick={() => act('retry')}>
+          {busy === 'retry' ? 'Starting…' : 'Run it again'}
+        </button>
+        <button className="ghost" disabled={busy !== null} onClick={() => act('drop')}>
+          {busy === 'drop' ? 'Saving…' : 'Leave it'}
         </button>
       </div>
     </div>
@@ -389,7 +539,10 @@ function ReviewPanel({
   }
 
   return (
-    <div className="panel" style={{ borderColor: 'var(--warn)' }}>
+    <div
+      className="panel"
+      style={{ borderColor: 'var(--warn-border)', background: 'var(--warn-soft)' }}
+    >
       <h2>Ready to submit</h2>
       <p className="sub">
         The form is filled and open in the browser. Check the values, deal with any captcha there,

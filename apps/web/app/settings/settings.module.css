@@ -1,0 +1,302 @@
+/*
+ * Settings, in the shape Interview Lab uses for the same job: roomy rounded
+ * cards, dense rows with a provider dot, a plain-language status on the right,
+ * pill buttons. Colours come from the app's own tokens so both themes hold.
+ */
+
+.page {
+  display: grid;
+  gap: var(--space-5);
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: var(--fs-2xl);
+  letter-spacing: -0.02em;
+}
+
+.header p {
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  max-width: 60ch;
+}
+
+/* ---- what works right now ------------------------------------------------ */
+
+.status {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+@media (max-width: 640px) {
+  .status { grid-template-columns: 1fr; }
+}
+
+.tile {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--panel);
+}
+
+.tileTitle {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.tileDetail {
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.dotOn { background: var(--good); box-shadow: 0 0 0 3px var(--good-soft); }
+.dotGemini { background: #ff5a3c; }
+.dotAnthropic { background: #f59e0b; }
+.dotFirecrawl { background: #6a5ae0; }
+
+/* ---- cards ------------------------------------------------------------------ */
+
+.card {
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: 26px;
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+}
+
+.cardHead {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  align-items: flex-start;
+  margin-bottom: var(--space-4);
+}
+
+.cardHead h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+}
+
+.cardHead p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  max-width: 52ch;
+}
+
+/* ---- key rows ------------------------------------------------------------- */
+
+.list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+
+.row:hover { background: var(--panel-hover); }
+
+.rowActive {
+  border-color: var(--good-border);
+  background: var(--good-soft);
+}
+
+.rowActive:hover { background: var(--good-soft); }
+
+.rowMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.rowName {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.rowMeta {
+  display: block;
+  margin-top: 1px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowMeta code { font-size: inherit; }
+
+.inUse {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--good);
+}
+
+.actions {
+  flex: none;
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.empty {
+  padding: var(--space-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: 14px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+/* ---- buttons ---------------------------------------------------------------- */
+
+.pill {
+  border-radius: 999px !important;
+  padding: 6px 14px !important;
+  font-size: var(--fs-sm) !important;
+  white-space: nowrap;
+}
+
+.quiet {
+  border-radius: 999px !important;
+  padding: 6px 10px !important;
+  font-size: var(--fs-sm) !important;
+  background: transparent !important;
+  border-color: transparent !important;
+  color: var(--muted) !important;
+}
+
+.quiet:hover:not(:disabled) { color: var(--bad) !important; }
+
+/* ---- add a key -------------------------------------------------------------- */
+
+.add {
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-subtle);
+  display: grid;
+  gap: var(--space-3);
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: var(--space-2);
+}
+
+@media (max-width: 640px) {
+  .fields { grid-template-columns: 1fr; }
+}
+
+.fields label {
+  display: grid;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.fields input,
+.add select,
+.inline input {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 10px !important;
+  background: var(--panel) !important;
+  color: var(--text);
+  font-size: var(--fs-md) !important;
+  box-shadow: none !important;
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+
+.add select {
+  width: auto;
+  height: 34px;
+  padding: 0 10px !important;
+  font-size: var(--fs-sm) !important;
+}
+
+.fields input::placeholder,
+.inline input::placeholder { color: var(--muted); opacity: 0.8; }
+
+.fields input:hover,
+.add select:hover,
+.inline input:hover { border-color: var(--border-strong) !important; }
+
+.fields input:focus,
+.add select:focus,
+.inline input:focus {
+  outline: none;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-soft) !important;
+}
+
+.hint {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.addFoot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.inline {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.inline input { flex: 1; min-width: 0; }
+
+.message { margin-top: var(--space-3); }
+
+.foot {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  line-height: 1.6;
+  max-width: 68ch;
+  padding: 0 var(--space-2);
+}
+

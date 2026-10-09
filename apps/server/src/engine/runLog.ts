@@ -24,6 +24,7 @@ export async function setStatus(
   await bus.emitEvent(applicationId, 'STATUS', message, { status, ...(data ?? {}) });
 }
 export async function artifact(applicationId: string, kind: string, label: string, relPath: string): Promise<void> {
+  if (!relPath) return;
   await prisma.artifact.create({ data: { applicationId, kind, label, path: relPath } });
   bus.emit('artifact', { applicationId, kind, label, path: relPath });
 }
