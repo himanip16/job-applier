@@ -3,12 +3,14 @@ import type { FastifyInstance } from 'fastify';
 import type { Page } from 'playwright';
 import { prisma } from '../lib/db.js';
 import { syncConnections, getSyncStatus } from '../linkedin/sync.js';
+import { syncMessages } from '../linkedin/messageSync.js';
 import { findColdOutreachTargets, countColdTargetsByRole } from '../outreach/classify.js';
 import { generateColdOutreachBatch } from '../outreach/generate.js';
 import { NOT_YOURS } from '../auth/ownership.js';
+import { currentUser } from '../auth/sessions.js';
 import { linkedInPage, isLoggedIn, hasLinkedInSession } from '../linkedin/session.js';
 import { sendOutreach } from '../linkedin/send.js';
-import type { RequireProfile } from './discovery.js';
+import type { RequireProfile } from './types.js';
 
 // Store the active sign-in page for cleanup
 let signInPage: Page | null = null;
@@ -23,6 +25,20 @@ export function registerOutreachRoutes(app: FastifyInstance, requireProfile: Req
     if (!profile) return;
     const result = await syncConnections(profile.id);
     return reply.send(result);
+  });
+
+  /**
+   * Import the message history, which is what makes "have I spoken to this
+   * person" answerable at all. See ../linkedin/messageSync.ts.
+   */
+  app.post('/api/linkedin/sync/messages', async (req, reply) => {
+    const user = await currentUser(req);
+    if (!user) return reply.code(401).send({ error: 'Sign in required' });
+
+    const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
+    if (!profile) return reply.code(404).send({ error: 'Profile not found' });
+
+    return reply.send(await syncMessages(profile.id));
   });
 
   app.get('/api/linkedin/sync/status', async (req, reply) => {
@@ -180,35 +196,25 @@ export function registerOutreachRoutes(app: FastifyInstance, requireProfile: Req
 
     const uniqueContactIds = Array.from(new Set(body.contactIds));
 
-    // Verify all contacts exist and belong to this profile
-    const validContactsCount = await prisma.contact.count({
-      where: {
-        id: { in: uniqueContactIds },
-        profileId: profile.id,
-      },
+    // Verify all contacts belong to this profile
+    const contactIds = [...new Set(body.contactIds)];
+    const contacts = await prisma.contact.findMany({
+      where: { id: { in: contactIds }, profileId: profile.id },
     });
-
-    if (validContactsCount !== uniqueContactIds.length) {
+    if (contacts.length !== contactIds.length) {
       return reply.code(403).send({ error: NOT_YOURS });
     }
 
-    // Verify jobLeadId belongs to this profile if provided
     if (body.jobLeadId) {
-      const jobLead = await prisma.jobLead.findFirst({
-        where: {
-          id: body.jobLeadId,
-          profileId: profile.id,
-        },
+      const lead = await prisma.jobLead.findFirst({
+        where: { id: body.jobLeadId, profileId: profile.id },
       });
-
-      if (!jobLead) {
-        return reply.code(403).send({ error: NOT_YOURS });
-      }
+      if (!lead) return reply.code(403).send({ error: NOT_YOURS });
     }
 
     const result = await generateColdOutreachBatch({
       profileId: profile.id,
-      contactIds: uniqueContactIds,
+      contactIds,
       jobLeadId: body.jobLeadId,
     });
 
@@ -241,7 +247,7 @@ export function registerOutreachRoutes(app: FastifyInstance, requireProfile: Req
     if (!profile) return;
     const schema = z.object({
       type: z.enum(['COLD', 'REPLY', 'FOLLOW_UP']).optional(),
-      status: z.enum(['DRAFT', 'APPROVED', 'SENT', 'SKIPPED']).optional(),
+      status: z.enum(['DRAFT', 'APPROVED', 'SENDING', 'SENT', 'FAILED', 'SKIPPED']).optional(),
     });
 
     const parsed = schema.safeParse(req.query);
@@ -309,6 +315,14 @@ export function registerOutreachRoutes(app: FastifyInstance, requireProfile: Req
     const item = await prisma.outreachItem.findUnique({ where: { id } });
     if (!item) return reply.code(404).send({ error: 'Not found' });
     if (item.profileId !== profile.id) return reply.code(403).send({ error: NOT_YOURS });
+    
+    // Only allow editing DRAFT or APPROVED messages (not SENT, SKIPPED, or FAILED)
+    if (!['DRAFT', 'APPROVED'].includes(item.status)) {
+      return reply.code(400).send({ 
+        error: 'Cannot edit messages that have already been sent, skipped, or failed.',
+        currentStatus: item.status,
+      });
+    }
 
     // Only allow editing DRAFT and APPROVED items - prevent modifying historical records
     if (item.status === 'SENT' || item.status === 'SKIPPED') {
@@ -347,6 +361,14 @@ export function registerOutreachRoutes(app: FastifyInstance, requireProfile: Req
     const item = await prisma.outreachItem.findUnique({ where: { id } });
     if (!item) return reply.code(404).send({ error: 'Not found' });
     if (item.profileId !== profile.id) return reply.code(403).send({ error: NOT_YOURS });
+    
+    // Only allow DRAFT → APPROVED transition
+    if (item.status !== 'DRAFT') {
+      return reply.code(400).send({ 
+        error: 'Only draft messages can be approved.',
+        currentStatus: item.status,
+      });
+    }
 
     // Only allow approving DRAFT items - prevent corrupting sent/skipped history
     if (item.status !== 'DRAFT') {
@@ -395,6 +417,14 @@ export function registerOutreachRoutes(app: FastifyInstance, requireProfile: Req
     const item = await prisma.outreachItem.findUnique({ where: { id } });
     if (!item) return reply.code(404).send({ error: 'Not found' });
     if (item.profileId !== profile.id) return reply.code(403).send({ error: NOT_YOURS });
+    
+    // Only allow DRAFT → SKIPPED transition (can't skip already sent messages)
+    if (item.status !== 'DRAFT') {
+      return reply.code(400).send({ 
+        error: 'Only draft messages can be skipped.',
+        currentStatus: item.status,
+      });
+    }
 
     // Only allow skipping DRAFT items - prevent corrupting sent/approved history
     if (item.status !== 'DRAFT') {
@@ -429,57 +459,84 @@ export function registerOutreachRoutes(app: FastifyInstance, requireProfile: Req
     if (!profile) return;
     const { id } = req.params as { id: string };
 
-    // First get the item to check current status
-    const item = await prisma.outreachItem.findUnique({ where: { id } });
-    if (!item) return reply.code(404).send({ error: 'Not found' });
-    if (item.profileId !== profile.id) return reply.code(403).send({ error: NOT_YOURS });
+    // Atomically claim the item: APPROVED → SENDING
+    const claimed = await prisma.outreachItem.updateMany({
+      where: {
+        id,
+        profileId: profile.id,
+        status: 'APPROVED',
+      },
+      data: {
+        status: 'SENDING',
+      },
+    });
 
-    // Only allow marking APPROVED items as SENT - prevent bypassing review
-    if (item.status !== 'APPROVED') {
-      return reply.code(400).send({ error: 'Can only mark APPROVED items as SENT' });
+    if (claimed.count !== 1) {
+      return reply.code(409).send({
+        error: 'Message is already being sent or is no longer approved.',
+      });
     }
 
-    const body = (item.finalBody || item.draftBody).trim();
-    const contact = await prisma.contact.findFirst({
-      where: { id: item.contactId, profileId: profile.id },
+    const item = await prisma.outreachItem.findUnique({
+      where: { id },
+      include: { contact: true },
     });
-    if (!contact) return reply.code(404).send({ error: 'Contact not found' });
+
+    if (!item) return reply.code(404).send({ error: 'Not found' });
+
+    // Only check for resume if this channel requires it
+    if (item.channel === 'DIRECT_MESSAGE') {
+      const resume = await prisma.resumeFile.findFirst({
+        where: { profileId: profile.id },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+      });
+      if (!resume) {
+        // Rollback to APPROVED since we can't send
+        await prisma.outreachItem.update({
+          where: { id },
+          data: { status: 'APPROVED' },
+        });
+        return reply.code(400).send({ error: 'Upload a resume before sending LinkedIn outreach.' });
+      }
+    }
 
     let page: Page | null = null;
     try {
       page = await linkedInPage();
       await sendOutreach(page, {
-        profileUrl: contact.profileUrl,
+        profileUrl: item.contact.profileUrl,
         channel: item.channel,
-        body,
+        body: item.finalBody || item.draftBody,
+        resumePath: item.channel === 'DIRECT_MESSAGE' 
+          ? (await prisma.resumeFile.findFirst({
+              where: { profileId: profile.id },
+              orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+            }))?.path 
+          : undefined,
       });
     } catch (err) {
+      // Transition to FAILED on LinkedIn error
+      await prisma.outreachItem.update({
+        where: { id },
+        data: {
+          status: 'FAILED',
+          statusReason: err instanceof Error ? err.message : 'Unknown LinkedIn error',
+        },
+      });
       return reply.code(502).send({
-        error: 'LinkedIn did not confirm that the message was sent',
+        error: 'LinkedIn did not confirm the send.',
         details: err instanceof Error ? err.message : 'Unknown LinkedIn error',
       });
     } finally {
       await page?.close().catch(() => {});
     }
 
-    const result = await prisma.outreachItem.updateMany({
-      where: {
-        id,
-        profileId: profile.id,
-        status: 'APPROVED', // Ensure status hasn't changed
-      },
+    const updated = await prisma.outreachItem.update({
+      where: { id },
       data: {
         status: 'SENT',
         sentAt: new Date(),
       },
-    });
-
-    if (result.count === 0) {
-      return reply.code(404).send({ error: 'Not found' });
-    }
-
-    const updated = await prisma.outreachItem.findUnique({
-      where: { id },
     });
 
     return reply.send(updated);

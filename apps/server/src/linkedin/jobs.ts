@@ -1,8 +1,9 @@
 import type { Page } from 'playwright';
-import type { DiscoveredJob } from '../discovery/sources.js';
+import type { DiscoveredJob } from '../discovery/sources/index.js';
 import { config } from '../lib/config.js';
 import { openLinkedIn, scrollToLoad } from './session.js';
 import { jobIdFrom, jobUrlFor } from './normalize.js';
+import { settle } from '../browser/steps.js';
 
 /**
  * Reading job postings off LinkedIn with the session you already have.
@@ -281,9 +282,17 @@ export async function hydrateJob(
 export async function resolveApplyUrl(page: Page, jobUrl: string): Promise<string | null> {
   await openLinkedIn(page, jobUrl);
 
-  const button = page
-    .locator('.jobs-apply-button, button[aria-label*="Apply" i], a[aria-label*="Apply" i]')
+  // The 2026 layout has hashed class names and only the aria-label to go by:
+  // `<button aria-label="Apply on company website">`, no href. Ask for that
+  // first, so a stray "Apply" elsewhere on the page is not what gets clicked.
+  let button = page
+    .locator('button[aria-label*="company website" i], a[aria-label*="company website" i]')
     .first();
+  if (!(await button.count().then((n) => n > 0).catch(() => false))) {
+    button = page
+      .locator('.jobs-apply-button, button[aria-label*="Apply" i], a[aria-label*="Apply" i]')
+      .first();
+  }
   if (!(await button.count().then((n) => n > 0).catch(() => false))) return null;
 
   // Easy Apply keeps you on LinkedIn, so there is no external URL to find and
@@ -293,8 +302,8 @@ export async function resolveApplyUrl(page: Page, jobUrl: string): Promise<strin
   if (/easy apply/i.test(label)) return null;
 
   // Some layouts render the offsite apply as a plain link, which needs no click.
-  const href = await button.getAttribute('href').catch(() => null);
-  if (href && !/linkedin\.com/.test(href)) return href;
+  const href = offsite(await button.getAttribute('href').catch(() => null));
+  if (href) return href;
 
   // Otherwise it opens a new tab. Wait for it, read the URL, close it — never
   // leave a stray page behind on the shared context.
@@ -305,10 +314,42 @@ export async function resolveApplyUrl(page: Page, jobUrl: string): Promise<strin
   if (!popup) return null;
 
   try {
-    await popup.waitForLoadState('domcontentloaded', { timeout: 12_000 }).catch(() => {});
-    const url = popup.url();
-    return url && !/linkedin\.com/.test(url) ? url : null;
+    // The tab opens on about:blank and often passes through linkedin.com/redir
+    // before the company's page, so domcontentloaded alone can read either.
+    await popup
+      .waitForURL((u) => offsite(u.toString()) !== null, { timeout: 15_000, waitUntil: 'commit' })
+      .catch(() => {});
+    // The first off-LinkedIn address can itself be a short link (forms.gle,
+    // bit.ly) that redirects again. Let it land and read the final address,
+    // or the run loads the short link and is caught mid-redirect.
+    await settle(popup);
+    return offsite(popup.url());
   } finally {
     await popup.close().catch(() => {});
   }
+}
+
+/** A LinkedIn job posting, as opposed to anything else on linkedin.com. */
+export function isLinkedInJob(url: string): boolean {
+  return /^https?:\/\/([\w-]+\.)?linkedin\.com\/jobs\/view\//i.test(url);
+}
+
+/**
+ * The off-LinkedIn address a link or tab points at, or null.
+ *
+ * Unwraps linkedin.com/redir/redirect?url=... and similar, which carry the
+ * real address as a parameter.
+ */
+function offsite(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(u.protocol)) return null;
+  if (!/(^|\.)linkedin\.com$/i.test(u.hostname)) return u.toString();
+  const inner = u.searchParams.get('url');
+  return inner && inner !== raw ? offsite(inner) : null;
 }

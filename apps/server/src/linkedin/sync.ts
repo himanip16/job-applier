@@ -1,145 +1,10 @@
 import type { Page } from 'playwright';
 import type { ContactRole, SyncType } from '../lib/db.js';
 import { prisma } from '../lib/db.js';
-import { openLinkedIn, linkedInPage, scrollToLoad } from './session.js';
-import { canonicalProfileUrl, headlineMatchesCompany } from './normalize.js';
+import { openLinkedIn, linkedInPage, hasLinkedInSession } from './session.js';
+import { readConnections } from './connectionReader.js';
+export { readConnections } from './connectionReader.js';
 import { classifyRole, isOutreachTarget } from './roles.js';
-import { dedupeRepeat } from './jobs.js';
-
-const DEGREE = /\b(1st|2nd|3rd\+?)\b/;
-
-/**
- * Chrome LinkedIn wraps around a name in the accessible label.
- */
-const stripProfileChrome = (s: string): string =>
-  s
-    .replace(/^view\s+/i, '')
-    .replace(/[’']s\s+profile$/i, '')
-    .replace(/\s*[-–—]\s*\d+(st|nd|rd|th)\s*$/i, '')
-    .replace(/\bstatus is (offline|online|reachable)\b/i, '')
-    .trim();
-
-/**
- * Read connections from LinkedIn's network page.
- * 
- * Accumulates connections continuously during scrolling to handle DOM virtualization.
- * LinkedIn unmounts DOM nodes that scroll out of viewport, so we must scrape
- * as we scroll rather than querying once at the end.
- */
-async function readConnections(page: Page): Promise<{
-  fullName: string;
-  headline: string;
-  profileUrl: string;
-  location?: string;
-  degree?: string;
-  companyName?: string;
-}[]> {
-  const connections: {
-    fullName: string;
-    headline: string;
-    profileUrl: string;
-    location?: string;
-    degree?: string;
-    companyName?: string;
-  }[] = [];
-  const seenUrls = new Set<string>();
-  let previousCount = 0;
-  let noGrowthCount = 0;
-  const maxNoGrowth = 3; // Stop after 3 passes with no new connections
-
-  // Scroll and accumulate connections to handle DOM virtualization
-  for (let pass = 0; pass < 20; pass++) { // Increased max passes for large networks
-    // Scrape current viewport
-    const raw = await page.evaluate(() => {
-      const clean = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
-      const out: { href: string; name: string; lines: string[]; cardText: string }[] = [];
-      const seen = new Set<string>();
-
-      for (const a of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/in/"]'))) {
-        const href = a.href;
-        if (seen.has(href)) continue;
-        seen.add(href);
-
-        // Find the connection card - look for specific connection card containers
-        // Skip if the link is within mutual connections or similar sub-sections
-        const mutualSection = a.closest('[class*="mutual"], [class*="shared"], [class*="member"]');
-        if (mutualSection) continue;
-
-        const card =
-          a.closest('li.reusable-search__result-container, li[class*="result"], div[data-view-name], li.pv-contact') ??
-          a.parentElement;
-        if (!card) continue;
-
-        // Skip if this appears to be a secondary link within the same card
-        const primaryLinks = card.querySelectorAll('a[href*="/in/"]');
-        if (primaryLinks.length > 1 && primaryLinks[0] !== a) continue;
-
-        out.push({
-          href,
-          name: clean(a.getAttribute('aria-label')) || clean(a.textContent),
-          lines: Array.from(card.querySelectorAll<HTMLElement>('span, div, p'))
-            .map((el) => clean(el.textContent))
-            .filter((t) => t.length > 0 && t.length < 200),
-          cardText: clean(card.textContent).slice(0, 400),
-        });
-      }
-      return out;
-    });
-
-    // Process scraped data
-    let newConnectionsThisPass = 0;
-    for (const entry of raw) {
-      const profileUrl = canonicalProfileUrl(entry.href);
-      if (!profileUrl || seenUrls.has(profileUrl)) continue;
-
-      const fullName = stripProfileChrome(dedupeRepeat(entry.name));
-      if (!fullName || /^linkedin member$/i.test(fullName)) continue;
-
-      const lines = [...new Set(entry.lines.map(dedupeRepeat))].filter(
-        (l) => l !== fullName && !DEGREE.test(l) && !/^(connect|message|follow|view profile)$/i.test(l),
-      );
-
-      seenUrls.add(profileUrl);
-      newConnectionsThisPass++;
-      
-      // Extract company from headline if present
-      const headline = lines[0] ?? '';
-      let companyName: string | undefined;
-      // Handle both "at" and "@" as company indicators, with better delimiters
-      const companyMatch = headline.match(/(?:at|@)\s+([^|,\n]*(?:Inc|Corp|LLC|Ltd|GmbH|Technologies|Solutions|Company|Group|Labs|Studios|Systems|Networks|Services|Platform|Cloud|Data|AI|Software|Engineering|Design|Marketing|Sales|Finance|Ops|Digital|Global|International|America|Europe|Asia|Pacific|USA|UK|India|Canada|Australia)?[^|,\n]*)/i);
-      if (companyMatch && companyMatch[1]) {
-        companyName = companyMatch[1].trim()
-          .replace(/\s*\|\s*.*$/, '') // Remove anything after pipe
-          .replace(/\s*,\s*.*$/, '') // Remove anything after comma
-          .replace(/\s+(?:Ex-|Former|Previous|Past)\s+.*$/i, '') // Remove "Ex-Company" references
-          .trim();
-      }
-
-      connections.push({
-        fullName,
-        headline,
-        location: lines[1],
-        degree: DEGREE.exec(entry.cardText)?.[1],
-        profileUrl,
-        companyName,
-      });
-    }
-
-    // Check if we found new connections
-    if (newConnectionsThisPass === 0) {
-      noGrowthCount++;
-      if (noGrowthCount >= maxNoGrowth) break; // Stop if no growth for multiple passes
-    } else {
-      noGrowthCount = 0;
-    }
-
-    // Scroll down to load more
-    await page.mouse.wheel(0, 2200);
-    await page.waitForTimeout(800); // Increased delay for reliability
-  }
-
-  return connections;
-}
 
 /**
  * Sync LinkedIn connections into the database.
@@ -157,8 +22,14 @@ export async function syncConnections(profileId: string): Promise<{
     select: { linkedinConnectionStatus: true },
   });
 
-  if (!profile || profile.linkedinConnectionStatus !== 'CONNECTED') {
-    throw new Error('LinkedIn is not connected. Please connect your LinkedIn account first.');
+  if (!profile) throw new Error('Profile not found.');
+  if (profile.linkedinConnectionStatus !== 'CONNECTED') {
+    // A browser already signed in to LinkedIn is connected, whatever the stored
+    // status says - it predates the connect button for anyone set up before it.
+    if (!(await hasLinkedInSession())) {
+      throw new Error('LinkedIn is not connected. Please connect your LinkedIn account first.');
+    }
+    await prisma.profile.update({ where: { id: profileId }, data: { linkedinConnectionStatus: 'CONNECTED' } });
   }
 
   // Update sync status to running
@@ -172,14 +43,10 @@ export async function syncConnections(profileId: string): Promise<{
   try {
     page = await linkedInPage();
     
-    // Navigate to connections page (actual 1st-degree connections list)
+    // Navigate to connections page
     await openLinkedIn(page, 'https://www.linkedin.com/mynetwork/invite-connect/connections/');
     
-    // Read all connections
-    const connections = await readConnections(page);
-    
-    // Upsert each connection
-    for (const conn of connections) {
+    const connections = await readConnections(page, { onConnection: async (conn) => {
       try {
         // Update heartbeat every 10 connections to detect stuck syncs
         if (synced % 10 === 0) {
@@ -240,7 +107,18 @@ export async function syncConnections(profileId: string): Promise<{
       } catch (err) {
         errors.push(`Failed to sync ${conn.fullName}: ${(err as Error).message}`);
       }
+    } });
+
+    if (connections.length === 0) {
+      throw new Error(
+        'No LinkedIn connections could be read. Check the connections page in the browser ' +
+        'opened by Job Applier. If your connections are visible, the page reader needs updating.',
+      );
     }
+    if (errors.length) throw new Error(`Saved ${synced} connections, but some connections could not be saved. Retry sync to complete the import.`);
+
+    // Closed only on success: a failed sync leaves the page open to look at.
+    await page.close();
 
     // Update sync status to completed
     await prisma.linkedInSync.upsert({
@@ -258,11 +136,8 @@ export async function syncConnections(profileId: string): Promise<{
     const error = (err as Error).message;
     errors.push(error);
     
-    // Check if this is a LinkedIn session issue
-    const isSessionError = error.includes('LinkedIn') || 
-                          error.includes('sign-in') || 
-                          error.includes('challenge') ||
-                          error.includes('authwall');
+    // Only a lost session needs you to sign in again; an unreadable page does not.
+    const isSessionError = /sign[- ]?in|signed out|challenge|authwall|checkpoint/i.test(error);
     
     // Update sync status to failed
     await prisma.linkedInSync.upsert({
@@ -276,13 +151,6 @@ export async function syncConnections(profileId: string): Promise<{
       await prisma.profile.update({
         where: { id: profileId },
         data: { linkedinConnectionStatus: 'REAUTH_REQUIRED' },
-      });
-    }
-  } finally {
-    // Always close the page to prevent resource leaks
-    if (page) {
-      await page.close().catch((err) => {
-        console.error('Failed to close page:', err);
       });
     }
   }

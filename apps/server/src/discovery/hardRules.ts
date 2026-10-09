@@ -38,6 +38,8 @@ export function parseSalary(text: string): number | null {
     /\$\s*([0-9,]+)\s*k?\s*[-–]\s*\$?\s*([0-9,]+)\s*k?/i,
     // Single: $150,000 or $150k
     /\$\s*([0-9,]+)\s*(?:k\b|per\s+year|annual|yr)?/i,
+    // Range without a currency sign: 130k - 170k
+    /\b([0-9,]+)\s*k?\s*[-–]\s*([0-9,]+)\s*k\b/i,
     // Single: 150k
     /\b([0-9]+)\s*k\b/i,
   ];
@@ -88,18 +90,45 @@ export function parseSalaryExpectation(profile: {
 }
 
 /**
- * Check if job salary matches candidate's expectations.
+ * Parse current CTC from profile.
+ * Checks both the currentCTC field and facts.
+ */
+export function parseCurrentCTC(profile: {
+  currentCTC?: string | null;
+  facts?: { key: string; value: string }[];
+}): number | null {
+  // Check facts first
+  const currentFact = profile.facts?.find((f) => 
+    /current.*salary|current.*ctc|current.*compensation|existing.*salary|existing.*ctc/i.test(f.key)
+  );
+  const currentSalary = currentFact ? parseSalary(currentFact.value) : null;
+  const currentCTC = profile.currentCTC ? parseSalary(profile.currentCTC) : null;
+
+  return currentSalary ?? currentCTC;
+}
+
+/**
+ * Check if job salary matches candidate's expectations and current CTC.
  */
 export function salaryVerdict(
   expectations: { min: number | null; max: number | null },
+  currentCTC: number | null,
   job: ScorableJob,
 ): HardRuleVerdict | null {
-  if (!expectations.min && !expectations.max) return null;
+  if (!expectations.min && !expectations.max && !currentCTC) return null;
 
   const text = `${job.title}\n${job.descriptionText ?? ''}`;
   const jobSalary = parseSalary(text);
   
   if (!jobSalary) return null; // Can't determine job salary
+
+  // First check against current CTC - this is a hard requirement
+  if (currentCTC && jobSalary < currentCTC) {
+    return {
+      dealbreaker: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) is below your current CTC ($${(currentCTC / 1000).toFixed(0)}k).`,
+      against: `Salary offered is lower than your current compensation.`,
+    };
+  }
 
   // If we have both min and max expectations
   if (expectations.min && expectations.max) {
@@ -130,6 +159,12 @@ export function salaryVerdict(
     return {
       against: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) is significantly above your maximum expectation ($${(expectations.max / 1000).toFixed(0)}k).`,
     };
+  }
+
+  // If we only have current CTC and job is above it
+  if (currentCTC && jobSalary >= currentCTC) {
+    const premium = ((jobSalary - currentCTC) / currentCTC * 100).toFixed(0);
+    return { for: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) is ${premium}% above your current CTC ($${(currentCTC / 1000).toFixed(0)}k).` };
   }
 
   return { for: `Job salary (~$${(jobSalary / 1000).toFixed(0)}k) aligns with your expectations.` };
@@ -255,6 +290,75 @@ export function sponsorshipVerdict(
   };
 }
 
+// ---------------------------------------------------------------- domain ---
+
+/**
+ * Titles that are simply somebody else's job.
+ *
+ * A backend engineer's queue should never contain a recruiter, a marketer or
+ * an account executive, and it kept containing them: a keyword scorer sees
+ * "Talent Acquisition Partner - Engineering" sharing the word "engineering"
+ * with the resume, and a model asked whether it fits will hedge rather than
+ * say no.
+ *
+ * Matched on the title only. A description mentions sales, marketing and
+ * recruiting in passing on almost every posting - "you will partner with
+ * sales" is on half the engineering jobs ever written - so reading the body
+ * for these words would throw away the good ones.
+ */
+const OFF_DOMAIN = [
+  ['recruiting', /\b(recruit(er|ing|ment)?|talent acquisition|sourcer|people (ops|operations|partner)|hr\b|human resources|hris)\b/i],
+  ['sales', /\b(sales|account (executive|manager|director)|business development|bdr\b|sdr\b|revenue (operations|ops)|quota|pre[- ]?sales)\b/i],
+  ['marketing', /\b(marketer|marketing|brand|content strateg|seo\b|demand gen|growth marketing|communications|social media|copywriter|public relations)\b/i],
+  ['customer support', /\b(customer (support|success|service|experience)|support (agent|specialist|advocate)|help ?desk|technical support)\b/i],
+  ['finance and legal', /\b(accountant|accounting|bookkeep|controller|auditor|counsel|paralegal|attorney|paraleg|compliance (officer|manager)|underwrit|actuar|tax\b)\b/i],
+  ['design', /\b(product|graphic|visual|brand|ux|ui) designer\b|\b(ux|ui) (researcher|writer)\b|\billustrator\b|\bcopy ?editor\b/i],
+  ['product management', /\bproduct (manager|owner|lead|management)\b|\bhead of product\b/i],
+  ['partnerships', /\bpartnerships?\b|\bbiz ?dev\b|\balliances\b/i],
+  ['program management', /\b(program|project|delivery) manager\b|\bprogram management\b|\bscrum master\b|\bchief of staff\b/i],
+  ['risk and operations', /\b(underwrit|actuar|risk (manager|strategist|analyst)|fraud (analyst|investigator)|operations (lead|manager|specialist|analyst))\b/i],
+  ['operations', /\b(office manager|executive assistant|administrative assistant|facilities|procurement|logistics coordinator|warehouse|events? (and|&) experiences?|events specialist)\b/i],
+] as const;
+
+/**
+ * Words that put a title back in scope even though an off-domain word matched.
+ *
+ * "Sales Engineering Manager" is still sales; "Software Engineer, Marketing
+ * Platform" is not marketing. The difference is whether the engineering word
+ * is the noun or the qualifier, which in practice means: does the title lead
+ * with a job this person does.
+ */
+const DISCIPLINE =
+  '(?:software|backend|back[- ]end|frontend|front[- ]end|full[- ]?stack|platform|infrastructure|systems?|data|machine learning|ml|ai|devops|site reliability|security|mobile|android|ios|cloud|embedded|qa|test)';
+const RANK = '(?:senior|staff|principal|lead|junior|associate|sr\\.?|jr\\.?|mid|ii+|[0-9])';
+const IN_DOMAIN_HEAD = new RegExp(
+  // "Senior Backend Engineer, Growth" - the discipline leads, the team follows.
+  `^(?:${RANK}\\s+)?${DISCIPLINE}\\b` +
+    // "Head of Data Engineering", "Director of Infrastructure" - the same job,
+    // one rung up, and still this person's profession.
+    `|^(?:head of|director of|vp of|vice president,? of)\\s+${DISCIPLINE}\\b` +
+    // A bare engineering title with no qualifier at all.
+    `|^(?:${RANK}\\s+)?(?:engineer|developer|architect|programmer)\\b`,
+  'i',
+);
+
+/** Is this title a job in another profession entirely? */
+export function offDomainVerdict(title: string): HardRuleVerdict | null {
+  const clean = title.trim();
+  // A title that starts by naming an engineering discipline is in scope, even
+  // when the team it serves is a sales or marketing one.
+  if (IN_DOMAIN_HEAD.test(clean)) return null;
+
+  for (const [domain, pattern] of OFF_DOMAIN) {
+    if (!pattern.test(clean)) continue;
+    return {
+      dealbreaker: `Not your profession - this is a ${domain} role.`,
+      against: `"${clean}" is a ${domain} job, not an engineering one.`,
+    };
+  }
+  return null;
+}
+
 // ----------------------------------------------------------------- apply ---
 
 /**
@@ -267,13 +371,14 @@ export function sponsorshipVerdict(
  */
 export function applyHardRules(
   fit: FitAssessment,
-  args: { candidateYears: number | null; needsSponsorship: boolean; salaryExpectations: { min: number | null; max: number | null }; job: ScorableJob },
+  args: { candidateYears: number | null; needsSponsorship: boolean; salaryExpectations: { min: number | null; max: number | null }; currentCTC: number | null; job: ScorableJob },
 ): FitAssessment {
   const text = `${args.job.title}\n${args.job.descriptionText ?? ''}`;
   const verdicts = [
+    offDomainVerdict(args.job.title),
     experienceVerdict(args.candidateYears, text),
     sponsorshipVerdict(args.needsSponsorship, args.job),
-    salaryVerdict(args.salaryExpectations, args.job),
+    salaryVerdict(args.salaryExpectations, args.currentCTC, args.job),
   ].filter(Boolean) as HardRuleVerdict[];
   if (!verdicts.length) return fit;
 
@@ -296,104 +401,49 @@ export function applyHardRules(
  * Years come from a stated fact when there is one, because a resume regex
  * reads the first "3 years" it finds in a bullet about a project.
  */
-export interface CandidateConstraints {
-  candidateYears: number | null;
-  needsSponsorship: boolean;
-  salaryExpectations: { min: number | null; max: number | null };
-}
-
-/** Extract candidate constraints once per profile batch. */
-export function extractCandidateConstraints(profile: {
-  candidateYears?: number | null;
-  needsSponsorship?: boolean;
+export function candidateConstraints(profile: {
+  country?: string | null;
+  countryCode?: string | null;
+  citizenship?: string | null;
+  currentCTC?: string | null;
   expectedCTC?: string | null;
+  summary?: string | null;
+  resumeText?: string | null;
   facts?: { key: string; value: string }[];
-}): CandidateConstraints {
-  const yearsFact = profile.facts?.find((f) => /years.*experience|total.*experience/i.test(f.key));
-  const candidateYears = profile.candidateYears ?? (yearsFact ? parseYears(yearsFact.value) : null);
-  const needsSponsorship = profile.needsSponsorship ?? false;
+}): { candidateYears: number | null; needsSponsorship: boolean; salaryExpectations: { min: number | null; max: number | null }; currentCTC: number | null } {
+  const stated = profile.facts?.find((f) => /experience.*years|years.*experience|yoe/i.test(f.key));
+  // A stated fact is usually just the number - "4.5", not "4.5 years" - so it
+  // is read as one before falling back to the prose patterns.
+  const statedYears = stated ? (bareNumber(stated.value) ?? parseYears(stated.value)) : null;
+  const candidateYears =
+    statedYears ??
+    parseYears(normalizeLabel(profile.summary ?? '')) ??
+    parseYears(normalizeLabel((profile.resumeText ?? '').slice(0, 1500)));
+
+  // Anyone not a US citizen needs sponsoring for a US role. Citizenship is the
+  // primary factor - location matters less. Stated as "not US citizen" rather
+  // than "is India" so it stays true if they move.
+  const citizenship = normalizeLabel(profile.citizenship ?? '');
+  const countryCode = (profile.countryCode ?? '').toUpperCase();
+  const country = normalizeLabel(profile.country ?? '');
+  
+  // Check if citizenship is US
+  const isUSCitizen = /^(united states|usa|us|american)$/i.test(citizenship) || 
+                      citizenship.toUpperCase() === 'US' ||
+                      citizenship === 'United States';
+  
+  // If citizenship is not set, fall back to location check
+  const inUS = countryCode === 'US' || /^(united states|usa|us)$/.test(country);
+  
   const salaryExpectations = parseSalaryExpectation(profile);
-
-  return { candidateYears, needsSponsorship, salaryExpectations };
-}
-
-/**
- * Extract country code from a location string.
- * Simple heuristic to detect country names or codes.
- */
-function extractCountry(location: string): string | null {
-  const loc = location.toLowerCase();
+  const currentCTC = parseCurrentCTC(profile);
   
-  // Common country names
-  const countries: Record<string, string> = {
-    'united states': 'US',
-    'usa': 'US',
-    'us': 'US',
-    'united kingdom': 'GB',
-    'uk': 'GB',
-    'canada': 'CA',
-    'germany': 'DE',
-    'france': 'FR',
-    'india': 'IN',
-    'australia': 'AU',
-    'netherlands': 'NL',
-    'singapore': 'SG',
-    'japan': 'JP',
-    'switzerland': 'CH',
-    'ireland': 'IE',
-    'spain': 'ES',
-    'italy': 'IT',
-    'sweden': 'SE',
-    'denmark': 'DK',
-    'norway': 'NO',
-    'finland': 'FI',
-    'belgium': 'BE',
-    'austria': 'AT',
-    'poland': 'PL',
-    'czech': 'CZ',
-    'brazil': 'BR',
-    'mexico': 'MX',
-    'argentina': 'AR',
-    'colombia': 'CO',
-    'chile': 'CL',
-    'peru': 'PE',
-    'south africa': 'ZA',
-    'new zealand': 'NZ',
-    'israel': 'IL',
-    'uae': 'AE',
-    'saudi arabia': 'SA',
-    'turkey': 'TR',
-    'russia': 'RU',
-    'china': 'CN',
-    'south korea': 'KR',
-    'taiwan': 'TW',
-    'hong kong': 'HK',
-    'thailand': 'TH',
-    'vietnam': 'VN',
-    'indonesia': 'ID',
-    'malaysia': 'MY',
-    'philippines': 'PH',
-    'pakistan': 'PK',
-    'bangladesh': 'BD',
-    'nigeria': 'NG',
-    'egypt': 'EG',
-    'kenya': 'KE',
-    'morocco': 'MA',
-  };
-  
-  for (const [name, code] of Object.entries(countries)) {
-    if (loc.includes(name)) {
-      return code;
-    }
-  }
-  
-  // Check for 2-letter country codes at end of string
-  const codeMatch = loc.match(/\b([A-Z]{2})\b$/i);
-  if (codeMatch && codeMatch[1]) {
-    return codeMatch[1].toUpperCase();
-  }
-  
-  return null;
+  return { candidateYears, needsSponsorship: !isUSCitizen, salaryExpectations, currentCTC };
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
+
+function bareNumber(value: string): number | null {
+  const n = Number(value.trim());
+  return Number.isFinite(n) && n > 0 && n < 60 ? n : null;
+}

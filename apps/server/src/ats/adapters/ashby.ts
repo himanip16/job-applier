@@ -1,3 +1,4 @@
+import { fileHint } from '../types.js';
 import type { AtsAdapter, JobMeta } from '../types.js';
 import { extractFields } from '../../browser/extract.js';
 import { openApplicationForm } from '../../browser/openForm.js';
@@ -52,8 +53,8 @@ export const ashbyAdapter: AtsAdapter = {
 
   fileInputs(fields) {
     return {
-      resume: fields.find((f) => f.kind === 'FILE' && /resume|cv/i.test(f.label)),
-      coverLetter: fields.find((f) => f.kind === 'FILE' && /cover/i.test(f.label)),
+      resume: fields.find((f) => f.kind === 'FILE' && /resume|cv/i.test(fileHint(f))),
+      coverLetter: fields.find((f) => f.kind === 'FILE' && /cover/i.test(fileHint(f))),
     };
   },
 

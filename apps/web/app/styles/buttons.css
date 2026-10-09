@@ -1,0 +1,69 @@
+/* ------------------------------------------------------------------ buttons */
+
+/*
+ * Element agnostic.
+ *
+ * `.btn` is the whole button look and it is not tied to <button>, because
+ * half the buttons in this app are links - "See all", "Open them", "Fix" -
+ * and when only `button.primary` existed, every one of those links grew its
+ * own inline copy of the styles that then drifted.
+ */
+button, .btn {
+  font: inherit; font-weight: 560; font-size: var(--fs-md);
+  padding: 0.45rem 0.85rem; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  cursor: pointer; text-decoration: none;
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+  white-space: nowrap; vertical-align: middle;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease),
+              color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+button:hover:not(:disabled), .btn:hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--border-strong); background: var(--panel-hover);
+  text-decoration: none; color: var(--text);
+}
+button:active:not(:disabled), .btn:active:not(:disabled) { transform: translateY(1px); }
+
+button.primary, .btn.primary, a.primary {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-contrast);
+  box-shadow: var(--shadow-sm);
+}
+button.primary:hover:not(:disabled), .btn.primary:hover:not(:disabled), a.primary:hover {
+  background: var(--accent-hover); border-color: var(--accent-hover); color: var(--accent-contrast);
+}
+button.primary:active:not(:disabled), .btn.primary:active:not(:disabled) {
+  background: var(--accent-active); border-color: var(--accent-active);
+}
+
+button.danger, .btn.danger { color: var(--bad); }
+button.danger:hover:not(:disabled), .btn.danger:hover:not(:disabled) {
+  border-color: var(--bad-border); background: var(--bad-soft); color: var(--bad);
+}
+
+button.ghost, .btn.ghost { background: transparent; border-color: transparent; }
+button.ghost:hover:not(:disabled), .btn.ghost:hover:not(:disabled) {
+  background: var(--panel-2); border-color: var(--border);
+}
+/* Reasserted after .ghost, which would otherwise win the shared hover rule
+   and turn a "reject" button's hover state plain gray instead of red. */
+button.danger.ghost:hover:not(:disabled), .btn.danger.ghost:hover:not(:disabled) {
+  background: var(--bad-soft); border-color: var(--bad-border);
+}
+
+button.small, .btn.small, .btn-small {
+  padding: 0.28rem 0.55rem; font-size: var(--fs-sm); border-radius: var(--radius-sm);
+}
+
+/*
+ * Disabled has to read as disabled.
+ *
+ * Opacity alone left a disabled primary as a pale lavender slab that looked
+ * like a third button variant rather than an unavailable one. A disabled
+ * control drops its fill entirely and keeps only the outline.
+ */
+button:disabled, .btn[aria-disabled='true'] {
+  cursor: not-allowed;
+  background: var(--panel-2); border-color: var(--border);
+  color: var(--muted); box-shadow: none; opacity: 1;
+}
+button.ghost:disabled { background: transparent; border-color: transparent; }

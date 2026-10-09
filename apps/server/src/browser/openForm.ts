@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import type { BlockerKind } from '@ja/shared';
 import { detectBlockers } from './blockers.js';
+import { detectAutofillPrompt, isNavigationRace, settle } from './steps.js';
 
 /**
  * Getting from a job URL to a form you can actually fill.
@@ -72,11 +73,19 @@ export interface FormDiagnosis {
  */
 export async function countFillableInputs(page: Page): Promise<number> {
   return page.evaluate(() => {
-    const controls = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        'input, textarea, select, [role="combobox"], [contenteditable="true"]',
-      ),
-    );
+    // Into open shadow roots too: SmartRecruiters' form has no light-DOM
+    // inputs at all, every one sits inside an `spl-*` web component.
+    const controls: HTMLElement[] = [];
+    const visit = (node: ParentNode) => {
+      for (const el of Array.from(node.children)) {
+        if (el.matches('input, textarea, select, [role="combobox"], [contenteditable="true"]')) {
+          controls.push(el as HTMLElement);
+        }
+        if (el.shadowRoot) visit(el.shadowRoot);
+        visit(el);
+      }
+    };
+    visit(document);
     return controls.filter((el) => {
       const type = (el.getAttribute('type') ?? '').toLowerCase();
       if (['hidden', 'submit', 'button', 'image', 'reset'].includes(type)) return false;
@@ -98,6 +107,37 @@ export async function countFillableInputs(page: Page): Promise<number> {
       const r = el.getBoundingClientRect();
       return r.width > 0 && r.height > 0;
     }).length;
+  });
+}
+
+/**
+ * Whether a resume/CV upload is reachable on screen right now.
+ *
+ * Used to decide whether "there are fillable inputs already" can be trusted
+ * as "this is the application". It usually can be - but a company careers
+ * page can carry something else on the same screen that also asks for a name
+ * and an email: a "join our talent community" widget, a job-alert sign-up.
+ * Those essentially never ask for a resume; a job application almost always
+ * does, even when the field is optional. A live run against a Roku posting
+ * filled exactly such a sidebar widget under the candidate's name, because
+ * three text inputs were enough to satisfy `minInputs` before the real
+ * application - already in the page, just hidden until Apply is clicked -
+ * was ever revealed.
+ */
+async function hasVisibleFileInput(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const files: HTMLInputElement[] = [];
+    const visit = (node: ParentNode) => {
+      for (const el of Array.from(node.children)) {
+        if (el.matches('input[type=file]')) files.push(el as HTMLInputElement);
+        if (el.shadowRoot) visit(el.shadowRoot);
+        visit(el);
+      }
+    };
+    visit(document);
+    return files.some((el) =>
+      typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null,
+    );
   });
 }
 
@@ -159,7 +199,16 @@ export async function clearInterstitial(page: Page, budgetMs = 25_000): Promise<
   let seen: string | null = null;
 
   while (Date.now() < deadline) {
-    const now = await detectInterstitial(page);
+    // A page still redirecting (forms.gle -> docs.google.com) destroys the
+    // context mid-read. That is "not arrived yet", not a failure.
+    let now: string | null;
+    try {
+      now = await detectInterstitial(page);
+    } catch (err) {
+      if (!isNavigationRace(err)) throw err;
+      await settle(page);
+      continue;
+    }
     if (!now) return;
     seen = now;
     await page.waitForTimeout(1000);
@@ -176,6 +225,12 @@ export async function clearInterstitial(page: Page, budgetMs = 25_000): Promise<
   }
 }
 
+/**
+ * "Apply Manually" starts with "apply" but is not the job's Apply button: it is
+ * one side of the autofill choice the wizard makes (it prefers the resume).
+ */
+const NOT_THE_APPLY_BUTTON = /manually|autofill|auto-fill|use my last application/i;
+
 /** Labels that open an application, in rough order of specificity. */
 const APPLY_PATTERNS = [
   /apply for this job/i,
@@ -184,6 +239,8 @@ const APPLY_PATTERNS = [
   /start (your )?application/i,
   /^apply$/i,
   /^apply\b/i,
+  // SmartRecruiters, including postings embedded on a company's own domain.
+  /^i[’']?m interested$/i,
 ];
 
 /**
@@ -208,6 +265,9 @@ export async function openApplicationForm(
   const patterns = [...(opts.applyPatterns ?? []), ...APPLY_PATTERNS];
 
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+  // A URL that redirects by script after load would otherwise be read
+  // half-way, and every page.evaluate below would die with it.
+  await settle(page);
 
   // 1. Interstitial, if any. Nothing else can be true until this is gone.
   await clearInterstitial(page);
@@ -216,29 +276,38 @@ export async function openApplicationForm(
   await page.waitForTimeout(700);
 
   // 2. Already on the form? Some URLs point straight at it (Lever's /apply).
-  if (await formReady(page, minInputs, opts.formSelectors)) return;
+  //
+  // Trusted outright when an adapter passed its own formSelectors - it knows
+  // its DOM precisely. The generic fallback does not, and a bare input count
+  // cannot tell a real application from something else on the same page that
+  // also asks for a name and an email - see hasVisibleFileInput. So the
+  // generic path additionally wants resume evidence before it will accept
+  // "the form is already here" and skip the Apply click; failing that it
+  // falls through to step 3 exactly as if nothing had been found yet.
+  if (await formReady(page, minInputs, opts.formSelectors)) {
+    if (opts.formSelectors?.length || (await hasVisibleFileInput(page))) return;
+  }
 
   // 3. Otherwise click through. Two attempts: the first click sometimes lands
   //    before hydration finishes and does nothing at all.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await clickApply(page, patterns);
-    if (!result.clicked && attempt === 0) {
+    const clicked = await clickApply(page, patterns);
+    if (!clicked && attempt === 0) {
       // No control found yet - it may still be rendering.
       await page.waitForTimeout(1500);
       continue;
     }
 
-    if (result.clicked) {
-      // If a popup opened, use the new page for subsequent operations
-      if (result.newPage) {
-        Object.assign(page, result.newPage);
-      }
-      
+    if (clicked) {
       await page.waitForLoadState('domcontentloaded').catch(() => {});
       // An Apply link can navigate to a fresh page with its own challenge.
       await clearInterstitial(page).catch((err: unknown) => {
         throw err;
       });
+      // Workday's Apply opens "Autofill with Resume / Apply Manually". That is
+      // the start of the application, and the wizard decides it - clicking
+      // Apply again here picked "Apply Manually" every time.
+      if (await detectAutofillPrompt(page)) return;
       if (await formReady(page, minInputs, opts.formSelectors, 15_000)) return;
     }
   }
@@ -284,7 +353,13 @@ async function formReady(
         if (await page.locator(sel).first().isVisible().catch(() => false)) return true;
       }
     }
-    if ((await countFillableInputs(page)) >= minInputs) return true;
+    // Apply links that bounce through a sign-in (Google Careers) navigate
+    // twice; a read landing between them is no answer, not a failure.
+    const inputs = await countFillableInputs(page).catch((err: unknown) => {
+      if (isNavigationRace(err)) return 0;
+      throw err;
+    });
+    if (inputs >= minInputs) return true;
     await page.waitForTimeout(400);
   } while (Date.now() < deadline);
   return false;
@@ -293,11 +368,12 @@ async function formReady(
 /**
  * Find and click whatever opens the application.
  *
- * Returns whether a click actually landed and optionally the new page if a popup opened.
- * The old code swallowed click failures with `.catch(() => {})` and then waited on a form 
- * that could never appear, which is exactly how you get a twenty-second timeout with no clue why.
+ * Returns whether a click actually landed. The old code swallowed click
+ * failures with `.catch(() => {})` and then waited on a form that could never
+ * appear, which is exactly how you get a twenty-second timeout with no clue
+ * why.
  */
-async function clickApply(page: Page, patterns: RegExp[]): Promise<{ clicked: boolean; newPage?: Page }> {
+async function clickApply(page: Page, patterns: RegExp[]): Promise<boolean> {
   for (const pattern of patterns) {
     for (const role of ['button', 'link'] as const) {
       const control = page.getByRole(role, { name: pattern });
@@ -305,32 +381,51 @@ async function clickApply(page: Page, patterns: RegExp[]): Promise<{ clicked: bo
       for (let i = 0; i < Math.min(count, 3); i++) {
         const nth = control.nth(i);
         if (!(await nth.isVisible().catch(() => false))) continue;
+        const name = (await nth.innerText().catch(() => '')) || (await nth.getAttribute('aria-label').catch(() => '')) || '';
+        if (NOT_THE_APPLY_BUTTON.test(name)) continue;
+        // Apply buttons that open the form in a new tab (target=_blank, or
+        // window.open) leave this page exactly where it was, and every later
+        // step reads this page. Catch the tab and bring its address here.
+        const opened: Page[] = [];
+        const onPage = (p: Page) => opened.push(p);
+        page.context().on('page', onPage);
         try {
           await nth.scrollIntoViewIfNeeded({ timeout: 3000 });
-          
-          // Listen for popup (target="_blank" links)
-          const [newPage] = await Promise.all([
-            page.context().waitForEvent('page', { timeout: 5000 }).catch(() => null),
-            nth.click({ timeout: 8000 }),
-          ]);
-          
-          if (newPage) {
-            // Close the original page and use the new one
-            await page.close().catch(() => {});
-            await newPage.bringToFront();
-            return { clicked: true, newPage };
-          }
-          
+          await nth.click({ timeout: 8000 });
           await page.waitForTimeout(900);
-          return { clicked: true };
+          page.context().off('page', onPage);
+          if (opened[0]) await followNewTab(page, opened[0]);
+          return true;
         } catch {
+          page.context().off('page', onPage);
           // Overlays and cookie banners intercept the first click; try the
           // next candidate rather than giving up on the whole page.
         }
       }
     }
   }
-  return { clicked: false };
+  return false;
+}
+
+/**
+ * Load what a new tab opened onto `page`, and close the tab.
+ *
+ * The tab starts on about:blank and may pass through a redirect, so wait for
+ * a real address first. If it never gets one, leave `page` alone.
+ */
+async function followNewTab(page: Page, tab: Page): Promise<void> {
+  try {
+    await tab
+      .waitForURL((u) => /^https?:$/.test(u.protocol), { timeout: 15_000, waitUntil: 'commit' })
+      .catch(() => {});
+    // A short link (forms.gle) redirects again; read where it ends up.
+    await settle(tab);
+    const url = tab.url();
+    if (!/^https?:/.test(url)) return;
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+  } finally {
+    await tab.close().catch(() => {});
+  }
 }
 
 /** Everything worth knowing about why there was no form. */

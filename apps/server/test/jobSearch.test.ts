@@ -3,6 +3,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Planning fallback tests must not call a paid model, including when a key is
+// present in the test database's saved settings.
+vi.mock('../src/llm/client.js', () => ({
+  isConfigured: () => false,
+  generate: vi.fn(),
+  describeLlmError: (error: unknown) => String(error),
+}));
+
 /**
  * The search path, end to end, without a network.
  *
@@ -35,6 +43,9 @@ describe('recognising a posting URL', () => {
       ['https://jobs.lever.co/plaid/6ca0ab85-77a7-468f-a13f-4b4ad1e264ee', 'lever', 'plaid'],
       ['https://jobs.ashbyhq.com/Nash/5078366e-db73-45a4-b9cb-23162d3bc28b', 'ashby', 'Nash'],
       ['https://apply.workable.com/acme/j/ABCDEF123/', 'workable', 'acme'],
+      ['https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/US-CA/Engineer_JR1', 'workday', 'nvidia.wd5/NVIDIAExternalCareerSite'],
+      // The other Workday host: data centre first, tenant in the path.
+      ['https://wd1.myworkdaysite.com/recruiting/wf/WellsFargoJobs/job/Bengaluru-India/Senior-Software-Engineer---Java-Full-Stack_R-568993', 'workday', 'wf.wd1/WellsFargoJobs'],
     ];
     for (const [url, ats, slug] of cases) {
       expect(parseBoardUrl(url), url).toEqual({ ats, slug });
@@ -198,7 +209,7 @@ describe('the Firecrawl client', () => {
   it('says what to do when there is no key, instead of failing at the socket', async () => {
     await withKey('');
     try {
-      await expect(firecrawlSearch('backend engineer')).rejects.toThrow(/FIRECRAWL_API_KEY/);
+      await expect(firecrawlSearch('backend engineer')).rejects.toThrow(/No Firecrawl key configured/i);
     } finally {
       await restore();
     }
@@ -286,7 +297,7 @@ describe('the Firecrawl client', () => {
     ) as unknown as typeof fetch;
     try {
       const err = await firecrawlSearch('x').catch((e: unknown) => e);
-      expect((err as Error).message).toMatch(/FIRECRAWL_API_KEY/);
+      expect((err as Error).message).toMatch(/Firecrawl rejected the API key/i);
       expect((err as InstanceType<typeof FirecrawlError>).transient).toBe(false);
     } finally {
       await restore();
@@ -324,19 +335,18 @@ describe('a full search run', () => {
     notes: [],
   });
 
-  /** One hit, on a board that turns out to have four openings. */
-  const oneHit = async () => ({
-    hits: [
-      {
-        // http, deliberately: this is the scheme live search actually returns,
-        // and the board API will answer with https.
-        url: 'http://job-boards.greenhouse.io/acme/jobs/1001',
-        title: 'Job Application for Senior Backend Engineer at Acme Corp',
-        description: 'Go, Postgres, payments.',
-      },
-    ],
-    creditsUsed: 2,
-  });
+  /** The target list, cut down to one company so the assertions stay readable. */
+  const acmeOnly = () => [
+    {
+      company: 'Acme Corp',
+      domain: 'acme.com',
+      source: 'greenhouse',
+      handle: 'acme',
+      tier: 'bigtech',
+      sde2_ctc_lpa: '70-150',
+      india_locations: 'Bangalore',
+    },
+  ];
 
   const acmeBoard = async () => [
     {
@@ -351,7 +361,7 @@ describe('a full search run', () => {
     {
       url: 'https://job-boards.greenhouse.io/acme/jobs/1002',
       ats: 'greenhouse',
-      title: 'Staff Backend Engineer, Ledger',
+      title: 'Senior Backend Engineer, Ledger',
       companyName: 'acme',
       location: 'Remote',
       remote: true,
@@ -377,36 +387,84 @@ describe('a full search run', () => {
     },
   ];
 
-  it('turns one search hit into every relevant opening at that company', async () => {
+  it('keeps only the openings at a target company that match the plan', async () => {
     const report = await findJobs(profileId, {
       deepScoreTop: 0,
-      deps: { plan, search: oneHit, fetchBoard: acmeBoard },
+      deps: { plan, companies: acmeOnly, fetchCompany: acmeBoard },
     });
 
     expect(report.newLeads).toBe(2);
-    expect(report.creditsUsed).toBe(2);
+    expect(report.creditsUsed).toBe(0);
+    expect(report.jobsFetched).toBe(4);
+    expect(report.jobsSeen).toBe(2);
+    expect(report.skippedWrongDomain + report.skippedOffPlan).toBe(2);
+    expect([...report.droppedExamples.wrongDomain, ...report.droppedExamples.offPlan]).toContain('Technical Recruiter');
 
     const leads = await prisma.jobLead.findMany({ where: { profileId }, orderBy: { title: 'asc' } });
     expect(leads.map((l) => l.title)).toEqual([
       'Senior Backend Engineer',
-      'Staff Backend Engineer, Ledger',
+      'Senior Backend Engineer, Ledger',
     ]);
     // The warehouse job and the recruiter role are the reason the gate exists.
     expect(leads.some((l) => /warehouse|recruiter/i.test(l.title))).toBe(false);
-    // Descriptions come from the board API, not from the two-sentence snippet.
     expect(leads[0]!.descriptionText!.length).toBeGreaterThan(200);
   });
 
-  it('shows the company by its real name, not the board slug', async () => {
-    await findJobs(profileId, { deepScoreTop: 0, deps: { plan, search: oneHit, fetchBoard: acmeBoard } });
+  it('passes the role titles and country to the crawler, so big sites search server-side', async () => {
+    let seen: unknown;
+    await findJobs(profileId, {
+      deepScoreTop: 0,
+      country: 'IN',
+      deps: {
+        plan,
+        companies: acmeOnly,
+        fetchCompany: async (_c, hints) => {
+          seen = hints;
+          return [];
+        },
+      },
+    });
+    expect(seen).toMatchObject({ queries: ['Senior Backend Engineer'], country: { code: 'IN' } });
+  });
+
+  it('reads only as many companies as asked, best-paying first', async () => {
+    const read: string[] = [];
+    const companies = (limit: number) =>
+      ['A', 'B', 'C'].slice(0, limit).map((name) => ({ ...acmeOnly()[0]!, company: name, handle: name.toLowerCase() }));
+    const report = await findJobs(profileId, {
+      deepScoreTop: 0,
+      maxBoards: 2,
+      deps: { plan, companies, fetchCompany: async (c) => (read.push(c.company), []) },
+    });
+    expect(read.sort()).toEqual(['A', 'B']);
+    expect(report.boards.map((b) => b.company)).toEqual(['A', 'B']);
+  });
+
+  it('requests all 100 companies by default and reports unset sources separately from failures', async () => {
+    const companies = vi.fn(() => [
+      acmeOnly()[0]!,
+      { ...acmeOnly()[0]!, company: 'Unset Co', source: 'careers-page', handle: 'unset.example.com' },
+    ]);
+    const fetchCompany = vi.fn(acmeBoard);
+    const report = await findJobs(profileId, { deepScoreTop: 0, deps: { plan, companies, fetchCompany } });
+    expect(companies).toHaveBeenCalledWith(100);
+    expect(fetchCompany).toHaveBeenCalledTimes(1);
+    expect(report.noSource).toEqual(['Unset Co']);
+    expect(report.boards.map((b) => b.company)).toEqual(['Acme Corp']);
+    expect(report.errors).toEqual([]);
+    expect(report.newLeads).toBe(2);
+  });
+
+  it('shows the company by its name from the target list, not the board slug', async () => {
+    await findJobs(profileId, { deepScoreTop: 0, deps: { plan, companies: acmeOnly, fetchCompany: acmeBoard } });
     const lead = await prisma.jobLead.findFirst({ where: { profileId } });
     expect(lead!.companyName).toBe('Acme Corp');
   });
 
-  it('registers the board so the ordinary crawler owns it from now on', async () => {
+  it('registers the company so the ordinary crawler owns it from now on', async () => {
     const report = await findJobs(profileId, {
       deepScoreTop: 0,
-      deps: { plan, search: oneHit, fetchBoard: acmeBoard },
+      deps: { plan, companies: acmeOnly, fetchCompany: acmeBoard },
     });
     expect(report.companiesRegistered).toBe(1);
 
@@ -416,13 +474,12 @@ describe('a full search run', () => {
     expect(company).toBeTruthy();
     expect(company!.enabled).toBe(true);
     expect(company!.name).toBe('Acme Corp');
-    // And the leads are attached to it, so the tracker can group by company.
     const lead = await prisma.jobLead.findFirst({ where: { profileId } });
     expect(lead!.companyId).toBe(company!.id);
   });
 
   it('never re-offers a job that was already decided', async () => {
-    await findJobs(profileId, { deepScoreTop: 0, deps: { plan, search: oneHit, fetchBoard: acmeBoard } });
+    await findJobs(profileId, { deepScoreTop: 0, deps: { plan, companies: acmeOnly, fetchCompany: acmeBoard } });
     await prisma.jobLead.updateMany({
       where: { profileId },
       data: { status: 'REJECTED', decidedAt: new Date() },
@@ -430,7 +487,7 @@ describe('a full search run', () => {
 
     const second = await findJobs(profileId, {
       deepScoreTop: 0,
-      deps: { plan, search: oneHit, fetchBoard: acmeBoard },
+      deps: { plan, companies: acmeOnly, fetchCompany: acmeBoard },
     });
     expect(second.newLeads).toBe(0);
     expect(second.skippedAlreadySeen).toBe(2);
@@ -438,140 +495,80 @@ describe('a full search run', () => {
   });
 
   it('does not create the same lead twice when the scheme differs', async () => {
-    // The first run stores the https URL from the board API. If the dedup key
-    // were the raw string, the http URL from search would look like a new job.
-    await findJobs(profileId, { deepScoreTop: 0, deps: { plan, search: oneHit, fetchBoard: acmeBoard } });
+    await findJobs(profileId, { deepScoreTop: 0, deps: { plan, companies: acmeOnly, fetchCompany: acmeBoard } });
     const httpBoard = async () =>
       (await acmeBoard()).map((j) => ({ ...j, url: j.url.replace('https://', 'http://') + '/' }));
 
     const second = await findJobs(profileId, {
       deepScoreTop: 0,
-      deps: { plan, search: oneHit, fetchBoard: httpBoard },
+      deps: { plan, companies: acmeOnly, fetchCompany: httpBoard },
     });
     expect(second.newLeads).toBe(0);
     expect(await prisma.jobLead.count({ where: { profileId } })).toBe(2);
   });
 
-  it('keeps the posting search found when the board API will not answer', async () => {
-    const brokenBoard = async () => {
-      throw new Error('404 Not Found from Greenhouse');
-    };
-    const report = await findJobs(profileId, {
-      deepScoreTop: 0,
-      deps: { plan, search: oneHit, fetchBoard: brokenBoard },
-    });
-
-    expect(report.newLeads).toBe(1);
-    expect(report.boards[0]!.error).toMatch(/404/);
-    const lead = await prisma.jobLead.findFirst({ where: { profileId } });
-    // Boilerplate stripped off the page title, so the queue does not read
-    // "Job Application for ...".
-    expect(lead!.title).toBe('Senior Backend Engineer');
-    expect(lead!.ats).toBe('greenhouse');
-    // Search returns http:// for pages served over https, and this URL is the
-    // one the browser will open when the run starts.
-    expect(lead!.url.startsWith('https://')).toBe(true);
-    // ...and the run says out loud that these descriptions are thin.
-    expect(report.notes.join(' ')).toMatch(/shorter descriptions/);
-  });
-
-  it('hydrates a company once however many queries found it', async () => {
-    let boardCalls = 0;
-    const threeQueries = async () => ({
-      roleTitles: ['Senior Backend Engineer'],
-      queries: ['a', 'b', 'c'],
-      source: 'profile' as const,
-      notes: [],
-    });
-    const sameBoardEveryTime = async () => ({
-      hits: [
-        {
-          url: 'https://job-boards.greenhouse.io/acme/jobs/1001',
-          title: 'Senior Backend Engineer @ Acme Corp',
-          description: 'Go.',
-        },
-      ],
-      creditsUsed: 2,
-    });
-
+  it('keeps going past a company whose site will not answer', async () => {
+    const two = () => [
+      { ...acmeOnly()[0]!, company: 'Broken Co', handle: 'broken' },
+      acmeOnly()[0]!,
+    ];
     const report = await findJobs(profileId, {
       deepScoreTop: 0,
       deps: {
-        plan: threeQueries,
-        search: sameBoardEveryTime,
-        fetchBoard: async (ref) => {
-          boardCalls++;
-          return acmeBoard().then((jobs) => (ref.slug === 'acme' ? jobs : []));
+        plan,
+        companies: two,
+        fetchCompany: async (c) => {
+          if (c.handle === 'broken') throw new Error('404 Not Found from Greenhouse');
+          return acmeBoard();
         },
       },
     });
 
-    expect(report.queries).toHaveLength(3);
-    expect(report.creditsUsed).toBe(6);
-    expect(boardCalls).toBe(1);
     expect(report.newLeads).toBe(2);
+    expect(report.boards.find((b) => b.company === 'Broken Co')!.error).toMatch(/404/);
+    expect(report.errors[0]!.where).toBe('Broken Co');
   });
 
-  it('stops searching once the key or the balance is the problem', async () => {
-    const { FirecrawlError: FcError } = await import('../src/discovery/firecrawl.js');
-    let calls = 0;
-    const sixQueries = async () => ({
-      roleTitles: ['Senior Backend Engineer'],
-      queries: ['a', 'b', 'c', 'd', 'e', 'f'],
-      source: 'profile' as const,
-      notes: [],
-    });
-    const deadKey = async () => {
-      calls++;
-      throw new FcError('Firecrawl rejected the API key. Check FIRECRAWL_API_KEY in .env.', 401, false);
-    };
-
+  it('says so plainly when no target company has a matching opening', async () => {
     const report = await findJobs(profileId, {
-      deps: { plan: sixQueries, search: deadKey, fetchBoard: acmeBoard },
-    });
-    // Five more identical failures would tell the user nothing new.
-    expect(calls).toBe(1);
-    expect(report.errors[0]!.error).toMatch(/FIRECRAWL_API_KEY/);
-    expect(report.newLeads).toBe(0);
-  });
-
-  it('keeps going past a transient failure on one query', async () => {
-    const { FirecrawlError: FcError } = await import('../src/discovery/firecrawl.js');
-    let calls = 0;
-    const twoQueries = async () => ({
-      roleTitles: ['Senior Backend Engineer'],
-      queries: ['a', 'b'],
-      source: 'profile' as const,
-      notes: [],
-    });
-    const flaky = async () => {
-      calls++;
-      if (calls === 1) throw new FcError('Firecrawl timed out. Try again.', 408, true);
-      return oneHit();
-    };
-
-    const report = await findJobs(profileId, {
-      deepScoreTop: 0,
-      deps: { plan: twoQueries, search: flaky, fetchBoard: acmeBoard },
-    });
-    expect(calls).toBe(2);
-    expect(report.newLeads).toBe(2);
-  });
-
-  it('says so plainly when the searches found nothing we can apply to', async () => {
-    const offBoard = async () => ({
-      hits: [
-        { url: 'https://www.linkedin.com/jobs/view/1', title: 'Backend Engineer', description: '' },
-        { url: 'https://example.com/careers/backend', title: 'Backend Engineer', description: '' },
-      ],
-      creditsUsed: 2,
-    });
-    const report = await findJobs(profileId, {
-      deps: { plan, search: offBoard, fetchBoard: acmeBoard },
+      deps: { plan, companies: acmeOnly, fetchCompany: async () => [] },
     });
     expect(report.newLeads).toBe(0);
-    expect(report.queries[0]!.hits).toBe(0);
-    expect(report.notes.join(' ')).toMatch(/nothing came back on a job board/i);
+    expect(report.notes.join(' ')).toMatch(/no matching openings were returned by the 1 companies/i);
+  });
+
+  it('reports source limits and every filtering stage without losing surviving jobs', async () => {
+    const base = (await acmeBoard())[0]!;
+    const report = await findJobs(profileId, {
+      country: 'IN', deepScoreTop: 0,
+      deps: { plan, companies: acmeOnly, fetchCompany: async (_company, hints) => {
+        hints.onWarning?.('Only the first page could be read.');
+        return [
+          { ...base, location: 'Bengaluru, India', title: 'SDE II', descriptionText: 'Build backend services in Go.' },
+          { ...base, url: `${base.url}1`, title: 'Frontend Engineer', location: 'Bengaluru, India' },
+          { ...base, url: `${base.url}2`, title: 'Staff Backend Engineer', location: 'Bengaluru, India' },
+          { ...base, url: `${base.url}3`, postedAt: new Date('2000-01-01') },
+          { ...base, url: `${base.url}4`, location: 'San Francisco, CA' },
+        ];
+      } },
+    });
+    expect(report).toMatchObject({ jobsFetched: 5, jobsSeen: 1, newLeads: 1,
+      skippedOffPlan: 1, skippedTooSenior: 1, skippedTooOld: 1, skippedOtherCountry: 1 });
+    expect(report.boards[0]?.warnings).toContain('Only the first page could be read.');
+    expect(report.queries[0]?.hits).toBe(1);
+    expect(report.droppedExamples.offPlan).toEqual(['Frontend Engineer']);
+    expect(report.droppedExamples.tooSenior).toEqual(['Staff Backend Engineer']);
+  });
+
+  it('reads nothing on a dry run, and lists the companies it would read', async () => {
+    let calls = 0;
+    const report = await findJobs(profileId, {
+      dryRun: true,
+      deps: { plan, companies: acmeOnly, fetchCompany: async () => (calls++, []) },
+    });
+    expect(calls).toBe(0);
+    expect(report.boards.map((b) => b.company)).toEqual(['Acme Corp']);
+    expect(report.notes.join(' ')).toMatch(/^Dry run:/m);
   });
 });
 

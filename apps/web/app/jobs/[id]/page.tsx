@@ -5,8 +5,8 @@ import { useParams } from 'next/navigation';
 import { api } from '../../../lib/api';
 import Header from '../components/Header';
 import { Loading } from '../../../components/Loading';
-import { RejectDialog } from '../../../components/RejectDialog';
 import type { Detail } from '../components/types';
+import { useApplyPrefs } from '../../discover/components/ApplyPreferences';
 
 /**
  * One job, everything about it.
@@ -26,23 +26,13 @@ export default function JobPage() {
   const [rescoreBusy, setRescoreBusy] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
+  const [prefs] = useApplyPrefs();
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
-    try {
-      setD(await api<Detail>(`/api/jobs/${params.id}`));
-    } catch (e) {
-      const errorMessage = (e as Error).message;
-      // If the lead was deleted (e.g., rejected), redirect to discover
-      if (errorMessage.includes('No job, lead or application with that id')) {
-        setError('This lead was removed. Redirecting to discover...');
-        setTimeout(() => {
-          window.location.href = '/discover';
-        }, 1500);
-      } else {
-        setError(errorMessage);
-      }
-    }
+    setD(await api<Detail>(`/api/jobs/${params.id}`));
   }, [params.id]);
 
   const handleRescore = useCallback(async () => {
@@ -60,19 +50,39 @@ export default function JobPage() {
 
   const handleReject = useCallback(async (category?: string, reason?: string) => {
     try {
-      const rRaw = await api(`/api/leads/${params.id}/reject`, {
+      await api(`/api/leads/${params.id}/reject`, {
         method: 'POST',
         body: JSON.stringify({ category, reason }),
       });
-      const r = rRaw as { message: string };
       await load();
       setRejecting(false);
-      return r.message;
     } catch (e) {
       setError((e as Error).message);
-      throw e;
     }
   }, [params.id, load]);
+
+  // Start a run, the same way Find work and Runs do. A job reached from the
+  // queue goes through its lead so the queue learns from the decision.
+  const handleApply = useCallback(async () => {
+    if (!d) return;
+    setApplyError(null);
+    setApplying(true);
+    try {
+      const r = d.lead
+        ? await api<{ applicationId: string }>(`/api/leads/${d.lead.id}/apply`, {
+            method: 'POST',
+            body: JSON.stringify({ writeCoverLetter: prefs.writeCoverLetter, autoTailorResume: prefs.tailorResume }),
+          })
+        : await api<{ applicationId: string }>('/api/applications', {
+            method: 'POST',
+            body: JSON.stringify({ url: d.job.url, autoStart: true, writeCoverLetter: prefs.writeCoverLetter }),
+          });
+      window.location.href = `/applications/${r.applicationId}`;
+    } catch (e) {
+      setApplyError((e as Error).message);
+      setApplying(false);
+    }
+  }, [d, prefs]);
 
   useEffect(() => {
     load().catch((e) => setError((e as Error).message));
@@ -96,25 +106,82 @@ export default function JobPage() {
 
   return (
     <>
-      <Header d={d} onReject={() => setRejecting(true)} onApply={load} />
+      <Header
+        d={d}
+        onReject={() => setRejecting(true)}
+        onApply={handleApply}
+        applying={applying}
+        applyError={applyError}
+      />
       <MatchPanel d={d} busy={rescoreBusy} onRescore={handleRescore} rescoreError={rescoreError} />
       <ApplicationPanel d={d} />
       <InterviewPanel d={d} />
       <OutcomePanel d={d} />
       {rejecting && d.lead && (
         <RejectDialog
-          lead={{ id: d.lead.id, title: d.job.title, companyName: d.job.company }}
+          title={d.job.title}
+          companyName={d.job.company}
           categories={categories}
           onClose={() => setRejecting(false)}
-          onDone={async (msg) => {
-            // The dialog handles the API call internally and returns a message
-            // We just need to reload after it's done
-            await load();
-            setRejecting(false);
-          }}
+          onDone={handleReject}
         />
       )}
     </>
+  );
+}
+
+function RejectDialog({
+  title,
+  companyName,
+  categories,
+  onClose,
+  onDone,
+}: {
+  title: string;
+  companyName: string;
+  categories: string[];
+  onClose: () => void;
+  onDone: (category?: string, reason?: string) => Promise<void>;
+}) {
+  const [category, setCategory] = useState<string | undefined>();
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    setBusy(true);
+    try {
+      await onDone(category, reason.trim() || undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <h2 style={{ margin: '0 0 .2rem' }}>Not for you</h2>
+        <p className="sub">{title} at {companyName}. A reason is optional and helps improve future ranking.</p>
+        <div className="row" style={{ marginBottom: '.8rem' }}>
+          {categories.map((value) => (
+            <button
+              key={value}
+              onClick={() => setCategory(category === value ? undefined : value)}
+              style={category === value ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-border)', color: 'var(--accent)' } : undefined}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+        <label className="field">
+          <span>Anything else? (optional)</span>
+          <textarea value={reason} onChange={(event) => setReason(event.target.value)} />
+        </label>
+        <div className="row">
+          <button className="primary" disabled={busy} onClick={submit}>{busy ? 'Saving…' : 'Reject'}</button>
+          <button onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -253,7 +320,7 @@ function ApplicationPanel({ d }: { d: Detail }) {
           Not started.{' '}
           {d.lead?.status === 'REJECTED'
             ? `You turned this one down${d.lead.rejectReason ? `: “${d.lead.rejectReason}”` : '.'}`
-            : 'Apply from the Find work queue and the filled form will show up here.'}
+            : 'Press Apply above and the filled form will show up here.'}
         </p>
       </div>
     );

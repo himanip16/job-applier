@@ -48,6 +48,12 @@ export const EDITABLE_SETTINGS = {
     where: 'firecrawl.dev',
     secret: true,
   },
+  JOB_SITE_PASSWORD: {
+    label: 'Job site account password',
+    help: 'Used with your profile email to create or sign in to job site accounts (Workday and similar).',
+    where: '',
+    secret: true,
+  },
   LLM_PROVIDER: {
     label: 'Model provider',
     help: 'Leave blank to use whichever key is set. Gemini wins if both are.',

@@ -1,10 +1,9 @@
 import './globals.css';
 import type { ReactNode } from 'react';
-import { ErrorProvider } from '../contexts/ErrorContext';
+import type { Metadata } from 'next';
 import { LayoutContent } from './layout-content';
-import { ToastProvider } from '../components/Toast';
 
-export const metadata = {
+export const metadata: Metadata = {
   title: 'Job Applier',
   description: 'Find, apply, tailor, track, and do LinkedIn outreach — with an answer bank that learns.',
 };
@@ -12,12 +11,15 @@ export const metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body>
-        <ErrorProvider>
-          <ToastProvider>
-            <LayoutContent>{children}</LayoutContent>
-          </ToastProvider>
-        </ErrorProvider>
+      {/*
+        * Browser extensions stamp attributes on <body> - a theme switcher adds
+        * data-rm-theme - between the server HTML arriving and React hydrating,
+        * which React reports as a hydration mismatch the app cannot fix. This
+        * suppresses the warning for this element's own attributes only;
+        * mismatches in anything rendered inside still surface normally.
+        */}
+      <body suppressHydrationWarning>
+        <LayoutContent>{children}</LayoutContent>
       </body>
     </html>
   );

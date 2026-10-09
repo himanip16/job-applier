@@ -4,13 +4,6 @@ import { normalizeLabel, type FormField } from '@ja/shared';
 const FIELD_TIMEOUT_MS = 10_000;
 const OPTION_TIMEOUT_MS = 5_000;
 
-/**
- * Cache for resolved field options to avoid recomputation.
- * Key: JSON string of (options array + wanted value)
- * Value: The resolved option
- */
-const optionCache = new Map<string, { label: string; value: string }>();
-
 export class FillError extends Error {
   constructor(
     message: string,
@@ -20,260 +13,6 @@ export class FillError extends Error {
     super(message);
     this.name = 'FillError';
   }
-}
-
-/**
- * Control Driver interface for handling different widget types.
- *
- * This architecture makes it easy to add new widget types by implementing
- * this interface rather than adding special cases throughout the codebase.
- */
-export interface ControlDriver {
-  name: string;
-  canHandle(field: FormField): boolean;
-  fill(page: Page, field: FormField, value: string | string[]): Promise<void>;
-  read(page: Page, field: FormField): Promise<string[]>;
-  matches(actual: string[], expected: string | string[]): boolean;
-}
-
-/**
- * React-Select driver (Greenhouse, Ashby, many custom forms).
- */
-const reactSelectDriver: ControlDriver = {
-  name: 'react-select',
-  canHandle: (field) => field.widget === 'react-select',
-  fill: async (page, field, value) => {
-    const wants = Array.isArray(value) ? value : [value];
-    const input = page.locator(field.selector).first();
-    await input.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
-    await input.scrollIntoViewIfNeeded().catch(() => {});
-
-    for (const want of wants) {
-      await input.click({ timeout: FIELD_TIMEOUT_MS });
-      await input.fill('').catch(() => {});
-
-      // For location fields, search by city name (first part before comma)
-      const searchTerm = /location|city/i.test(field.label)
-        ? (want.split(',')[0]?.trim() ?? want)
-        : want.slice(0, 40);
-
-      await input.type(searchTerm, { delay: 15 });
-
-      let option = await waitForOption(page, field, want);
-      if (!option) {
-        // Fallback to first word prefix if full match fails
-        await input.fill('').catch(() => {});
-        await input.type(want.split(/[\s,(]/)[0] ?? want, { delay: 15 });
-        option = await waitForOption(page, field, want);
-      }
-
-      if (!option) {
-        throw new FillError(`Could not find option "${want}" for ${field.label}`, field);
-      }
-
-      await option.click();
-      await page.waitForTimeout(120);
-    }
-    await page.keyboard.press('Escape').catch(() => {});
-  },
-  read: async (page, field) => {
-    const shell = page
-      .locator(field.selector)
-      .first()
-      .locator('xpath=ancestor::*[@role="combobox" or contains(@class,"select")][1]');
-    const text = normalizeLabel(await shell.first().innerText().catch(() => ''));
-    return [text];
-  },
-  matches: (actual, expected) => {
-    const wants = (Array.isArray(expected) ? expected : [expected]).map(normalizeLabel);
-    return wants.every((w) => actual.some((a) => normalizeLabel(a).includes(w)));
-  },
-};
-
-/**
- * Radio group driver.
- */
-const radioDriver: ControlDriver = {
-  name: 'radio-group',
-  canHandle: (field) => field.widget === 'radio-group',
-  fill: async (page, field, value) => {
-    const target = normalizeLabel(asOne(value, field));
-    const scope = field.optionContainerSelector
-      ? page.locator(field.optionContainerSelector)
-      : page.locator(field.selector).locator('xpath=ancestor::fieldset[1] | xpath=ancestor::*[@role="group" or @role="radiogroup"][1] | xpath=parent::*');
-
-    const radios = scope.locator('input[type="radio"]');
-    const count = await radios.count();
-    for (let i = 0; i < count; i++) {
-      const radio = radios.nth(i);
-      if (normalizeLabel(await labelTextFor(page, radio)) === target) {
-        await radio.check({ force: true });
-        return;
-      }
-    }
-    throw new FillError(`No radio option "${asOne(value, field)}" under ${field.label}`, field);
-  },
-  read: async (page, field) => {
-    const scope = field.optionContainerSelector
-      ? page.locator(field.optionContainerSelector)
-      : page.locator(field.selector).locator('xpath=ancestor::fieldset[1] | xpath=ancestor::*[@role="group" or @role="radiogroup"][1] | xpath=parent::*');
-    const checked = scope.locator('input:checked');
-    const labels: string[] = [];
-    const count = await checked.count();
-    for (let i = 0; i < count; i++) {
-      labels.push(await labelTextFor(page, checked.nth(i)));
-    }
-    return labels;
-  },
-  matches: (actual, expected) => {
-    const wants = (Array.isArray(expected) ? expected : [expected]).map(normalizeLabel);
-    return wants.every((w) => actual.some((a) => normalizeLabel(a) === w));
-  },
-};
-
-/**
- * Checkbox group driver.
- */
-const checkboxDriver: ControlDriver = {
-  name: 'checkbox-group',
-  canHandle: (field) => field.widget === 'checkbox-group',
-  fill: async (page, field, value) => {
-    const wants = Array.isArray(value) ? value : [value];
-    const scope = field.optionContainerSelector
-      ? page.locator(field.optionContainerSelector)
-      : page.locator(field.selector).locator('xpath=ancestor::fieldset[1] | xpath=ancestor::*[@role="group"][1] | xpath=parent::*');
-
-    const boxes = scope.locator('input[type="checkbox"]');
-    const count = await boxes.count();
-    const targets = new Set(wants.map(normalizeLabel));
-    const foundLabels = new Set<string>();
-
-    for (let i = 0; i < count; i++) {
-      const box = boxes.nth(i);
-      const label = normalizeLabel(await labelTextFor(page, box));
-      if (targets.has(label)) {
-        await box.check({ force: true });
-        foundLabels.add(label);
-      } else {
-        await box.uncheck({ force: true }).catch(() => {});
-      }
-    }
-
-    if (foundLabels.size !== targets.size) {
-      const missing = Array.from(targets).filter((t) => !foundLabels.has(t));
-      throw new FillError(`Missing options for ${field.label}: ${missing.join(', ')}`, field);
-    }
-  },
-  read: async (page, field) => {
-    const scope = field.optionContainerSelector
-      ? page.locator(field.optionContainerSelector)
-      : page.locator(field.selector).locator('xpath=ancestor::fieldset[1] | xpath=ancestor::*[@role="group"][1] | xpath=parent::*');
-    const checked = scope.locator('input:checked');
-    const labels: string[] = [];
-    const count = await checked.count();
-    for (let i = 0; i < count; i++) {
-      labels.push(await labelTextFor(page, checked.nth(i)));
-    }
-    return labels;
-  },
-  matches: (actual, expected) => {
-    const wants = (Array.isArray(expected) ? expected : [expected]).map(normalizeLabel);
-    const actualNorm = actual.map(normalizeLabel);
-    return wants.every((w) => actualNorm.includes(w));
-  },
-};
-
-/**
- * Native HTML controls driver (input, select, textarea).
- */
-const nativeDriver: ControlDriver = {
-  name: 'native',
-  canHandle: (field) =>
-    !['react-select', 'radio-group', 'checkbox-group', 'file'].includes(field.widget),
-  fill: async (page, field, value) => {
-    const el = page.locator(field.selector).first();
-    await el.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
-
-    const wants = (Array.isArray(value) ? value : [value]).map(normalizeLabel).filter(Boolean);
-    if (wants.length) {
-      const current = normalizeLabel((await el.inputValue().catch(() => '')) ?? '');
-      if (current && wants.every((want) => current.includes(want))) return;
-    }
-
-    switch (field.kind) {
-      case 'SELECT': {
-        const want = asOne(value, field);
-        try {
-          await el.selectOption({ label: want }, { timeout: 3_000 });
-        } catch {
-          const option = bestOption(field.options, want);
-          if (!option) throw new FillError(`No option "${want}" on ${field.label}`, field);
-          await el.selectOption(option.value);
-        }
-        break;
-      }
-      case 'MULTISELECT': {
-        const wants = Array.isArray(value) ? value : [value];
-        const valuesToSelect: string[] = [];
-        for (const want of wants) {
-          const option = bestOption(field.options, want);
-          if (!option) throw new FillError(`No option "${want}" on ${field.label}`, field);
-          valuesToSelect.push(option.value);
-        }
-        await el.selectOption(valuesToSelect);
-        break;
-      }
-      case 'CHECKBOX': {
-        const on = /^(true|yes|1|on|checked)$/i.test(asOne(value, field));
-        await el.setChecked(on);
-        break;
-      }
-      default: {
-        const text = asOne(value, field);
-        await el.scrollIntoViewIfNeeded().catch(() => {});
-        await el.fill('');
-        await el.type(text, { delay: 12 });
-        await el.press('Tab').catch(() => {});
-      }
-    }
-  },
-  read: async (page, field) => {
-    const el = page.locator(field.selector).first();
-    if (field.kind === 'SELECT') {
-      const selectedText = normalizeLabel(
-        await el.locator('option:checked').innerText().catch(() => ''),
-      );
-      const actual = normalizeLabel((await el.inputValue().catch(() => '')) || '');
-      return [selectedText || actual];
-    }
-    const value = normalizeLabel((await el.inputValue().catch(() => '')) || '');
-    return [value];
-  },
-  matches: (actual, expected) => {
-    const wants = (Array.isArray(expected) ? expected : [expected]).map(normalizeLabel);
-    return wants.every((want) => actual.some((act) => alreadyHolds(act, want)));
-  },
-};
-
-/**
- * Registry of all control drivers.
- */
-const drivers: ControlDriver[] = [
-  reactSelectDriver,
-  radioDriver,
-  checkboxDriver,
-  nativeDriver,
-];
-
-/**
- * Find the appropriate driver for a field.
- */
-function findDriver(field: FormField): ControlDriver {
-  const driver = drivers.find((d) => d.canHandle(field));
-  if (!driver) {
-    throw new FillError(`No driver found for field "${field.label}" with widget "${field.widget}"`, field, false);
-  }
-  return driver;
 }
 
 /**
@@ -289,34 +28,51 @@ function findDriver(field: FormField): ControlDriver {
 export async function fillField(page: Page, field: FormField, value: string | string[]): Promise<void> {
   // Check field state before attempting to fill
   const state = await inspectControl(page, field);
-
+  
+  // If field is locked and already holds the right value, skip filling
+  if (state.locked && state.exists) {
+    const wanted = Array.isArray(value) ? value.join(', ') : value;
+    if (alreadyHolds(state.current, wanted)) {
+      return; // Field is already correctly filled and locked
+    }
+    // Field is locked but has wrong value - this will be caught by verification
+  }
+  
   // If field doesn't exist in DOM, we can't fill it
   if (!state.exists) {
     throw new FillError(`Field "${field.label}" not found in DOM`, field, true);
   }
 
-  // Handle locked fields explicitly - fail immediately if wrong value
-  if (state.locked) {
-    const wanted = Array.isArray(value) ? value.join(', ') : value;
-    if (alreadyHolds(state.current, wanted)) {
-      return; // Field is already correctly filled and locked
-    }
-    // Field is locked but has wrong value - fail immediately and deterministically
-    throw new FillError(
-      `Field "${field.label}" is locked with value "${state.current}", expected "${wanted}"`,
-      field,
-      false, // Not recoverable - a locked field with wrong value is a hard blocker
-    );
+  switch (field.widget) {
+    case 'react-select':
+      await fillReactSelect(page, field, value);
+      break;
+    case 'radio-group':
+      await fillRadioGroup(page, field, asOne(value, field));
+      break;
+    case 'checkbox-group':
+      await fillCheckboxGroup(page, field, Array.isArray(value) ? value : [value]);
+      break;
+    case 'button-group':
+      await fillButtonGroup(page, field, asOne(value, field));
+      break;
+    case 'workday-prompt':
+      await fillWorkdayPrompt(page, field, asOne(value, field));
+      break;
+    case 'workday-dropdown':
+      await fillWorkdayDropdown(page, field, asOne(value, field));
+      break;
+    case 'combobox-intl-tel':
+      await fillNative(page, field, asOne(value, field));
+      break;
+    case 'select2':
+      await fillSelect2(page, field, asOne(value, field));
+      break;
+    case 'file':
+      throw new FillError('File fields must be filled with attachFile()', field, false);
+    default:
+      await fillNative(page, field, value);
   }
-
-  // Handle file fields separately
-  if (field.widget === 'file') {
-    throw new FillError('File fields must be filled with attachFile()', field, false);
-  }
-
-  // Find the appropriate driver and fill the field
-  const driver = findDriver(field);
-  await driver.fill(page, field, value);
 }
 
 /**
@@ -343,7 +99,7 @@ export interface ControlState {
 export async function inspectControl(page: Page, field: FormField): Promise<ControlState> {
   try {
     const el = page.locator(field.selector).first();
-    await el.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
+    await el.waitFor({ state: 'attached', timeout: 2_000 });
     return await el.evaluate((node) => {
       const input = node as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
       const readOnly = 'readOnly' in input ? Boolean(input.readOnly) : false;
@@ -384,37 +140,118 @@ export function alreadyHolds(current: string, wanted: string | string[]): boolea
   return false;
 }
 
+async function fillNative(page: Page, field: FormField, value: string | string[]): Promise<void> {
+  const el = page.locator(field.selector).first();
+  await el.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
+
+  const disabled = await el.isDisabled().catch(() => false);
+  if (disabled) return;
+
+  const wants = (Array.isArray(value) ? value : [value]).map(normalizeLabel).filter(Boolean);
+  if (wants.length) {
+    const current = normalizeLabel((await el.inputValue().catch(() => '')) ?? '');
+    if (current && wants.every((want) => current.includes(want))) return;
+  }
+
+  switch (field.kind) {
+    case 'SELECT': {
+      const want = asOne(value, field);
+      // Try by visible label, then by the best option we can find; both are
+      // common, and an exact label match is rarer than it looks.
+      //
+      // Short timeout on the speculative attempt. It is expected to miss - the
+      // fallback below is the one that handles "India" against "India +91" -
+      // and letting it wait out the default put 30 seconds on the clock for
+      // every such field.
+      try {
+        await el.selectOption({ label: want }, { timeout: 3_000 });
+      } catch {
+        const option = bestOption(field.options, want);
+        if (!option) throw new FillError(`No option "${want}" on ${field.label}`, field);
+        await el.selectOption(option.value);
+      }
+      break;
+    }
+    case 'MULTISELECT': {
+      const wants = Array.isArray(value) ? value : [value];
+      const valuesToSelect: string[] = [];
+      for (const want of wants) {
+        const option = bestOption(field.options, want);
+        if (!option) throw new FillError(`No option "${want}" on ${field.label}`, field);
+        valuesToSelect.push(option.value);
+      }
+      await el.selectOption(valuesToSelect);
+      break;
+    }
+    case 'CHECKBOX': {
+      const on = /^(true|yes|1|on|checked)$/i.test(asOne(value, field));
+      await el.setChecked(on);
+      break;
+    }
+    default: {
+      const text = asOne(value, field);
+      await el.scrollIntoViewIfNeeded().catch(() => {});
+      await el.fill('');
+      // type() rather than fill() so React's onChange fires per keystroke;
+      // some forms only validate on keyup and stay in an error state otherwise.
+      await el.type(text, { delay: 12 });
+      // Press Tab to trigger proper blur behavior instead of synthetic events
+      await el.press('Tab').catch(() => {});
+    }
+  }
+}
+
 /**
- * The option a human would have picked, scored by match quality.
+ * react-select (Greenhouse's board, Ashby, many custom forms).
+ * The visible control is a text input with role="combobox"; options render
+ * into a menu that may be portalled to document.body, so they are located
+ * globally by role rather than inside the field's container.
+ */
+/**
+ * Did the control end up on the option we asked for, even though it does not
+ * say so in those words?
+ *
+ * Greenhouse's phone country field is the case that forced this: ask for
+ * "India", and the control afterwards reads `+91`. That is a correct fill
+ * reported as a failure, which then routes a perfectly good application to a
+ * human for no reason.
+ *
+ * So: find the option we meant, and accept any read-back that is recognisably
+ * part of it - its value, or a fragment of its label such as the dial code.
+ */
+function showsChosenOption(field: FormField, want: string, shown: string): boolean {
+  if (!shown) return false;
+  const chosen = bestOption(field.options, want);
+  if (!chosen) return false;
+
+  const label = normalizeLabel(chosen.label);
+  const value = normalizeLabel(chosen.value);
+  if (shown === label || shown === value) return true;
+  if (label.includes(shown) && shown.length >= 2) return true;
+
+  // The decoration on its own: "+91" out of "India +91".
+  const dial = label.match(/\+\d{1,4}/)?.[0];
+  return Boolean(dial && normalizeLabel(dial) === shown);
+}
+
+/**
+ * The option a human would have picked.
  *
  * An exact label match is the exception, not the rule. Greenhouse's phone
  * country field lists `India +91`, not `India`, so resolving the profile's
  * country to "India" and asking for that label finds nothing and the fill
  * fails on a required field — which was enough to end a whole run.
  *
- * Scoring makes the behavior deterministic based on semantics rather than
- * DOM ordering, so "United States" is chosen over "United States Minor Outlying Islands"
- * when the user wants "United States".
+ * Tiers, most specific first, so "India" can never be satisfied by
+ * "British Indian Ocean Territory" while an exact option exists.
  */
-interface ScoredOption {
-  option: { label: string; value: string };
-  score: number;
-}
-
 export function bestOption(
   options: { label: string; value?: string }[] | undefined,
   want: string,
-  bypassCache = false,
 ): { label: string; value: string } | null {
   if (!options?.length) return null;
   const target = normalizeLabel(want);
   if (!target) return null;
-
-  // Check cache first (unless bypassing)
-  const cacheKey = JSON.stringify({ options: options.map(o => ({ label: o.label, value: o.value ?? o.label })), want: target });
-  if (!bypassCache && optionCache.has(cacheKey)) {
-    return optionCache.get(cacheKey)!;
-  }
 
   // An option with no explicit value submits its label, which is what the
   // browser does for `<option>Text</option>`.
@@ -424,46 +261,24 @@ export function bestOption(
     value: normalizeLabel(o.value ?? o.label),
   }));
 
-  // Score all candidates
-  const scored: ScoredOption[] = [];
+  const exact = norm.find((c) => c.label === target || c.value === target);
+  if (exact) return exact.o;
 
-  for (const c of norm) {
-    let score = 0;
+  // "India" against "India +91": the option starts with what we asked for and
+  // the rest is a dial code or similar decoration.
+  const prefixed = norm.find((c) => c.label.startsWith(`${target} `) || c.label.startsWith(`${target}(`));
+  if (prefixed) return prefixed.o;
 
-    // Exact label match: highest priority
-    if (c.label === target || c.value === target) {
-      score = Math.max(score, c.label === target ? 100 : 95);
-    }
+  // "India +91" against an option labelled "India" - the same case, reversed,
+  // which happens when a remembered answer carries the decoration.
+  const reverse = norm.find((c) => target.startsWith(`${c.label} `));
+  if (reverse) return reverse.o;
 
-    // "India" against "India +91": prefix decoration
-    if (c.label.startsWith(`${target} `) || c.label.startsWith(`${target}(`)) {
-      score = Math.max(score, 80);
-    }
-
-    // "India +91" against "India": reverse prefix (remembered answer with decoration)
-    if (target.startsWith(`${c.label} `)) {
-      score = Math.max(score, 70);
-    }
-
-    // Word-boundary containment: strict matching to avoid "us" matching "Belarus"
-    const boundary = new RegExp(`(^|[^a-z0-9])${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`);
-    if (boundary.test(c.label)) {
-      score = Math.max(score, 60);
-    }
-
-    if (score > 0) {
-      scored.push({ option: c.o, score });
-    }
-  }
-
-  // Return the highest-scoring option
-  if (scored.length > 0) {
-    scored.sort((a, b) => b.score - a.score);
-    const result = scored[0]!.option;
-    // Store in cache
-    optionCache.set(cacheKey, result);
-    return result;
-  }
+  // Word-boundary containment. Deliberately last and deliberately strict about
+  // boundaries, so "us" does not select "Belarus".
+  const boundary = new RegExp(`(^|[^a-z0-9])${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`);
+  const contained = norm.find((c) => boundary.test(c.label));
+  if (contained) return contained.o;
 
   /**
    * Hierarchical values, narrowed one level at a time.
@@ -477,45 +292,354 @@ export function bestOption(
   const parts = want.split(',').map((p) => p.trim()).filter(Boolean);
   for (let keep = parts.length - 1; keep >= 1; keep--) {
     const shorter = parts.slice(0, keep).join(', ');
-    const hit = bestOption(options, shorter, bypassCache);
-    if (hit) {
-      // Cache the hierarchical match as well
-      optionCache.set(cacheKey, hit);
-      return hit;
-    }
+    const hit = bestOption(options, shorter);
+    if (hit) return hit;
   }
-
   return null;
 }
 
 /**
- * Helper function used by react-select driver to wait for and find options.
+ * select2 (Amazon's applicant forms): a hidden <select> with a drawn box
+ * beside it and a results list appended to <body> when it opens.
+ *
+ * Picked through the drawn box, as a person would. Setting the hidden
+ * <select> directly changes its value but not the page's own state - Amazon
+ * listens for select2's events and kept saying "This field is required".
+ * The jQuery route is only the fallback for a list that would not open.
  */
+async function fillSelect2(page: Page, field: FormField, want: string): Promise<void> {
+  const option = bestOption(field.options, want);
+  if (!option) throw new FillError(`No option "${want}" on ${field.label}`, field);
+
+  const select = page.locator(field.selector).first();
+  await select.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
+  if ((await select.inputValue().catch(() => '')) === option.value) return;
+
+  const box = select.locator(
+    'xpath=following-sibling::span[contains(concat(" ", @class, " "), " select2 ")][1]//*[@role="combobox"]',
+  );
+  await box.scrollIntoViewIfNeeded().catch(() => {});
+  await box.click({ timeout: FIELD_TIMEOUT_MS }).catch(() => {});
+
+  const exact = new RegExp(`^\\s*${option.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i');
+  const choice = page.locator('.select2-container--open .select2-results__option').filter({ hasText: exact }).first();
+  const opened = await choice
+    .waitFor({ state: 'visible', timeout: OPTION_TIMEOUT_MS })
+    .then(() => true)
+    .catch(() => false);
+  if (opened) {
+    await choice.click({ timeout: OPTION_TIMEOUT_MS });
+  } else {
+    await page.keyboard.press('Escape').catch(() => {});
+    await select.evaluate((el, value) => {
+      const $ = (window as unknown as { jQuery?: (e: Element) => { val(v: string): { trigger(e: string): void } } }).jQuery;
+      if ($) $(el).val(value).trigger('change');
+      else {
+        (el as HTMLSelectElement).value = value;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }, option.value);
+  }
+  await page.waitForTimeout(150);
+  if ((await select.inputValue().catch(() => '')) !== option.value) {
+    throw new FillError(`Picked "${option.label}" on ${field.label}, but the dropdown did not take it`, field);
+  }
+}
+
+async function fillReactSelect(page: Page, field: FormField, value: string | string[]): Promise<void> {
+  const wants = Array.isArray(value) ? value : [value];
+  const input = page.locator(field.selector).first();
+  await input.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
+  // Already showing the answer - a rerun of a page you or an earlier attempt
+  // filled. Re-typing it gains nothing, and on Microsoft's dropdowns clearing
+  // and retyping "Yes" found no option and failed a correctly answered field.
+  if ((await verifyFilled(page, field, value)).ok) return;
+  await input.scrollIntoViewIfNeeded().catch(() => {});
+
+  // Rippling's EEO dropdowns are a <div role="combobox">: nothing to type
+  // into, and a space in "Choose not to disclose" would toggle the menu.
+  const typeable = await input
+    .evaluate((e) => e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement)
+    .catch(() => true);
+
+  for (const want of wants) {
+    await input.click({ timeout: FIELD_TIMEOUT_MS });
+    if (!typeable) {
+      if ((await input.getAttribute('aria-expanded')) !== 'true') await input.press('ArrowDown');
+      const option = await waitForOption(page, field, want);
+      if (!option) throw new FillError(`Could not find option "${want}" for ${field.label}`, field);
+      await option.click();
+      await page.waitForTimeout(120);
+      continue;
+    }
+    // Typing narrows a long list (country pickers run to 240 entries) and also
+    // opens the menu when a bare click did not.
+    await input.fill('').catch(() => {});
+    // Location pickers search on the city: "Bengaluru, Karnataka, India"
+    // typed whole often filters to nothing.
+    const searchTerm = /location|city/i.test(field.label) ? (want.split(',')[0]?.trim() || want) : want.slice(0, 40);
+    await input.type(searchTerm, { delay: 15 });
+
+    const option = await waitForOption(page, field, want);
+    if (!option) {
+      // Some react-selects filter to nothing on a long string; retry on a
+      // shorter prefix before giving up.
+      await input.fill('').catch(() => {});
+      await input.type(want.split(/[\s,(]/)[0] ?? want, { delay: 15 });
+      const retry = await waitForOption(page, field, want);
+      if (!retry) throw new FillError(`Could not find option "${want}" for ${field.label}`, field);
+      await retry.click();
+    } else {
+      await option.click();
+    }
+    await page.waitForTimeout(120);
+  }
+  // Close the menu so it cannot swallow the next click.
+  await page.keyboard.press('Escape').catch(() => {});
+}
+
+/**
+ * An option's words. SmartRecruiters' `spl-*` dropdown items are a
+ * role="option" div inside a shadow root whose text arrives through a
+ * <slot>, so their innerText is empty and the words are the slot's.
+ */
+async function optionText(opt: Locator): Promise<string> {
+  return opt
+    .evaluate((el) => {
+      const own = (el as HTMLElement).innerText?.trim();
+      if (own) return own;
+      return Array.from(el.querySelectorAll('slot'))
+        .flatMap((s) => s.assignedNodes({ flatten: true }))
+        .map((n) => (n as HTMLElement).innerText ?? n.textContent ?? '')
+        .join(' ')
+        .trim();
+    })
+    .catch(() => '');
+}
+
 async function waitForOption(page: Page, field: FormField, want: string): Promise<Locator | null> {
+  // This dropdown's own menu, and only what is visible in it. Greenhouse keeps
+  // the phone field's 240-country list in the DOM, hidden, at all times; a
+  // page-wide lookup found that first, waited for it to show, and reported
+  // every dropdown on the form as "could not find option".
+  const controls = field.optionContainerSelector
+    ? null
+    : await page.locator(field.selector).first().getAttribute('aria-controls').catch(() => null);
   const container = field.optionContainerSelector
     ? page.locator(field.optionContainerSelector)
-    : page;
-  const options = container.locator('[role="option"], .select__option');
+    : controls
+      ? page.locator(`[id="${controls}"]`)
+      : page;
+  const options = container.locator('[role="option"]:visible, .select__option:visible');
   try {
     await options.first().waitFor({ state: 'visible', timeout: OPTION_TIMEOUT_MS });
   } catch {
     return null;
   }
 
-  // BATCH READ: Fetch all inner texts in a single IPC call instead of iterating nth(i)
-  const texts = await options.allInnerTexts().catch(() => []);
-  const optionData = texts
-    .map((t, i) => ({ label: normalizeLabel(t), locator: options.nth(i) }))
-    .filter((o) => o.label);
+  const count = await options.count();
+  const optionData: { label: string; locator: Locator }[] = [];
+  
+  for (let i = 0; i < count; i++) {
+    const opt = options.nth(i);
+    const text = normalizeLabel((await optionText(opt)) ?? '');
+    if (text) {
+      optionData.push({ label: text, locator: opt });
+    }
+  }
 
-  const matched = bestOption(optionData.map((o) => ({ label: o.label })), want);
+  // Use the same sophisticated matching logic as bestOption()
+  const matched = bestOption(optionData.map(o => ({ label: o.label })), want);
   if (!matched) return null;
 
-  const matchedLocator = optionData.find(
-    (o) => normalizeLabel(o.label) === normalizeLabel(matched.label)
+  // Find the locator corresponding to the matched option
+  const matchedLocator = optionData.find(o => 
+    normalizeLabel(o.label) === normalizeLabel(matched.label)
   )?.locator;
-
+  
   return matchedLocator || null;
+}
+
+/**
+ * Workday's search-and-pick box (`data-uxi-widget-type="selectinput"`): type,
+ * press Enter, click the match.
+ *
+ * Search reaches into trees, so "LinkedIn" finds the leaf under "Social
+ * Media" without anyone opening the category. When a click opens a category
+ * instead of choosing, look for the answer one level down; past that it is a
+ * question for a person, not a guess.
+ */
+async function fillWorkdayPrompt(page: Page, field: FormField, want: string): Promise<void> {
+  const input = page.locator(field.selector).first();
+  await input.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
+  if (workdayShows(want, await workdaySelection(page, field))) return;
+  await input.scrollIntoViewIfNeeded().catch(() => {});
+
+  const searches = [want, want.split(/[\s,(]/)[0] ?? want].filter((s, i, all) => s && all.indexOf(s) === i);
+  let seen: string[] = [];
+  for (const search of searches) {
+    await input.click({ timeout: FIELD_TIMEOUT_MS });
+    await input.fill('');
+    await input.type(search.slice(0, 40), { delay: 15 });
+    await input.press('Enter');
+    await page.waitForTimeout(400);
+    // Some tenants pick a sole exact hit on Enter.
+    if (workdayShows(want, await workdaySelection(page, field))) {
+      await page.keyboard.press('Escape').catch(() => {});
+      return;
+    }
+    for (let depth = 0; depth < 2; depth++) {
+      // The click that opened the box drew the top-level list; the search
+      // results replace it a moment later. Wait for a match, not a list.
+      const found = await workdayMatch(page, want);
+      seen = found.seen;
+      if (!found.option) break;
+      await page.locator(`[data-ja-opt="${seen.indexOf(found.option)}"]`).click({ timeout: FIELD_TIMEOUT_MS });
+      await page.waitForTimeout(400);
+      const shown = await workdaySelection(page, field);
+      if (workdayShows(want, shown) || workdayShows(found.option, shown)) {
+        await page.keyboard.press('Escape').catch(() => {});
+        return;
+      }
+    }
+  }
+  await page.keyboard.press('Escape').catch(() => {});
+  throw new FillError(
+    `Could not find option "${want}" for ${field.label}${seen.length ? ` (saw: ${seen.slice(0, 8).join(', ')})` : ''}`,
+    field,
+  );
+}
+
+/** Workday's button dropdown: the button shows the choice; the list opens below. */
+async function fillWorkdayDropdown(page: Page, field: FormField, want: string): Promise<void> {
+  const button = page.locator(field.selector).first();
+  await button.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
+  if (showsChosenOption(field, want, normalizeLabel(await button.innerText().catch(() => '')))) return;
+  await button.scrollIntoViewIfNeeded().catch(() => {});
+  await button.click({ timeout: FIELD_TIMEOUT_MS });
+  const option = await waitForOption(page, field, want);
+  if (!option) {
+    await page.keyboard.press('Escape').catch(() => {});
+    throw new FillError(`Could not find option "${want}" for ${field.label}`, field);
+  }
+  await option.click();
+  await page.waitForTimeout(200);
+}
+
+/** Poll the open list until it offers something matching `want`. */
+async function workdayMatch(page: Page, want: string): Promise<{ option: string | null; seen: string[] }> {
+  const deadline = Date.now() + OPTION_TIMEOUT_MS;
+  let seen: string[] = [];
+  do {
+    seen = await workdayOptions(page);
+    const option = bestOption(seen.map((label) => ({ label })), want);
+    if (option) return { option: option.label, seen };
+    await page.waitForTimeout(250);
+  } while (Date.now() < deadline);
+  return { option: null, seen };
+}
+
+/** The open list's options, stamped so the chosen one can be clicked. */
+async function workdayOptions(page: Page): Promise<string[]> {
+  const open = '[data-automation-id="promptOption"]:not([data-automation-id="selectedItemList"] *)';
+  return page
+    .evaluate((sel) => {
+      document.querySelectorAll('[data-ja-opt]').forEach((n) => n.removeAttribute('data-ja-opt'));
+      const labels: string[] = [];
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>(sel))) {
+        if (!el.checkVisibility()) continue;
+        el.setAttribute('data-ja-opt', String(labels.length));
+        labels.push((el.getAttribute('data-automation-label') ?? el.innerText).replace(/\s+/g, ' ').trim());
+      }
+      return labels;
+    }, open)
+    .catch(() => []);
+}
+
+/**
+ * What the box has chosen, as Workday tells screen readers: the status the
+ * input is described by ("0 items selected" / "1 item selected, LinkedIn"),
+ * plus any pills in the box around it.
+ */
+async function workdaySelection(page: Page, field: FormField): Promise<string> {
+  let input = page.locator(field.selector).first();
+  // Workday can redraw the input on selection, dropping our stamp; its id stays.
+  if (!(await input.count()) && field.name) input = page.locator(`[id="${cssEscape(field.name)}"]`).first();
+  const ids = ((await input.getAttribute('aria-describedby').catch(() => null)) ?? '').split(/\s+/).filter(Boolean);
+  const said: string[] = [];
+  for (const id of ids) said.push(...(await page.locator(`[id="${cssEscape(id)}"]`).allTextContents().catch(() => [])));
+  said.push(
+    ...(await input
+      .locator('xpath=ancestor::*[@data-automation-id="multiSelectContainer"][1]')
+      .locator('[data-automation-id="selectedItem"]')
+      .allTextContents()
+      .catch(() => [] as string[])),
+  );
+  return normalizeLabel(said.join(' '));
+}
+
+function workdayShows(want: string, shown: string): boolean {
+  const w = normalizeLabel(want);
+  if (!w || !shown || /^0 items? selected/.test(shown)) return false;
+  return shown.includes(w);
+}
+
+async function fillRadioGroup(page: Page, field: FormField, want: string): Promise<void> {
+  const target = normalizeLabel(want);
+  const scope = page.locator(field.optionContainerSelector ?? field.selector);
+  const radios = scope.locator('input[type="radio"]');
+  const count = await radios.count();
+  for (let i = 0; i < count; i++) {
+    const radio = radios.nth(i);
+    if (normalizeLabel(await labelTextFor(page, radio)) === target) {
+      await radio.check({ force: true });
+      return;
+    }
+  }
+  throw new FillError(`No radio option "${want}" under ${field.label}`, field);
+}
+
+/** Yes/no toggles: press the button whose text is the answer. */
+async function fillButtonGroup(page: Page, field: FormField, want: string): Promise<void> {
+  const target = normalizeLabel(want);
+  const buttons = page.locator(field.selector).first().locator(':scope > button[aria-pressed]');
+  const count = await buttons.count();
+  for (let i = 0; i < count; i++) {
+    const button = buttons.nth(i);
+    if (normalizeLabel(await button.innerText()) === target) {
+      if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click();
+      return;
+    }
+  }
+  throw new FillError(`No option "${want}" under ${field.label}`, field);
+}
+
+async function fillCheckboxGroup(page: Page, field: FormField, wants: string[]): Promise<void> {
+  const scope = page.locator(field.optionContainerSelector ?? field.selector);
+  const boxes = scope.locator('input[type="checkbox"]');
+  const count = await boxes.count();
+  const targets = new Set(wants.map(normalizeLabel));
+  const foundLabels = new Set<string>();
+  
+  for (let i = 0; i < count; i++) {
+    const box = boxes.nth(i);
+    const label = normalizeLabel(await labelTextFor(page, box));
+    if (targets.has(label)) {
+      await box.check({ force: true });
+      foundLabels.add(label);
+    } else {
+      // Uncheck boxes that aren't in the requested set to ensure exact state
+      await box.uncheck({ force: true }).catch(() => {});
+    }
+  }
+  
+  if (foundLabels.size !== targets.size) {
+    const missing = [...targets].filter(t => !foundLabels.has(t));
+    throw new FillError(
+      `Missing options for ${field.label}: ${missing.join(', ')}`,
+      field,
+    );
+  }
 }
 
 /** Resolve the human-visible text attached to an input. */
@@ -533,20 +657,6 @@ async function labelTextFor(page: Page, input: Locator): Promise<string> {
   const sibling = input.locator('xpath=following-sibling::*[1]');
   if (await sibling.count()) return (await sibling.first().innerText().catch(() => '')).trim();
   return (await input.getAttribute('value')) ?? '';
-}
-
-function asOne(value: string | string[], field: FormField): string {
-  if (Array.isArray(value)) {
-    if (value.length !== 1) {
-      throw new FillError(`${field.label} takes one value, got ${value.length}`, field);
-    }
-    return value[0]!;
-  }
-  return value;
-}
-
-function cssEscape(s: string): string {
-  return s.replace(/["\\]/g, '\\$&');
 }
 
 export async function attachFile(page: Page, selector: string, filePath: string): Promise<void> {
@@ -650,12 +760,170 @@ export async function verifyFilled(
   if (!wants.length) return { ok: true, actual: '' };
 
   try {
-    // Use the driver model for verification
-    const driver = findDriver(field);
-    const actual = await driver.read(page, field);
-    const ok = driver.matches(actual, expected);
-    return { ok, actual: actual.join(', ') };
+    if (field.widget === 'react-select') {
+      // The chosen value renders as text in the control, not as input.value.
+      const shell = page
+        .locator(field.selector)
+        .first()
+        .locator('xpath=ancestor::*[contains(@class,"select-shell") or contains(@class,"select__control")][1]');
+      // Counted first: reading a shell that is not there waits out the 20s default.
+      let text = (await shell.count())
+        ? normalizeLabel(await shell.first().innerText().catch(() => ''))
+        : '';
+      // Microsoft's (Eightfold) dropdowns have neither class: the shell was
+      // never found, every chosen value read as "", and correct answers were
+      // reported as not holding. Fall back to the nearest box around this one
+      // control that shows any text.
+      if (!text) text = normalizeLabel(await shownAroundControl(page, field));
+      // A phone country picker shows "+91" for "India +91" once chosen.
+      const ok = wants.every((w) => text.includes(w) || showsChosenOption(field, w, text));
+      return { ok, actual: text };
+    }
+    if (field.widget === 'workday-prompt') {
+      const shown = await workdaySelection(page, field);
+      return { ok: wants.every((w) => workdayShows(w, shown)), actual: shown };
+    }
+    if (field.widget === 'workday-dropdown') {
+      const shown = normalizeLabel(await page.locator(field.selector).first().innerText().catch(() => ''));
+      return { ok: wants.every((w) => shown === w || showsChosenOption(field, w, shown)), actual: shown };
+    }
+    if (field.widget === 'button-group') {
+      const pressed = page.locator(field.selector).first().locator(':scope > button[aria-pressed="true"]');
+      const labels: string[] = [];
+      for (let i = 0; i < (await pressed.count()); i++) labels.push(normalizeLabel(await pressed.nth(i).innerText()));
+      return { ok: wants.every((w) => labels.includes(w)), actual: labels.join(', ') };
+    }
+    if (field.widget === 'radio-group' || field.widget === 'checkbox-group') {
+      const scope = page.locator(field.optionContainerSelector ?? field.selector);
+      const checked = scope.locator('input:checked');
+      const n = await checked.count();
+      const labels: string[] = [];
+      for (let i = 0; i < n; i++) labels.push(normalizeLabel(await labelTextFor(page, checked.nth(i))));
+      return { ok: wants.every((w) => labels.includes(w)), actual: labels.join(', ') };
+    }
+    let el = page.locator(field.selector).first();
+    // Workday replaces a text input with a new node on blur, and our stamp
+    // leaves with the old one. The name attribute survives the swap.
+    if (!(await el.count()) && field.name) {
+      el = page.locator(`[name="${cssEscape(field.name)}"]`).first();
+    }
+    if (field.kind === 'CHECKBOX') {
+      // The input's value is whatever the site set ("1", "on"); what matters is the tick.
+      const want = /^(true|yes|1|on|checked)$/i.test(wants[0] ?? '');
+      const checked = await el.isChecked().catch(() => false);
+      return { ok: checked === want, actual: checked ? 'ticked' : 'not ticked' };
+    }
+    const actual = normalizeLabel((await el.inputValue({ timeout: 3_000 }).catch(() => '')) || '');
+    if (field.kind === 'PHONE' || wants.every((w) => /^[\d\s()+.-]{6,}$/.test(w))) {
+      // Sites reformat numbers as you type: "9902583674" becomes "99025 83674".
+      const digits = (v: string) => v.replace(/\D/g, '');
+      return { ok: wants.every((w) => digits(actual).endsWith(digits(w))), actual };
+    }
+    if (field.kind === 'SELECT') {
+      const selectedText = normalizeLabel(
+        await el.locator('option:checked').innerText().catch(() => ''),
+      );
+      const shown = selectedText || actual;
+      const ok =
+        wants.every((w) => selectedText.includes(w) || actual.includes(w)) ||
+        wants.every((w) => showsChosenOption(field, w, shown));
+      return { ok, actual: shown };
+    }
+    return { ok: wants.every((w) => actual.includes(w)), actual };
   } catch (err) {
     return { ok: false, actual: `verification failed: ${(err as Error).message}` };
   }
+}
+
+/**
+ * What a control shows right now, as a person would read it: not normalised,
+ * so a typed answer keeps its own capitals. Option controls report the
+ * matching option labels. [] when blank, null when the control is not on the
+ * page (moved on, re-rendered away) - which is not the same as cleared.
+ */
+export async function readShown(page: Page, field: FormField): Promise<string[] | null> {
+  const asOptions = (shown: string[]): string[] =>
+    shown
+      .map((s) => s.trim())
+      .filter((s) => s && !/^(select\b|0 items? selected|choose\b|--)/i.test(s))
+      .map((s) => field.options?.find((o) => normalizeLabel(o.label) === normalizeLabel(s))?.label ?? s);
+  const fromText = (text: string): string[] => {
+    const norm = normalizeLabel(text);
+    if (!norm) return [];
+    if (!field.options?.length) return asOptions([text]);
+    const exact = field.options.find((o) => normalizeLabel(o.label) === norm);
+    if (exact) return [exact.label];
+    // Several picks drawn side by side; anything unrecognised is not trusted.
+    const within = field.options.filter((o) => norm.includes(normalizeLabel(o.label)) && normalizeLabel(o.label));
+    return field.kind === 'MULTISELECT' || field.kind === 'CHECKBOX_GROUP' ? within.map((o) => o.label) : [];
+  };
+
+  try {
+    if (field.widget === 'radio-group' || field.widget === 'checkbox-group') {
+      const scope = page.locator(field.optionContainerSelector ?? field.selector);
+      if (!(await scope.count())) return null;
+      const checked = scope.locator('input:checked');
+      const labels: string[] = [];
+      for (let i = 0; i < (await checked.count()); i++) labels.push(await labelTextFor(page, checked.nth(i)));
+      return asOptions(labels);
+    }
+    let el = page.locator(field.selector).first();
+    if (!(await el.count()) && field.name) el = page.locator(`[name="${cssEscape(field.name)}"]`).first();
+    if (!(await el.count())) return null;
+    if (field.widget === 'button-group') {
+      const pressed = el.locator(':scope > button[aria-pressed="true"]');
+      const labels: string[] = [];
+      for (let i = 0; i < (await pressed.count()); i++) labels.push(await pressed.nth(i).innerText());
+      return asOptions(labels);
+    }
+    if (field.widget === 'react-select') {
+      const shell = el.locator('xpath=ancestor::*[contains(@class,"select-shell") or contains(@class,"select__control")][1]');
+      const text = (await shell.count()) ? await shell.first().innerText().catch(() => '') : '';
+      return fromText(text || (await shownAroundControl(page, field)));
+    }
+    if (field.widget === 'workday-prompt') return fromText(await workdaySelection(page, field));
+    if (field.widget === 'workday-dropdown') return fromText(await el.innerText().catch(() => ''));
+    if (field.kind === 'CHECKBOX') return (await el.isChecked().catch(() => false)) ? ['Yes'] : [];
+    if (field.kind === 'SELECT' && (await el.evaluate((n) => n.tagName === 'SELECT').catch(() => false))) {
+      if (!(await el.inputValue().catch(() => ''))) return [];
+      return asOptions([await el.locator('option:checked').innerText().catch(() => '')]);
+    }
+    const value = await el.inputValue({ timeout: 2_000 }).catch(() => '');
+    return field.options?.length ? fromText(value) : value.trim() ? [value] : [];
+  } catch {
+    return null;
+  }
+}
+
+/** The text shown in the smallest box around one control, without the next question's. */
+async function shownAroundControl(page: Page, field: FormField): Promise<string> {
+  return page
+    .locator(field.selector)
+    .first()
+    .evaluate((input) => {
+      const own = (input as HTMLInputElement).value?.trim();
+      let node = input.parentElement;
+      for (let depth = 0; node && depth < 5; depth++, node = node.parentElement) {
+        // Stop before the box grows to take in another question.
+        if (node.querySelectorAll('input:not([type="hidden"]), select, textarea').length > 1) break;
+        const text = (node as HTMLElement).innerText?.replace(/\s+/g, ' ').trim();
+        if (text) return text;
+      }
+      return own ?? '';
+    })
+    .catch(() => '');
+}
+
+function asOne(value: string | string[], field: FormField): string {
+  if (Array.isArray(value)) {
+    if (value.length !== 1) {
+      throw new FillError(`${field.label} takes one value, got ${value.length}`, field);
+    }
+    return value[0]!;
+  }
+  return value;
+}
+
+function cssEscape(s: string): string {
+  return s.replace(/["\\]/g, '\\$&');
 }

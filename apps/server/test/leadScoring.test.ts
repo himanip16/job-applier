@@ -154,6 +154,7 @@ describe('blending the cheap pass with a model read', () => {
     forIt: [],
     againstIt: [],
     seniorityFit: 'MATCH',
+    compensationFit: 'UNCLEAR',
     dealbreaker,
   });
 

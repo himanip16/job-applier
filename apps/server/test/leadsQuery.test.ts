@@ -19,9 +19,7 @@ const { requireTestDatabase } = await import('./testDb.js');
 requireTestDatabase();
 
 const { prisma } = await import('../src/lib/db.js');
-const { rescoreLexically } = await import('../src/discovery/rescoreLeads.js');
-const { scoreLexically, loadScoringContext } = await import('../src/discovery/scoring.js');
-const { registerDiscoveryRoutes, MAX_RESCORE_BATCH } = await import('../src/routes/discovery.js');
+const { registerLeadRoutes, MAX_RESCORE_BATCH } = await import('../src/routes/leads.js');
 const Fastify = (await import('fastify')).default;
 
 type App = ReturnType<typeof Fastify>;
@@ -81,7 +79,7 @@ beforeEach(async () => {
   }
 
   app = Fastify();
-  registerDiscoveryRoutes(app, async () => ({ id: profileId }));
+  registerLeadRoutes(app, async () => ({ id: profileId }));
   await app.ready();
 });
 
@@ -203,7 +201,12 @@ describe('rescoring only what was picked', () => {
 
   it('reads exactly the leads it was given, and leaves the rest alone', async () => {
     const all = await leads();
-    const [pickedA, pickedB] = [all.leads[7]!, all.leads[8]!];
+    // Deliberately two in-domain, non-remote leads. The hard rules block
+    // another profession's job outright and block a US posting that never
+    // mentions sponsorship, and the seed contains both - "Sales Engineer" and
+    // the "Remote - US" ones - so picking those would be testing the rules
+    // rather than the batching.
+    const [pickedA, pickedB] = [all.leads[3]!, all.leads[5]!];
     const untouched = all.leads[6]!;
 
     generateMock.mockResolvedValue(modelSays(88));
@@ -272,43 +275,6 @@ describe('rescoring only what was picked', () => {
     expect(generateMock).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps an already strong lead alive for later re-evaluation even when the lexical pass looks hopeless', async () => {
-    const strongLead = await prisma.jobLead.create({
-      data: {
-        profileId,
-        url: 'https://job-boards.greenhouse.io/acme/jobs/strong-lexical-drift',
-        ats: 'greenhouse',
-        title: 'Customer Support Specialist',
-        companyName: 'Acme',
-        location: 'Remote - US',
-        remote: false,
-        descriptionText: 'We support customers and answer inbound questions across chat and email.',
-        score: 85,
-        deepScored: false,
-        discoveredAt: new Date(),
-      },
-    });
-
-    const ctx = await loadScoringContext(profileId);
-    const lex = scoreLexically(
-      {
-        title: strongLead.title,
-        descriptionText: strongLead.descriptionText ?? '',
-        location: strongLead.location ?? undefined,
-      },
-      ctx,
-    );
-    expect(lex.score).toBeLessThan(15);
-
-    const updated = await rescoreLexically(profileId);
-    const after = await prisma.jobLead.findUnique({ where: { id: strongLead.id } });
-
-    expect(updated).toBeGreaterThan(0);
-    expect(after).not.toBeNull();
-    expect(after!.score).toBe(85);
-    expect(after!.deepScored).toBe(false);
-  });
-
   it('refuses a batch larger than one press should ever ask for', async () => {
     const ids = Array.from({ length: MAX_RESCORE_BATCH + 1 }, (_, i) => `id-${i}`);
     const res = await app.inject({ method: 'POST', url: '/api/leads/rescore', payload: { ids } });
@@ -319,7 +285,7 @@ describe('rescoring only what was picked', () => {
   it('still scores one lead through its own route', async () => {
     const all = await leads();
     generateMock.mockResolvedValue(modelSays(95));
-    const res = await app.inject({ method: 'POST', url: `/api/leads/${all.leads[8]!.id}/rescore` });
+    const res = await app.inject({ method: 'POST', url: `/api/leads/${all.leads[5]!.id}/rescore` });
     expect(res.statusCode).toBe(200);
     const { lead } = res.json() as { lead: { deepScored: boolean; score: number } };
     expect(lead.deepScored).toBe(true);

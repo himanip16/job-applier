@@ -1,0 +1,3256 @@
+[
+  {
+    "company": "IMC Trading",
+    "domain": "imc.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "imc",
+    "tier": "quant",
+    "sde2_ctc_lpa": "55-110",
+    "india_locations": "Mumbai"
+  },
+  {
+    "company": "Squarepoint Capital",
+    "domain": "squarepoint-capital.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "squarepointcapital",
+    "tier": "quant",
+    "sde2_ctc_lpa": "50-100",
+    "india_locations": "Mumbai, Bangalore"
+  },
+  {
+    "company": "Tower Research Capital",
+    "domain": "tower-research.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "towerresearchcapital",
+    "tier": "quant",
+    "sde2_ctc_lpa": "70-150",
+    "india_locations": "Gurgaon"
+  },
+  {
+    "company": "Graviton Research Capital",
+    "domain": "gravitontrading.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "gravitonresearchcapital",
+    "tier": "quant",
+    "sde2_ctc_lpa": "60-140",
+    "india_locations": "Gurgaon"
+  },
+  {
+    "company": "AlphaGrep Securities",
+    "domain": "alpha-grep.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "alphagrepsecurities",
+    "tier": "quant",
+    "sde2_ctc_lpa": "50-110",
+    "india_locations": "Bangalore, Mumbai, Gurgaon"
+  },
+  {
+    "company": "WorldQuant",
+    "domain": "worldquant.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "worldquant",
+    "tier": "quant",
+    "sde2_ctc_lpa": "40-85",
+    "india_locations": "Mumbai, Bangalore"
+  },
+  {
+    "company": "NK Securities Research",
+    "domain": "nksecurities.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "nksecuritiesresearch",
+    "tier": "quant",
+    "sde2_ctc_lpa": "50-100",
+    "india_locations": "Gurgaon"
+  },
+  {
+    "company": "Quadeye Securities",
+    "domain": "quadeye.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://www.quadeye.com/careers",
+    "tier": "quant",
+    "sde2_ctc_lpa": "55-120",
+    "india_locations": "Gurgaon"
+  },
+  {
+    "company": "D. E. Shaw India",
+    "domain": "deshawindia.com",
+    "job_links": [],
+    "source": "deshaw",
+    "handle": "www.deshawindia.com",
+    "tier": "quant",
+    "sde2_ctc_lpa": "45-90",
+    "india_locations": "Hyderabad, Gurgaon, Bangalore"
+  },
+  {
+    "company": "Millennium Management",
+    "domain": "mlp.com",
+    "job_links": [],
+    "source": "eightfold",
+    "handle": "mlp.eightfold.ai|mlp.com",
+    "tier": "quant",
+    "sde2_ctc_lpa": "50-95",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Jane Street",
+    "domain": "janestreet.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "janestreet",
+    "tier": "quant",
+    "sde2_ctc_lpa": "150+ (offshore)",
+    "india_locations": "No India office - hires into HK/London/NYC/Amsterdam"
+  },
+  {
+    "company": "Meta",
+    "domain": "meta.com",
+    "job_links": [],
+    "source": "meta",
+    "handle": "metacareers.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "80-130",
+    "india_locations": "Bangalore, Gurgaon"
+  },
+  {
+    "company": "Google",
+    "domain": "google.com",
+    "job_links": [],
+    "source": "google",
+    "handle": "google",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "65-95",
+    "india_locations": "Bangalore, Hyderabad, Gurgaon, Pune"
+  },
+  {
+    "company": "Mudraksh & McShaw",
+    "domain": "mudrakshmcshaw.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://www.mudrakshmcshaw.com/careers",
+    "tier": "quant",
+    "sde2_ctc_lpa": "40-80",
+    "india_locations": "Gurgaon, Jaipur"
+  },
+  {
+    "company": "Quantbox Research",
+    "domain": "quantboxresearch.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "quantboxresearchpte",
+    "tier": "quant",
+    "sde2_ctc_lpa": "45-90",
+    "india_locations": "Mumbai, Gurgaon"
+  },
+  {
+    "company": "XTX Markets",
+    "domain": "xtxmarkets.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "xtxmarketstechnologies",
+    "tier": "quant",
+    "sde2_ctc_lpa": "60-130",
+    "india_locations": "Mumbai/Bangalore - VERIFY India eng presence"
+  },
+  {
+    "company": "Amazon",
+    "domain": "amazon.com",
+    "job_links": [],
+    "source": "amazon",
+    "handle": "amazon",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "50-75",
+    "india_locations": "Bangalore, Hyderabad, Chennai, Delhi"
+  },
+  {
+    "company": "Microsoft",
+    "domain": "microsoft.com",
+    "job_links": [],
+    "source": "eightfold",
+    "handle": "apply.careers.microsoft.com|microsoft.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Hyderabad, Bangalore, Noida"
+  },
+  {
+    "company": "LinkedIn",
+    "domain": "linkedin.com",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "1337",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "65-95",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Uber",
+    "domain": "uber.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://www.uber.com/global/en/careers/list/",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "65-95",
+    "india_locations": "Bangalore, Hyderabad"
+  },
+  {
+    "company": "Apple",
+    "domain": "apple.com",
+    "job_links": [],
+    "source": "apple",
+    "handle": "apple",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "55-90",
+    "india_locations": "Hyderabad, Bangalore"
+  },
+  {
+    "company": "NVIDIA",
+    "domain": "nvidia.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "nvidia.wd5/NVIDIAExternalCareerSite",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "50-85",
+    "india_locations": "Bangalore, Pune, Hyderabad"
+  },
+  {
+    "company": "Salesforce",
+    "domain": "salesforce.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "salesforce.wd12/External_Career_Site",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "50-75",
+    "india_locations": "Hyderabad, Bangalore"
+  },
+  {
+    "company": "Stripe",
+    "domain": "stripe.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "stripe",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "70-110",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Adobe",
+    "domain": "adobe.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "adobe.wd5/external_experienced",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Noida, Bangalore"
+  },
+  {
+    "company": "Databricks",
+    "domain": "databricks.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "databricks",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "70-110",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Atlassian",
+    "domain": "atlassian.com",
+    "job_links": [],
+    "source": "atlassian",
+    "handle": "atlassian",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "60-95",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Netflix",
+    "domain": "netflix.com",
+    "job_links": [],
+    "source": "eightfold",
+    "handle": "explore.jobs.netflix.net|netflix.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "90-150",
+    "india_locations": "Mumbai - small eng footprint, VERIFY"
+  },
+  {
+    "company": "Oracle",
+    "domain": "oracle.com",
+    "job_links": [],
+    "source": "oracle-hcm",
+    "handle": "eeho.fa.us2.oraclecloud.com|CX_45001",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore, Hyderabad, Noida"
+  },
+  {
+    "company": "MongoDB",
+    "domain": "mongodb.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "mongodb",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "50-75",
+    "india_locations": "Gurgaon, Bangalore"
+  },
+  {
+    "company": "Coinbase",
+    "domain": "coinbase.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "coinbase",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "60-95",
+    "india_locations": "Hyderabad, Bangalore"
+  },
+  {
+    "company": "Dolat Capital",
+    "domain": "dolatcapital.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://www.dolatcapital.com/careers",
+    "tier": "quant",
+    "sde2_ctc_lpa": "40-80",
+    "india_locations": "Mumbai"
+  },
+  {
+    "company": "Airbnb",
+    "domain": "airbnb.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "airbnb",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "70-110",
+    "india_locations": "Bangalore - VERIFY current eng hiring"
+  },
+  {
+    "company": "Rippling",
+    "domain": "rippling.com",
+    "job_links": [],
+    "source": "rippling",
+    "handle": "rippling",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "60-95",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Intuit",
+    "domain": "intuit.com",
+    "job_links": [],
+    "source": "radancy",
+    "handle": "jobs.intuit.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "55-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Confluent",
+    "domain": "confluent.io",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "confluent",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "55-85",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Rubrik",
+    "domain": "rubrik.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "rubrik",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "55-85",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Anthropic",
+    "domain": "anthropic.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "anthropic",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "100+",
+    "india_locations": "Bangalore - VERIFY, early"
+  },
+  {
+    "company": "Snowflake",
+    "domain": "snowflake.com",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "snowflake",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "60-95",
+    "india_locations": "Pune, Bangalore"
+  },
+  {
+    "company": "Figma",
+    "domain": "figma.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "figma",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "70-110",
+    "india_locations": "Bangalore - VERIFY, new/small"
+  },
+  {
+    "company": "Netskope",
+    "domain": "netskope.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "netskope",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "ServiceNow",
+    "domain": "servicenow.com",
+    "job_links": [],
+    "source": "smartrecruiters",
+    "handle": "ServiceNow",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Hyderabad, Bangalore, Pune"
+  },
+  {
+    "company": "Cohesity",
+    "domain": "cohesity.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "cohesity.wd5/Cohesity_Careers",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore, Pune"
+  },
+  {
+    "company": "Nutanix",
+    "domain": "nutanix.com",
+    "job_links": [],
+    "source": "jobvite",
+    "handle": "nutanix",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore, Pune"
+  },
+  {
+    "company": "CrowdStrike",
+    "domain": "crowdstrike.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "crowdstrike.wd5/crowdstrikecareers",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Pune, Bangalore"
+  },
+  {
+    "company": "Okta",
+    "domain": "okta.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "okta",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Zscaler",
+    "domain": "zscaler.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "zscaler",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Mohali, Bangalore, Hyderabad"
+  },
+  {
+    "company": "SentinelOne",
+    "domain": "sentinelone.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "sentinellabs",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Cisco",
+    "domain": "cisco.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "cisco.wd5/Cisco_Careers",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore, Chennai"
+  },
+  {
+    "company": "Splunk",
+    "domain": "splunk.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://careers.cisco.com/global/en/splunk",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Hyderabad (now Cisco)"
+  },
+  {
+    "company": "Akamai",
+    "domain": "akamai.com",
+    "job_links": [],
+    "source": "oracle-hcm",
+    "handle": "fa-extu-saasfaprod1.fa.ocs.oraclecloud.com|CX_1",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore, Chennai"
+  },
+  {
+    "company": "Arista Networks",
+    "domain": "arista.com",
+    "job_links": [],
+    "source": "smartrecruiters",
+    "handle": "AristaNetworks",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "55-85",
+    "india_locations": "Bangalore, Pune"
+  },
+  {
+    "company": "Yugabyte",
+    "domain": "yugabyte.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "yugabyte",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "SingleStore",
+    "domain": "singlestore.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "singlestore",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Pune, Hyderabad"
+  },
+  {
+    "company": "Postman",
+    "domain": "postman.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "postman.wd108/careers",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore, Hyderabad"
+  },
+  {
+    "company": "F5",
+    "domain": "f5.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "ffive.wd5/f5jobs",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Hyderabad, Bangalore"
+  },
+  {
+    "company": "Couchbase",
+    "domain": "couchbase.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "couchbaseinc",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Harness",
+    "domain": "harness.io",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "harnessinc",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "PhonePe",
+    "domain": "phonepe.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://www.phonepe.com/careers/job-openings/",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-85",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Flipkart",
+    "domain": "flipkart.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://www.flipkartcareers.com/jobslist",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Meesho",
+    "domain": "meesho.com",
+    "job_links": [],
+    "source": "lever",
+    "handle": "meesho",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Swiggy",
+    "domain": "swiggy.com",
+    "job_links": [],
+    "source": "mynexthire",
+    "handle": "swiggy",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Eternal (Zomato/Blinkit)",
+    "domain": "eternal.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://www.eternal.com/careers/",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Gurgaon, Bangalore"
+  },
+  {
+    "company": "Dream11",
+    "domain": "dream11.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://www.dreamsports.group/careers",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-85",
+    "india_locations": "Mumbai"
+  },
+  {
+    "company": "CRED",
+    "domain": "cred.club",
+    "job_links": [],
+    "source": "lever",
+    "handle": "cred",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-85",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Zepto",
+    "domain": "zeptonow.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://zepto.darwinbox.in/ms/candidatev2/main/careers/allJobs",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore, Mumbai"
+  },
+  {
+    "company": "Groww",
+    "domain": "groww.in",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "groww",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Games24x7",
+    "domain": "games24x7.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "games24x7.com",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore, Mumbai"
+  },
+  {
+    "company": "Navi",
+    "domain": "navi.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://navi.com/careers",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-85",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Zerodha",
+    "domain": "zerodha.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://careers.zerodha.com/",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "40-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Razorpay",
+    "domain": "razorpay.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "razorpaysoftwareprivatelimited",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Juspay",
+    "domain": "juspay.in",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://juspay.io/careers",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "OpenAI",
+    "domain": "openai.com",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "openai",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "100+",
+    "india_locations": "New Delhi/Bangalore - VERIFY eng roles"
+  },
+  {
+    "company": "Fi Money",
+    "domain": "fi.money",
+    "job_links": [],
+    "source": "lever",
+    "handle": "epifi",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "slice",
+    "domain": "sliceit.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://slice.bank.in/careers",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "ShareChat",
+    "domain": "sharechat.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://sharechat.com/careers",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "BrowserStack",
+    "domain": "browserstack.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "browserstack.wd3/External",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Mumbai, Bangalore"
+  },
+  {
+    "company": "Zeta",
+    "domain": "zeta.tech",
+    "job_links": [],
+    "source": "lever",
+    "handle": "zeta",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore, Hyderabad"
+  },
+  {
+    "company": "Sprinklr",
+    "domain": "sprinklr.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "sprinklr.wd1/careers",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Gurgaon, Bangalore"
+  },
+  {
+    "company": "Media.net",
+    "domain": "media.net",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://careers.media.net/engineering/",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Mumbai, Bangalore"
+  },
+  {
+    "company": "InMobi / Glance",
+    "domain": "inmobi.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "inmobi",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Jupiter Money",
+    "domain": "jupiter.money",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://jupiter.money/careers/",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "ThoughtSpot",
+    "domain": "thoughtspot.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "thoughtspot.wd5/careers",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "50-75",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Palo Alto Networks",
+    "domain": "paloaltonetworks.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "paloaltonetworks.wd5/panwexternalcareers",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Mobile Premier League",
+    "domain": "mpl.live",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "mpl.live",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "45-75",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "BlackRock",
+    "domain": "blackrock.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "blackrock.wd1/BlackRock_Professional",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Gurgaon, Mumbai"
+  },
+  {
+    "company": "Nomura",
+    "domain": "nomura.com",
+    "job_links": [],
+    "source": "successfactors",
+    "handle": "careers.nomura.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Mumbai (Powai)"
+  },
+  {
+    "company": "Visa",
+    "domain": "visa.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "visa.wd5/Visa",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Goldman Sachs",
+    "domain": "goldmansachs.com",
+    "job_links": [],
+    "source": "goldman-sachs",
+    "handle": "higher.gs.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore, Hyderabad"
+  },
+  {
+    "company": "Morgan Stanley",
+    "domain": "morganstanley.com",
+    "job_links": [],
+    "source": "eightfold",
+    "handle": "morganstanley.eightfold.ai|morganstanley.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Mumbai, Bangalore"
+  },
+  {
+    "company": "Mastercard",
+    "domain": "mastercard.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "mastercard.wd1/CorporateCareers",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Pune, Gurgaon"
+  },
+  {
+    "company": "Agoda",
+    "domain": "agoda.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "agoda",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "50-85",
+    "india_locations": "Gurgaon (also relocates to Bangkok)"
+  },
+  {
+    "company": "Walmart Global Tech",
+    "domain": "walmart.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "walmart.wd504/WalmartExternal",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Bangalore, Chennai"
+  },
+  {
+    "company": "PayPal",
+    "domain": "paypal.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "paypal.wd1/jobs",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Chennai, Bangalore, Hyderabad"
+  },
+  {
+    "company": "Grab",
+    "domain": "grab.com",
+    "job_links": [],
+    "source": "smartrecruiters",
+    "handle": "Grab",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "50-80",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Target India",
+    "domain": "target.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "target.wd5/targetcareers",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "American Express",
+    "domain": "americanexpress.com",
+    "job_links": [],
+    "source": "oracle-hcm",
+    "handle": "egug.fa.us2.oraclecloud.com|CX_1",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-65",
+    "india_locations": "Gurgaon, Bangalore"
+  },
+  {
+    "company": "Booking.com",
+    "domain": "booking.com",
+    "job_links": [],
+    "source": "jibe",
+    "handle": "jobs.booking.com",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "55-85",
+    "india_locations": "Bangalore"
+  },
+  {
+    "company": "Deutsche Bank",
+    "domain": "db.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "db.wd3/DBWebsite",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "40-60",
+    "india_locations": "Pune, Bangalore, Mumbai"
+  },
+  {
+    "company": "Expedia Group",
+    "domain": "expediagroup.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "expedia.wd108/search",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "45-70",
+    "india_locations": "Gurgaon"
+  },
+  {
+    "company": "Qualcomm",
+    "domain": "qualcomm.com",
+    "job_links": [],
+    "source": "eightfold",
+    "handle": "qualcomm.eightfold.ai|qualcomm.com",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Intel",
+    "domain": "intel.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "intel.wd1/External",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Micron",
+    "domain": "micron.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "micron.wd1/External",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "HP",
+    "domain": "hp.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "hp.wd5/ExternalCareerSite",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Hewlett Packard Enterprise",
+    "domain": "hpe.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "hpe.wd5/ACJobSite",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Autodesk",
+    "domain": "autodesk.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "autodesk.wd1/Ext",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Cadence",
+    "domain": "cadence.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "cadence.wd1/External_Careers",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Workday",
+    "domain": "workday.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "workday.wd5/Workday",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "eBay",
+    "domain": "ebay.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "ebay.wd5/apply",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "KLA",
+    "domain": "kla.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "kla.wd1/Search",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Analog Devices",
+    "domain": "analog.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "analogdevices.wd1/External",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "NXP Semiconductors",
+    "domain": "nxp.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "nxp.wd3/careers",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Philips",
+    "domain": "philips.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "philips.wd3/jobs-and-careers",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Disney",
+    "domain": "disney.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "disney.wd5/disneycareer",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Warner Bros. Discovery",
+    "domain": "wbd.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "warnerbros.wd5/global",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Zendesk",
+    "domain": "zendesk.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "zendesk.wd1/zendesk",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Citi",
+    "domain": "citi.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "citi.wd5/2",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "LSEG",
+    "domain": "lseg.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "lseg.wd3/Careers",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "State Street",
+    "domain": "statestreet.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "statestreet.wd1/Global",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Fidelity Investments",
+    "domain": "fidelity.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "fmr.wd1/FidelityCareers",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Twilio",
+    "domain": "twilio.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "twilio",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Elastic",
+    "domain": "elastic.co",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "elastic",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "GitLab",
+    "domain": "gitlab.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "gitlab",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Datadog",
+    "domain": "datadoghq.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "datadog",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Pure Storage",
+    "domain": "purestorage.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "purestorage",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Druva",
+    "domain": "druva.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "druva",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "HighRadius",
+    "domain": "highradius.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "highradius",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Samsara",
+    "domain": "samsara.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "samsara",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Toast",
+    "domain": "toasttab.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "toast",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Roblox",
+    "domain": "roblox.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "roblox",
+    "tier": "bigtech",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Sigmoid",
+    "domain": "sigmoid.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "sigmoid",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Observe.AI",
+    "domain": "observe.ai",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "observeai",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Freshworks",
+    "domain": "freshworks.com",
+    "job_links": [],
+    "source": "smartrecruiters",
+    "handle": "Freshworks",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Tekion",
+    "domain": "tekion.com",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "tekion",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Sarvam AI",
+    "domain": "sarvam.ai",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "sarvam",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Paytm",
+    "domain": "paytm.com",
+    "job_links": [],
+    "source": "lever",
+    "handle": "paytm",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Hevo Data",
+    "domain": "hevodata.com",
+    "job_links": [],
+    "source": "lever",
+    "handle": "hevodata",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Mindtickle",
+    "domain": "mindtickle.com",
+    "job_links": [],
+    "source": "lever",
+    "handle": "mindtickle",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Nium",
+    "domain": "nium.com",
+    "job_links": [],
+    "source": "lever",
+    "handle": "nium",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Pocket FM",
+    "domain": "pocketfm.com",
+    "job_links": [],
+    "source": "lever",
+    "handle": "pocketfm",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Even",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "42759405",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Setu",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "14601155",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Alaan",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "93787057",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Proofpoint",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "11681",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "GoSats",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "67077254",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Astra Security",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "3584968",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Endor Labs",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "endorlabs",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Abnormal AI",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "abnormalsecurity",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "PayU",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2046824",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Eightfold AI",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "5015790",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "iTCart",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "74742649",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Testsigma",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13359845",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "7-Eleven Global Solution Center",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "103349190",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Zenskar",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "83495951",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "nference",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "6439479",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "hosted·ai",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "104354764",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Quest Global",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "222111",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Spectro Cloud",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "36114581",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Portcast",
+    "domain": "",
+    "job_links": [],
+    "source": "lever",
+    "handle": "portcast",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Nightfall AI",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "nightfall-ai",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "IDfy",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2496495",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Cargill",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2678",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Think41",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "102016426",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Zinier",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "9192100",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Pineswift Technologies",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "100519214",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Proximity Works",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "80998034",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Aarushi Infotech",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "33618856",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Verloop.io",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13283350",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Infinite Convergence Solutions",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2243321",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Kinexcs",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13470976",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "SolarWinds",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "solarwinds",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "NetSfere",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "3857529",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Commvault",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "commvault",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Armada",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "armada",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Explorex Technologies",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "26083614",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Altimate AI",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "altimate",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Arctic Wolf",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2760138",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Eloelo",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "28329842",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Livspace",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2963287",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Botsync",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13654503",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Osfin.ai",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "90411097",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Oolka",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "99358195",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Kaleidofin",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13370098",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "WeRize",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "14560906",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "WEX",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "11637",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Amagi",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "1125387",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Zoca",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "69353187",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Apollo.io",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "apolloio",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Glean",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "gleanwork",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Scalio",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2500569",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Skit.ai",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13258533",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Motorola Solutions",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "1771432",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "TELUS Digital",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "1258653",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Warner Music Group",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "4781",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Stronghold Investment Management",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "3203396",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Zamp",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "9936542",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Safe Security",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2233177",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Zeta Global",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "zetaglobal",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Ciroos",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "ciroos",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Aivar Innovations",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "105355882",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Uplabh",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13248266",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "SourceFuse",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "266841",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Impact Analytics",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "4867362",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Gateworth Group",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "135156227",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "talabat",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "3604171",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Scarlet",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "scarlet",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "1inch",
+    "domain": "",
+    "job_links": [],
+    "source": "lever",
+    "handle": "1inch",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Fuse Energy",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "52116631",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Edenred UAE",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "365357",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "DT One",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "52120755",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Murphy AI",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "105466491",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Infinite Computer Solutions",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "11115",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "DATAMAZE.AI",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "101064975",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Sokin",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "6868854",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "PCS Gulf",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "93315373",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "ByteDance",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "6575553",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "BBGC",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "85617195",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "D4 Insight",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13416992",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "PRYPCO",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "83937518",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "AlgoDriven",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13218845",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "BlackStone eIT",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "11203127",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "dubizzle",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13259507",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Marcura",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "203605",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Sharkhood Tech",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "111721973",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Chalhoub Group",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "950185",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Location Solutions",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2565888",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Raw Ventures",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "86302671",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "MyPT",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "80323044",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Devandgo",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "73003437",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Techwaresoft",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "101784931",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "HTC Global Services",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "201351",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Syscort Technologies",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13245166",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "LTC Group",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "3667843",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Wipro",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "1318",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Maaloomatiia Academy",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2724279",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "SEO Grid",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "107189444",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Emirates",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "5042",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Qube Research & Technologies",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "quberesearchandtechnologies",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "LYSoftwares",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "79967777",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "ValueLabs",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13489",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Dicetek",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "1649318",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "OWNRSCLB",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "105523413",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Al Marwan Group",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2568894",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Evollabs Tech",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "106102687",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Omnix International",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "39327",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Mediclinic Middle East",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "402694",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "spiderSilk",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "14579988",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Geotab",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "geotab",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Xapien",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "xapien",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Deliveroo",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "deliveroo",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Lloyds Banking Group",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "417361",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Just Eat Takeaway.com",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "103531",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Tripadvisor",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "tripadvisor",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "InfoSum",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "infosum",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Socure",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "socure",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Duffel",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "duffel",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "DoorDash",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "doordashusa",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Wolt",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "wolt",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "BLP",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "26561819",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Stream",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "5338728",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Talos",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "12596933",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Casa Pisano",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "96065934",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Runna",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "runna",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Hyperlayer",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "3880100",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Virgin Red",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "33458788",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Sony Music Entertainment",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "sonymusicentertainment",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "SoundCloud",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "200200",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "HIVED",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "hived",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Smarkets",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "smarkets",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Gravitee",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "64960162",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Investa",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "investa",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "nPlan",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "27106547",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Swap",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "swap",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Valarian",
+    "domain": "",
+    "job_links": [],
+    "source": "lever",
+    "handle": "valarian",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Conduct",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "conduct",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Medialake",
+    "domain": "",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "71131944",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Legora",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "legora",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "JPMorgan Chase",
+    "domain": "jpmorganchase.com",
+    "job_links": [],
+    "source": "oracle-hcm",
+    "handle": "jpmc.fa.oraclecloud.com|CX_1001",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Bank of America",
+    "domain": "bankofamerica.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "ghr.wd1/lateral-ba_continuum",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Wells Fargo",
+    "domain": "wellsfargo.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "wf.wd1/WellsFargoJobs",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Barclays",
+    "domain": "barclays.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "barclays.wd3/External_Career_Site_Barclays",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Northern Trust",
+    "domain": "northerntrust.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "ntrs.wd1/northerntrust",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Capital One",
+    "domain": "capitalone.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "capitalone.wd12/Capital_One",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Synchrony",
+    "domain": "synchrony.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "synchronyfinancial.wd5/careers",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "LPL Financial",
+    "domain": "lpl.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "lplfinancial.wd1/India_Ext",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Nasdaq",
+    "domain": "nasdaq.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "nasdaq.wd1/Global_External_Site",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "CME Group",
+    "domain": "cmegroup.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "cmegroup.wd1/cme_careers",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "S&P Global",
+    "domain": "spglobal.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "spgi.wd5/SPGI_Careers",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Morningstar",
+    "domain": "morningstar.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "morningstar.wd5/Americas",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Broadridge",
+    "domain": "broadridge.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "broadridge.wd5/Careers",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "FIS",
+    "domain": "fisglobal.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "fis.wd5/SearchJobs",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Invesco",
+    "domain": "invesco.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "invesco.wd1/IVZ",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Equifax",
+    "domain": "equifax.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "equifax.wd5/External",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "TransUnion",
+    "domain": "transunion.com",
+    "job_links": [],
+    "source": "workday",
+    "handle": "transunion.wd5/TransUnion",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Arcesium",
+    "domain": "arcesium.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "arcesiumllc",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Jump Trading",
+    "domain": "jumptrading.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "jumptrading",
+    "tier": "quant",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Adyen",
+    "domain": "adyen.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "adyen",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Airwallex",
+    "domain": "airwallex.com",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "airwallex",
+    "tier": "finance-gcc",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "FamPay",
+    "domain": "famapp.in",
+    "job_links": [],
+    "source": "lever",
+    "handle": "fampay",
+    "tier": "india-product",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Mujin",
+    "domain": "mujin.co.jp",
+    "job_links": [],
+    "source": "lever",
+    "handle": "mujininc",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Monzo",
+    "domain": "monzo.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "monzo",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Wayve",
+    "domain": "wayve.ai",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "wayve",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Catawiki",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "catawiki",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "Backend Engineer",
+      "location": "Amsterdam, Netherlands",
+      "url": "https://job-boards.greenhouse.io/catawiki/jobs/8215843",
+      "checked": "2026-10-06",
+      "listed_by": "tech-jobs-with-relocation (github.com/AndrewStetsenko)"
+    }
+  },
+  {
+    "company": "Manychat",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "manychat",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "Senior Python Engineer, Billing & Accounts",
+      "location": "Amsterdam, Netherlands",
+      "url": "https://jobs.ashbyhq.com/manychat/b62c092e-c803-4a31-b830-ec45565e0d3d",
+      "checked": "2026-10-06",
+      "listed_by": "tech-jobs-with-relocation (github.com/AndrewStetsenko)"
+    }
+  },
+  {
+    "company": "NavVis",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "navvis",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "Calibration Engineer (F/M/D)",
+      "location": "Munich Onsite (NavVis GmbH)",
+      "url": "https://job-boards.eu.greenhouse.io/navvis/jobs/4904613101",
+      "checked": "2026-10-06",
+      "listed_by": "tech-jobs-with-relocation (github.com/AndrewStetsenko)"
+    }
+  },
+  {
+    "company": "PhotoRoom",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "photoroom",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "Product ML Engineer",
+      "location": "Paris",
+      "url": "https://jobs.ashbyhq.com/photoroom/1073f2ae-906a-42ae-bb5f-96981a2555cf",
+      "checked": "2026-10-06",
+      "listed_by": "tech-jobs-with-relocation (github.com/AndrewStetsenko)"
+    }
+  },
+  {
+    "company": "Scout24",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "scout24",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "Lead Security Engineer (d/m/f)",
+      "location": "Berlin",
+      "url": "https://www.scout24.com/en/career/jobs/8146769?gh_jid=8146769",
+      "checked": "2026-10-06",
+      "listed_by": "tech-jobs-with-relocation (github.com/AndrewStetsenko)"
+    }
+  },
+  {
+    "company": "Wallapop",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "wallapop",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "MLOps Engineer",
+      "location": "Barcelona",
+      "url": "https://job-boards.eu.greenhouse.io/wallapop/jobs/4741205101",
+      "checked": "2026-10-06",
+      "listed_by": "tech-jobs-with-relocation (github.com/AndrewStetsenko)"
+    }
+  },
+  {
+    "company": "Luxor Technology",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "luxor",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "remote",
+    "evidence": {
+      "title": "Data Engineer",
+      "location": "Worldwide, Remote Uruguay, Remote Argentina, Remote Brazil, Remote Mexico, Remote Philippines, Remote",
+      "url": "https://jobs.ashbyhq.com/luxor/710287ed-5596-47a1-b0bc-3fb44ba720b0",
+      "checked": "2026-10-06",
+      "listed_by": "remoteintech.company"
+    }
+  },
+  {
+    "company": "Karat",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "karat",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "remote",
+    "evidence": {
+      "title": "Senior Technical Content Development Engineer (India)",
+      "location": "Remote (India - Bangalore ONLY)",
+      "url": "https://job-boards.greenhouse.io/karat/jobs/8747047002",
+      "checked": "2026-10-06",
+      "listed_by": "remoteintech.company"
+    }
+  },
+  {
+    "company": "Turing",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "turing",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "remote",
+    "evidence": {
+      "title": "Staff Software Engineer",
+      "location": "India - Remote",
+      "url": "https://job-boards.greenhouse.io/turing/jobs/6115701004",
+      "checked": "2026-10-06",
+      "listed_by": "suggested by Claude; kept on board evidence"
+    }
+  },
+  {
+    "company": "Kestra",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "kestra",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "remote",
+    "evidence": {
+      "title": "Senior Security Engineer",
+      "location": "Europe India",
+      "url": "https://jobs.ashbyhq.com/kestra/48a6eb68-1ff3-4947-89e5-324831c22859",
+      "checked": "2026-10-06",
+      "listed_by": "remoteintech.company"
+    }
+  },
+  {
+    "company": "Supabase",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "supabase",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "remote",
+    "evidence": {
+      "title": "AI Platform Engineer",
+      "location": "Remote, Global",
+      "url": "https://jobs.ashbyhq.com/supabase/3b5d54ca-741b-45ac-bd3f-31605a0d3541",
+      "checked": "2026-10-06",
+      "listed_by": "remoteintech.company"
+    }
+  },
+  {
+    "company": "Railway",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "railway",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "remote",
+    "evidence": {
+      "title": "Senior Full-Stack Engineer - Product",
+      "location": "Global",
+      "url": "https://jobs.ashbyhq.com/railway/6ddcfe47-6cce-469b-ba6d-4f0e83440c9d",
+      "checked": "2026-10-06",
+      "listed_by": "remoteintech.company"
+    }
+  },
+  {
+    "company": "adjoe",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "adjoe",
+    "tier": "global",
+    "sde2_ctc_lpa": "",
+    "india_locations": "",
+    "hires_from_india": "visa-or-relocation",
+    "evidence": {
+      "title": "QA Engineer (f/m/d)",
+      "location": "Hamburg",
+      "url": "https://jobs.ashbyhq.com/adjoe/3610b4c7-4c2d-4746-8fa0-bd52272a248d",
+      "checked": "2026-10-06",
+      "listed_by": "The Global Move company list (public part)"
+    }
+  }
+]

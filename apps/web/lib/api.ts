@@ -9,39 +9,17 @@ export function setRateLimitModalHandler(handler: (provider: 'anthropic' | 'gemi
   showRateLimitModal = handler;
 }
 
+/** An error from our API, carrying its machine-readable `code` when it has one. */
 export class ApiError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-    public code?: string
-  ) {
+  constructor(message: string, readonly code?: string, readonly status?: number) {
     super(message);
-    this.name = 'ApiError';
-  }
-
-  isNetworkError(): boolean {
-    // Network errors typically don't have a status or have status 0
-    return this.status === 0;
-  }
-
-  isAuthError(): boolean {
-    return this.status === 401;
-  }
-
-  isNotFound(): boolean {
-    return this.status === 404;
-  }
-
-  isServerError(): boolean {
-    return this.status >= 500;
-  }
-
-  isClientError(): boolean {
-    return this.status >= 400 && this.status < 500;
   }
 }
 
-export async function api<T>(path: string, init?: RequestInit & { signal?: AbortSignal }): Promise<T> {
+/** No profile yet: a page should offer to set one up, not report a failure. */
+export const needsProfile = (err: unknown) => err instanceof ApiError && err.code === 'PROFILE_REQUIRED';
+
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   /**
    * Only declare a JSON body when there is one.
    *
@@ -118,11 +96,7 @@ export async function api<T>(path: string, init?: RequestInit & { signal?: Abort
     // `error` is ours; `message` is what the framework produces for things
     // like a malformed body. Falling back to the status alone loses the only
     // sentence that says what went wrong.
-    throw new ApiError(
-      body.error ?? body.message ?? `${res.status} ${res.statusText}`,
-      res.status,
-      body.code
-    );
+    throw new ApiError(body.error ?? body.message ?? `${res.status} ${res.statusText}`, body.code, res.status);
   }
   return raw as T;
 }

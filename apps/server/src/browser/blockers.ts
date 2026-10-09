@@ -11,6 +11,23 @@ export interface Blocker {
    * the run cannot proceed at all under this design.
    */
   humanCanClear: boolean;
+  /**
+   * `false` for walls the run raised itself ("could not fill these fields"),
+   * which detectBlockers cannot see - so "not detected" never means "dealt
+   * with", and only your click carries on.
+   */
+  autoClears?: boolean;
+  /**
+   * For a wall the run raised itself: how to tell, by looking at the page,
+   * that you dealt with it anyway. Polled in place of detectBlockers.
+   */
+  clearedWhen?: () => Promise<boolean>;
+  /**
+   * CAPTCHA only: a challenge is showing now. Without it the captcha is merely
+   * armed - invisible reCAPTCHA sits on every Greenhouse form and usually
+   * passes on submit without anyone seeing it.
+   */
+  onScreen?: boolean;
 }
 
 /**
@@ -61,6 +78,7 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
         ? `A ${captcha.hits.join('/')} challenge is on screen and must be solved by a person.`
         : `${captcha.hits.join('/')} is armed on this form. It may pass silently, or it may challenge on submit.`,
       humanCanClear: true,
+      onScreen: captcha.challengeVisible,
     });
   }
 
@@ -72,9 +90,14 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
    * accounts.google.com, whose first screen asks for an email address and
    * nothing else. There is no password box to find and no "sign in to apply"
    * text - just a different host. Checked against the live page.
+   *
+   * Identity vendors' tenants live on subdomains (acme.okta.com), but the
+   * vendors hire too: www.okta.com/company/careers is an ordinary application
+   * form, and matching `*.okta.com` parked every Okta job at a sign-in wall
+   * that was never there. So `www.` is not a tenant.
    */
   const identityHost =
-    /^(accounts\.google\.com|login\.microsoftonline\.com|login\.live\.com|signin\.aws\.amazon\.com|.*\.okta\.com|.*\.auth0\.com|.*\.onelogin\.com|.*\.pingidentity\.com|github\.com\/login|.*\.oktapreview\.com)$/i;
+    /^(accounts\.google\.com|idmsa\.apple\.com|login\.microsoftonline\.com|login\.live\.com|signin\.aws\.amazon\.com|github\.com\/login|(?!www\.)(?:[^.]+\.)+(okta|oktapreview|auth0|onelogin|pingidentity)\.com)$/i;
 
   let host = '';
   try {
@@ -108,9 +131,22 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
         visiblePassword ||
         has(/sign in to (continue|apply)/) ||
         has(/log ?in to your account/) ||
+        has(/(log ?in|sign ?in) or (create|register) (an )?account/) ||
         // Google's first sign-in screen is an email box and this sentence.
         has(/use your google account/) ||
-        has(/sign in with your (work|school|microsoft|google) account/),
+        has(/sign in with your (work|school|microsoft|google) account/) ||
+        // Eightfold's candidate modal (Microsoft Careers): a row of
+        // "Sign in using Microsoft / LinkedIn / Google" buttons, no password box.
+        has(/select a method below to sign in/) ||
+        // Workday's sign-in chooser: Google / LinkedIn / "Sign in with email",
+        // no password box until one is picked.
+        Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '[data-automation-id="signInContent"], [data-automation-id="SignInWithEmailButton"]',
+          ),
+        ).some((el) =>
+          typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null,
+        ),
       createAccount:
         has(/create (an )?account to apply/) ||
         has(/register to (continue|apply)/) ||
@@ -188,10 +224,66 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
 export async function detectSubmissionOutcome(
   page: Page,
   formUrlBefore: string,
+  timeoutMs = 20_000,
 ): Promise<{ outcome: 'SUBMITTED' | 'VALIDATION_ERROR' | 'UNKNOWN'; detail: string }> {
-  await page.waitForLoadState('networkidle', { timeout: 20_000 }).catch(() => {});
+  // One look is not enough. On a single-page app (Ashby, most modern
+  // boards) the click does not navigate, so the page is already "loaded" and
+  // networkidle resolves before the submit request has even left. Reading the
+  // page then sees the form's last frame and calls it ambiguous. So keep
+  // looking until the page says something decisive or the time runs out.
+  const deadline = Date.now() + timeoutMs;
+  const decisive = (st: Awaited<ReturnType<typeof readOutcomeState>>) =>
+    st.confirmed || st.errors.length > 0 || (st.url !== formUrlBefore && !st.hasForm);
+  let state = await readOutcomeState(page);
+  while (!decisive(state) && Date.now() < deadline) {
+    await page.waitForTimeout(750);
+    state = await readOutcomeState(page);
+  }
+  // Let a navigation that is mid-flight finish before judging the url.
+  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  state = await readOutcomeState(page);
 
-  const state = await evaluatePage(page, () => {
+  if (state.errors.length) {
+    return { outcome: 'VALIDATION_ERROR', detail: state.errors.join(' | ') };
+  }
+  if (state.nativeInvalid.length && state.hasForm) {
+    return {
+      outcome: 'VALIDATION_ERROR',
+      detail: `The browser blocked submission on required fields: ${state.nativeInvalid.join(' | ')}`,
+    };
+  }
+  if (state.confirmed) {
+    return { outcome: 'SUBMITTED', detail: state.snippet };
+  }
+  // Navigated away from the form and nothing is left to fill: near-certainly
+  // the confirmation page, just worded in a way we do not recognise.
+  if (state.url !== formUrlBefore && !state.hasForm) {
+    return { outcome: 'SUBMITTED', detail: `Navigated to ${state.url}. ${state.snippet}` };
+  }
+  // Said plainly: this is shown to a person deciding whether they applied.
+  // The page text is noise to them; the url is on the job link already.
+  return {
+    outcome: 'UNKNOWN',
+    detail: state.hasForm
+      ? 'Submit was pressed but the form is still showing, so it probably did not go through. ' +
+        'Usually a required field the site rejected, or a CAPTCHA.'
+      : 'Submit was pressed but no confirmation message appeared.',
+  };
+}
+
+/**
+ * The site's own "thanks for applying" on screen right now, or null.
+ *
+ * Positive confirmation only: leaving the form is not counted here, because
+ * someone browsing away from a tab they were left with also leaves the form.
+ */
+export async function confirmationShowing(page: Page): Promise<string | null> {
+  const state = await readOutcomeState(page);
+  return state.confirmed ? state.snippet : null;
+}
+
+function readOutcomeState(page: Page) {
+  return evaluatePage(page, () => {
     const text = document.body?.innerText ?? '';
     const lower = text.toLowerCase();
 
@@ -236,10 +328,17 @@ export async function detectSubmissionOutcome(
 
     return {
       url: location.href,
-      hasForm: !!document.querySelector('form input, form textarea'),
+      // Ashby and other SPAs mount their fields without a <form> wrapper, so
+      // visible inputs anywhere count too.
+      hasForm:
+        !!document.querySelector('form input, form textarea') ||
+        Array.from(
+          document.querySelectorAll('input:not([type="hidden"]):not([type="search"]), textarea'),
+        ).filter(onScreen).length >= 2,
       confirmed:
-        /thank you for (applying|your application)/i.test(text) ||
-        /your application (has been|was) (received|submitted)/i.test(text) ||
+        /thank(s| you) for (applying|your application)/i.test(text) ||
+        /your application (has been|was) (successfully )?(received|submitted|sent)/i.test(text) ||
+        /(successfully|been) (submitted|received)/i.test(text) ||
         /application (received|submitted|complete)/i.test(lower) ||
         /we(’|')?ve received your application/i.test(text),
       errors: Array.from(new Set(errorNodes)).slice(0, 12),
@@ -247,26 +346,4 @@ export async function detectSubmissionOutcome(
       snippet: text.replace(/\s+/g, ' ').slice(0, 400),
     };
   });
-
-  if (state.errors.length) {
-    return { outcome: 'VALIDATION_ERROR', detail: state.errors.join(' | ') };
-  }
-  if (state.nativeInvalid.length && state.hasForm) {
-    return {
-      outcome: 'VALIDATION_ERROR',
-      detail: `The browser blocked submission on required fields: ${state.nativeInvalid.join(' | ')}`,
-    };
-  }
-  if (state.confirmed) {
-    return { outcome: 'SUBMITTED', detail: state.snippet };
-  }
-  // Navigated away from the form and nothing is left to fill: near-certainly
-  // the confirmation page, just worded in a way we do not recognise.
-  if (state.url !== formUrlBefore && !state.hasForm) {
-    return { outcome: 'SUBMITTED', detail: `Navigated to ${state.url}. ${state.snippet}` };
-  }
-  return {
-    outcome: 'UNKNOWN',
-    detail: `Could not confirm. Still at ${state.url}. Page says: ${state.snippet}`,
-  };
 }

@@ -1,15 +1,28 @@
 import type { Page } from 'playwright';
+import { normalizeLabel } from '@ja/shared';
 import { prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
-import { newPage, screenshot } from '../browser/session.js';
+import {
+  closeLeftOpen,
+  getContextSync,
+  leaveOpen,
+  newPage,
+  PageClosedError,
+  screenshot,
+} from '../browser/session.js';
 import { NeedsHumanError } from '../browser/openForm.js';
+import { findEmbeddedAts } from '../ats/embedded.js';
+import { resolveKnownAts } from '../ats/resolve.js';
 import { adapterFor } from '../ats/registry.js';
-import { handleOpenFailure, pauseForHuman } from './humanGate.js';
+import { isLinkedInJob, resolveApplyUrl } from '../linkedin/jobs.js';
+import { handleOpenFailure, pauseForHuman, SetAsideError } from './humanGate.js';
 import { artifact, setStatus } from './runLog.js';
 import { walkApplication } from './wizard.js';
 import { finishApplication } from './submission.js';
 import { abandon, release, questionsKey, reviewKey, blockerKey } from './waiters.js';
+import { watchLeftOpenTab } from './manualSubmit.js';
+import { BrowserEdits } from './browserEdits.js';
 
 export { SubmissionBudgetError } from './submission.js';
 
@@ -35,8 +48,11 @@ export async function runApplication(applicationId: string): Promise<void> {
     include: { job: true, profile: { include: { facts: true, resumes: true } } },
   });
 
-  const adapter = adapterFor(app.job.url);
+  let adapter = adapterFor(app.job.url);
+  let formUrl = app.job.url;
   let page: Page | null = null;
+  let closePage = false;
+  let edits: BrowserEdits | null = null;
 
   try {
     await setStatus(applicationId, 'PREPARING', `Using the ${adapter.id} adapter.`);
@@ -44,16 +60,52 @@ export async function runApplication(applicationId: string): Promise<void> {
       await bus.emitEvent(applicationId, 'LOG', `${adapter.id}: ${note}`);
     }
 
+    await closeLeftOpen(applicationId);
     page = await newPage();
 
     // ---- 1. Reach the form --------------------------------------------------
-    if (!(await openForm(applicationId, page, adapter, app.job.url))) {
-      await prisma.application.update({
-        where: { id: applicationId },
-        data: { status: 'CANCELLED', blockedReason: 'Could not reach application form.' },
-      });
-      return;
+    // A LinkedIn posting that is not Easy Apply hands off to the company's own
+    // form - a Greenhouse board, a Google Form - in a new tab. Follow it there
+    // and pick the adapter for where it lands, rather than driving LinkedIn.
+    if (adapter.id === 'generic' && isLinkedInJob(app.job.url)) {
+      const offsite = await resolveApplyUrl(page, app.job.url).catch(() => null);
+      if (offsite) {
+        formUrl = offsite;
+        adapter = adapterFor(offsite);
+        await bus.emitEvent(
+          applicationId,
+          'LOG',
+          `LinkedIn's Apply opens ${new URL(offsite).hostname} in a new tab; following it with the ${adapter.id} adapter.`,
+        );
+      }
     }
+    // A careers page on the company's own domain is often a known ATS in an
+    // iframe. Drive that ATS directly rather than the page around it.
+    if (adapter.id === 'generic') {
+      const known = await resolveKnownAts(formUrl, app.profileId);
+      if (known) {
+        adapter = known.adapter;
+        formUrl = known.url;
+        await bus.emitEvent(
+          applicationId,
+          'LOG',
+          `This posting is a ${adapter.id} application; opening its form directly.`,
+        );
+      }
+    }
+    if (adapter.id === 'generic') {
+      const embedded = await findEmbeddedAts(page, formUrl);
+      if (embedded) {
+        adapter = embedded.adapter;
+        formUrl = embedded.url;
+        await bus.emitEvent(
+          applicationId,
+          'LOG',
+          `The application is a ${adapter.id} form embedded in this page; opening it directly.`,
+        );
+      }
+    }
+    if (!(await openForm(applicationId, page, adapter, formUrl))) return;
     await artifact(applicationId, 'screenshot', 'form-opened', await screenshot(page, applicationId, 'form-opened'));
 
     // ---- 2. Read the posting ------------------------------------------------
@@ -71,14 +123,11 @@ export async function runApplication(applicationId: string): Promise<void> {
     await bus.emitEvent(applicationId, 'LOG', `Read the posting: ${meta.title} at ${meta.company}.`);
 
     // ---- 3. Walk it ---------------------------------------------------------
-    const walk = await walkApplication({ applicationId, page, adapter, app, meta });
-    if (walk.kind === 'ABANDONED') {
-      await prisma.application.update({
-        where: { id: applicationId },
-        data: { status: 'CANCELLED', blockedReason: 'Cancelled by user during human gate.' },
-      });
-      return;
-    }
+    edits = new BrowserEdits({
+      applicationId, page, profileId: app.profileId, companyKey: normalizeLabel(meta.company),
+    });
+    const walk = await walkApplication({ applicationId, page, adapter, app, meta, formUrl, edits });
+    if (walk.kind === 'ABANDONED') return;
 
     // ---- 4. Review, then submit ---------------------------------------------
     await finishApplication({
@@ -91,15 +140,22 @@ export async function runApplication(applicationId: string): Promise<void> {
       fields: walk.fields,
       submitControl: walk.submitControl,
       companyKey: walk.companyKey,
+      edits,
     });
   } catch (err) {
-    const message = (err as Error).message;
+    if (err instanceof SetAsideError) {
+      // Already recorded where it stopped and why; this is not a failure.
+      await bus.emitEvent(applicationId, 'LOG', err.message);
+      closePage = !err.keepPage;
+      return;
+    }
+    const message = explainFailure(err, page);
     await prisma.application.update({
       where: { id: applicationId },
       data: { status: 'FAILED', blockedReason: message, attempts: { increment: 1 } },
     });
     await bus.emitEvent(applicationId, 'ERROR', message, { stack: (err as Error).stack });
-    if (page) {
+    if (page && !page.isClosed()) {
       await artifact(applicationId, 'screenshot', 'failure', await screenshot(page, applicationId, 'failure')).catch(() => {});
     }
   } finally {
@@ -108,7 +164,12 @@ export async function runApplication(applicationId: string): Promise<void> {
     abandon(blockerKey(applicationId));
     // The page is left open on purpose while a human may still be looking at
     // it; closing here would destroy the evidence and any captcha token.
-    if (page && !config.headless) {
+    if (page && !page.isClosed() && !config.headless && !closePage) {
+      leaveOpen(applicationId, page);
+      // Submit it yourself there and the app notices.
+      watchLeftOpenTab(applicationId, page);
+      // And anything you change there is still saved as your answer.
+      edits?.watchUntilClosed();
       await bus.emitEvent(applicationId, 'LOG', 'Leaving the browser tab open for you.');
     } else {
       await page?.close().catch(() => {});
@@ -180,4 +241,23 @@ export function continueRun(applicationId: string, carryOn: boolean, note?: stri
 
 export function decideReview(applicationId: string, approved: boolean, note?: string): boolean {
   return release(reviewKey(applicationId), { approved, note });
+}
+
+/**
+ * Playwright's "Target page, context or browser has been closed" names none of
+ * the three, and it is by far the most common way a run dies in development:
+ * saving any file under apps/server makes `tsx watch` restart the API, which
+ * takes Chromium down with it mid-application.
+ */
+function explainFailure(err: unknown, page: Page | null): string {
+  const message = (err as Error).message;
+  if (err instanceof PageClosedError || !page?.isClosed()) return message;
+  if (!getContextSync()) {
+    return (
+      'The browser shut down in the middle of this run. Most often that is the API server ' +
+      'restarting - `pnpm dev` restarts it whenever a file under apps/server is saved - or the ' +
+      'Chromium window being quit. Start the application again.'
+    );
+  }
+  return new PageClosedError('during the run').message;
 }

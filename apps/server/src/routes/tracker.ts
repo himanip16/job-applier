@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma, type Prisma } from '../lib/db.js';
 import { rememberAnswer } from '../engine/answerBank.js';
 import { normalizeLabel } from '@ja/shared';
-import type { RequireProfile } from './discovery.js';
+import type { RequireProfile } from './types.js';
 import {
   NOT_YOURS,
   ownedApplication,

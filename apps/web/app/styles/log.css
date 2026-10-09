@@ -1,0 +1,13 @@
+/* ---------------------------------------------------------------------- log */
+
+.log {
+  font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg-subtle); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0.8rem; max-height: 22rem; overflow: auto;
+}
+.log .line { display: flex; gap: 0.7rem; padding: 0.12rem 0; }
+.log .t { color: var(--muted); flex: none; }
+.log .ERROR { color: var(--bad); }
+.log .WARNING { color: var(--warn); }
+.log .STATUS { color: var(--accent); }
+.log .MEMORY_WRITTEN, .log .FIELD_RESOLVED { color: var(--good); }

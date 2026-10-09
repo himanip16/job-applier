@@ -1,24 +1,7 @@
 import { prisma } from '../lib/db.js';
 import type { ContactRole } from '../lib/db.js';
 
-/**
- * Find contacts eligible for cold outreach.
- *
- * Cold outreach criteria:
- * - isConnection = true (synced from LinkedIn, 1st-degree connections only)
- * - No LinkedIn conversation exists (never messaged)
- * - Any role; unknown roles receive the referral-oriented default
- * - Ordered by discovery date (oldest first)
- *
- * IMPORTANT: Conversation detection uses the Contact relation (contactId),
- * not URL matching. This ensures consistency since both Contact and
- * LinkedInConversation use canonicalized profile URLs.
- *
- * NOTE: Since we filter for isConnection = true, all results are 1st-degree
- * connections by definition. Degree ordering is removed as it would be
- * meaningless (all values would be '1st').
- */
-export async function findColdOutreachTargets(profileId: string): Promise<{
+export interface ColdOutreachTarget {
   id: string;
   fullName: string;
   headline: string | null;
@@ -26,82 +9,57 @@ export async function findColdOutreachTargets(profileId: string): Promise<{
   profileUrl: string;
   role: ContactRole;
   degree: string | null;
-  hasConversation: boolean;
-}[]> {
+  hasConversation: false;
+  jobLeadId: string | null;
+  jobTitle: string | null;
+  jobUrl: string | null;
+}
+
+/** People we have neither messaged on LinkedIn nor already drafted outreach for. */
+export async function findColdOutreachTargets(profileId: string): Promise<ColdOutreachTarget[]> {
   const contacts = await prisma.contact.findMany({
     where: {
       profileId,
       isConnection: true,
-      conversations: {
-        none: {}, // No existing conversation
-      },
-      outreachItems: { none: {} }, // No existing outreach items
+      role: { in: ['TALENT', 'ENGINEERING'] },
+      conversations: { none: { messages: { some: { isFromMe: true } } } },
+      outreachItems: { none: { status: { in: ['DRAFT', 'APPROVED', 'SENDING', 'SENT'] } } },
     },
     select: {
       id: true,
       fullName: true,
       headline: true,
       companyName: true,
+      companyKey: true,
       profileUrl: true,
       role: true,
       degree: true,
     },
-    orderBy: [
-      { discoveredAt: 'asc' }, // Oldest first
-      { id: 'asc' }, // Secondary sort by ID for deterministic ordering
-    ],
+    orderBy: [{ discoveredAt: 'asc' }, { id: 'asc' }],
   });
 
-  // Add hasConversation: false since we filtered for no conversations
-  return contacts.map(contact => ({
-    ...contact,
-    hasConversation: false,
-  }));
+  const leads = await prisma.jobLead.findMany({
+    where: { profileId, status: { in: ['NEW', 'SHORTLISTED'] } },
+    select: { id: true, title: true, url: true, companyName: true, score: true },
+    orderBy: [{ score: 'desc' }, { discoveredAt: 'desc' }],
+  });
+  const key = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  return contacts.map(({ companyKey, ...contact }) => {
+    const lead = leads.find(candidate => key(candidate.companyName) === companyKey);
+    return {
+      ...contact,
+      hasConversation: false as const,
+      jobLeadId: lead?.id ?? null,
+      jobTitle: lead?.title ?? null,
+      jobUrl: lead?.url ?? null,
+    };
+  });
 }
 
-/**
- * Count cold outreach targets by role.
- */
-export async function countColdTargetsByRole(profileId: string): Promise<{
-  TALENT: number;
-  ENGINEERING: number;
-  OTHER: number;
-  total: number;
-}> {
-  const [talent, engineering, other] = await Promise.all([
-    prisma.contact.count({
-      where: {
-        profileId,
-        isConnection: true,
-        role: 'TALENT',
-        conversations: { none: {} },
-        outreachItems: { none: {} },
-      },
-    }),
-    prisma.contact.count({
-      where: {
-        profileId,
-        isConnection: true,
-        role: 'ENGINEERING',
-        conversations: { none: {} },
-        outreachItems: { none: {} },
-      },
-    }),
-    prisma.contact.count({
-      where: {
-        profileId,
-        isConnection: true,
-        role: 'OTHER',
-        conversations: { none: {} },
-        outreachItems: { none: {} },
-      },
-    }),
-  ]);
-
-  return {
-    TALENT: talent,
-    ENGINEERING: engineering,
-    OTHER: other,
-    total: talent + engineering + other,
-  };
+export async function countColdTargetsByRole(profileId: string) {
+  const targets = await findColdOutreachTargets(profileId);
+  const TALENT = targets.filter(target => target.role === 'TALENT').length;
+  const ENGINEERING = targets.filter(target => target.role === 'ENGINEERING').length;
+  return { TALENT, ENGINEERING, total: targets.length };
 }

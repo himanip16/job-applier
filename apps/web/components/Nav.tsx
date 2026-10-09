@@ -38,12 +38,34 @@ const ITEMS: { href: string; label: string; hint: string; icon: ReactNode }[] = 
     ),
   },
   {
+    href: '/watchlist',
+    label: 'Watch list',
+    hint: 'The companies it keeps checking for new jobs',
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+    ),
+  },
+  {
     href: '/runs',
     label: 'Runs',
     hint: 'Applications being filled in, live',
     icon: (
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M13 3 5 13.5h6L11 21l8-10.5h-6z" />
+      </svg>
+    ),
+  },
+  {
+    href: '/outreach',
+    label: 'Outreach',
+    hint: 'Messages to people at the companies you are applying to',
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="m3 6 9 6 9-6" />
+        <rect x="3" y="5" width="18" height="14" rx="2" />
       </svg>
     ),
   },
@@ -112,17 +134,6 @@ const ITEMS: { href: string; label: string; hint: string; icon: ReactNode }[] = 
       </svg>
     ),
   },
-  {
-    href: '/settings',
-    label: 'Settings',
-    hint: 'API keys, model choice, and what each one turns on',
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="12" r="3" />
-        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z" />
-      </svg>
-    ),
-  },
 ];
 
 export function Nav() {
@@ -132,7 +143,8 @@ export function Nav() {
   // rather than running a second interval against the same endpoint.
   // Only fetch overview if authenticated and has a profile.
   const { data } = useOverview(auth.authenticated && !!auth.profile);
-  const badges = { runs: data?.needsYou.total ?? 0, discover: data?.counts.leadsNew ?? 0 };
+  // Only questions earn a badge; walls and set-asides wait on the Runs page.
+  const badges = { runs: data?.needsYou.needsInput ?? 0, discover: data?.counts.leadsNew ?? 0 };
 
   // Nothing here works signed out - every link bounces straight back to
   // sign-in via AuthGate - so showing it there is just a wall of dead links

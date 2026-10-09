@@ -10,7 +10,7 @@ import {
   scoreLexically,
   serialiseReasons,
 } from './scoring.js';
-import { applyHardRules, extractCandidateConstraints } from './hardRules.js';
+import { applyHardRules, candidateConstraints } from './hardRules.js';
 
 
 /**
@@ -48,20 +48,6 @@ export const NO_DESCRIPTION_MESSAGE =
 
 export const DECLINED_MESSAGE = 'The model declined to assess this one.';
 
-/**
- * Below this, a lead is deleted rather than kept and ranked last.
- *
- * Deleting on a cheap keyword score is a strong action taken on weak
- * evidence, so the bar is set at the bottom of the observed distribution
- * rather than at the midpoint - see the note at the call site.
- *
- * Strong matches are never pruned out of the queue; they are explicitly
- * re-evaluated so a good lead keeps a chance to be revisited rather than being
- * silently dropped on a stale lexical read.
- */
-const PRUNE_BELOW = 15;
-const STRONG_MATCH_THRESHOLD = 70;
-
 type Lead = Awaited<ReturnType<typeof prisma.jobLead.findFirstOrThrow>>;
 
 /**
@@ -86,7 +72,7 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
     loadScoringContext(profileId),
   ]);
   const candidateContext = renderCandidateContext(profile, profile.resumeText);
-  const constraints = extractCandidateConstraints(profile);
+  const constraints = candidateConstraints(profile);
 
   const outcomes: RescoreOutcome[] = [];
   for (const lead of leads) {
@@ -118,10 +104,13 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
         candidateYears: constraints.candidateYears, 
         needsSponsorship: constraints.needsSponsorship,
         salaryExpectations: constraints.salaryExpectations,
+        currentCTC: constraints.currentCTC,
         job 
       });
       const lex = scoreLexically(job, scoring);
       const blended = blendScores(fit, lex);
+      
+      // Ranking never changes a candidate decision. Low scores remain reviewable.
       await prisma.jobLead.update({
         where: { id: lead.id },
         data: {
@@ -160,7 +149,7 @@ export async function rescoreLeadsBatch(profileId: string, leads: Lead[]): Promi
     loadScoringContext(profileId),
   ]);
   const candidateContext = renderCandidateContext(profile, profile.resumeText);
-  const constraints = extractCandidateConstraints(profile);
+  const constraints = candidateConstraints(profile);
 
   // Filter out leads without descriptions
   const validLeads = leads.filter(l => l.descriptionText);
@@ -227,6 +216,7 @@ export async function rescoreLeadsBatch(profileId: string, leads: Lead[]): Promi
           candidateYears: constraints.candidateYears,
           needsSponsorship: constraints.needsSponsorship,
           salaryExpectations: constraints.salaryExpectations,
+          currentCTC: constraints.currentCTC,
           job
         });
         const lex = scoreLexically(job, scoring);
@@ -271,6 +261,7 @@ export async function rescoreLeadsBatch(profileId: string, leads: Lead[]): Promi
             candidateYears: constraints.candidateYears,
             needsSponsorship: constraints.needsSponsorship,
             salaryExpectations: constraints.salaryExpectations,
+            currentCTC: constraints.currentCTC,
             job
           });
           const lex = scoreLexically(job, scoring);
@@ -340,7 +331,6 @@ export async function rescoreByIds(profileId: string, ids: string[]): Promise<Re
  */
 export async function rescoreLexically(profileId: string): Promise<number> {
   const scoring = await loadScoringContext(profileId);
-  let pruned = 0;
   const leads = await prisma.jobLead.findMany({
     where: { profileId, status: 'NEW', deepScored: false },
   });
@@ -356,27 +346,6 @@ export async function rescoreLexically(profileId: string): Promise<number> {
       scoring,
     );
 
-    // Drop the genuinely hopeless so the queue stays a queue.
-    //
-    // This threshold arrived as 45, which was safe only while every
-    // lexical score was 50: nothing was ever below it, so nothing was ever
-    // deleted. Now that the score actually reflects the resume, a real
-    // backend job with a terse title lands in the twenties - Mercury's own
-    // "Senior Software Engineer - Mercury Command" scores 27 - and 45 would
-    // permanently delete most of a healthy queue on every crawl. Fifteen is
-    // where the honest bottom of the distribution sits: marketing, support
-    // and compliance postings for a backend engineer.
-    //
-    // Strong matches are explicitly re-evaluated instead of being pruned out on
-    // a stale lexical pass. If a lead was already a standout, keep it alive to
-    // be reconsidered and scored again.
-    const isStrongMatch = (lead.score ?? 0) >= STRONG_MATCH_THRESHOLD;
-    if (!isStrongMatch && lex.score < PRUNE_BELOW) {
-      await prisma.jobLead.delete({ where: { id: lead.id } }).catch(() => {});
-      pruned++;
-      continue;
-    }
-
     await prisma.jobLead.update({
       where: { id: lead.id },
       data: {
@@ -388,7 +357,6 @@ export async function rescoreLexically(profileId: string): Promise<number> {
     });
     updated++;
   }
-  if (pruned) process.stdout.write(`[discovery] pruned ${pruned} hopeless lead(s)\n`);
   return updated;
 }
 

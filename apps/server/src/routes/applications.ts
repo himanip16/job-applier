@@ -1,14 +1,18 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { prisma, type Prisma } from '../lib/db.js';
+import { prisma, Prisma } from '../lib/db.js';
 import { enqueue, activeRuns } from '../engine/queue.js';
 import { submitAnswers, decideReview, continueRun } from '../engine/runner.js';
 import { rememberAnswer } from '../engine/answerBank.js';
+import { ANSWER_POLL_MS } from '../engine/humanGate.js';
+import { isParked, blockerKey } from '../engine/waiters.js';
+import { syncLead } from '../engine/leadSync.js';
 import { adapterFor } from '../ats/registry.js';
 import { matchCanonical, normalizeLabel } from '@ja/shared';
 import { NOT_YOURS, ownedApplication } from '../auth/ownership.js';
 import { config } from '../lib/config.js';
-import type { RequireProfile } from './discovery.js';
+import { tabLeftOpen } from '../browser/session.js';
+import type { RequireProfile } from './types.js';
 
 export function registerApplicationRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   app.post<{ Body: unknown }>('/api/applications', async (req, reply) => {
@@ -75,7 +79,6 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
   app.get('/api/applications', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
-
     const applications = await prisma.application.findMany({
       where: { profileId: profile.id },
       include: { job: true, _count: { select: { pending: { where: { answeredAt: null } } } } },
@@ -92,23 +95,37 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
       where: { id: req.params.id, profileId: profile.id },
       include: {
         job: true,
-        events: { orderBy: { createdAt: 'asc' }, take: 500 },
+        // The newest 500, not the oldest: an application retried a few times
+        // otherwise shows only its first runs and never the one that matters.
+        events: { orderBy: { createdAt: 'desc' }, take: 500 },
         pending: { orderBy: { createdAt: 'asc' } },
         artifacts: { orderBy: { createdAt: 'asc' } },
       },
     });
     if (!application) return reply.code(404).send({ error: 'Not found' });
-    return { application };
+    application.events.reverse();
+    const atWall = isParked(blockerKey(application.id));
+    return {
+      application,
+      atWall,
+      handoff: application.status === 'NEEDS_HUMAN' ? handoffKind(application, atWall) : null,
+      tabOpen: tabLeftOpen(application.id),
+    };
   });
 
   app.post<{ Params: { id: string } }>('/api/applications/:id/start', async (req, reply) => {
     const profile = await requireProfile(req, reply);
     if (!profile) return;
     if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
-    await prisma.application.update({
-      where: { id: req.params.id },
+    // Re-queueing a submitted application applies to the same job twice.
+    const requeued = await prisma.application.updateMany({
+      where: { id: req.params.id, status: { not: 'SUBMITTED' } },
       data: { status: 'QUEUED', blockedReason: null },
     });
+    if (requeued.count === 0) return reply.code(409).send({ error: 'You already applied to this job.' });
+    // Unanswered questions belong to the run that died; the new one re-reads
+    // the form and asks again. Answered ones are kept and reused.
+    await prisma.pendingQuestion.deleteMany({ where: { applicationId: req.params.id, answeredAt: null } });
     enqueue(req.params.id);
     return { ok: true };
   });
@@ -118,18 +135,19 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
     if (!profile) return;
     if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
     
-    // Clear all state and start fresh
-    await prisma.application.update({
-      where: { id: req.params.id },
+    // Clear all state and start fresh - only for a run that ended without submitting.
+    const reset = await prisma.application.updateMany({
+      where: { id: req.params.id, status: { in: ['FAILED', 'CANCELLED'] } },
       data: {
         status: 'QUEUED',
         blockedReason: null,
         attempts: 0,
-        fieldPlan: undefined,
+        fieldPlan: Prisma.DbNull,
         coverLetter: null,
         confirmation: null,
       },
     });
+    if (reset.count === 0) return reply.code(409).send({ error: 'Only a failed or cancelled run can be restarted.' });
     
     // Clear pending questions, events, and artifacts
     await prisma.pendingQuestion.deleteMany({ where: { applicationId: req.params.id } });
@@ -203,11 +221,56 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
       remember: a.remember,
     })));
 
-    if (!delivered) {
-      return reply.code(409).send({
-        error: 'That run is not currently waiting for answers. They were saved to your answer bank; restart the application to use them.',
-      });
+    if (delivered) return { ok: true };
+
+    // Not parked in this process. The run may be alive in another one (started
+    // from the terminal), which watches the database and carries on within a
+    // poll or two; or it may be gone, in which case starting it again is what
+    // you wanted - a fresh run reuses every answer already on this application.
+    return { ok: true, ...(await resumeAfterAnswers(req.params.id)) };
+  });
+
+  async function resumeAfterAnswers(applicationId: string): Promise<{ resumed: 'elsewhere' | 'restarted' | 'waiting' }> {
+    const statusOf = async () =>
+      (await prisma.application.findUnique({ where: { id: applicationId }, select: { status: true } }))?.status;
+    let status = await statusOf();
+    if (status === 'NEEDS_INPUT') {
+      // Possibly parked in another process, which picks the answers up from
+      // the database within a poll or two. Give it that long first.
+      for (let i = 0; i < 3 && status === 'NEEDS_INPUT'; i++) {
+        await new Promise((r) => setTimeout(r, ANSWER_POLL_MS * 1.5));
+        status = await statusOf();
+      }
+      if (status !== 'NEEDS_INPUT') return { resumed: 'elsewhere' };
+    } else if (!(status === 'FAILED' || status === 'NEEDS_HUMAN') || activeRuns().includes(applicationId)) {
+      // Running, finished, or cancelled. FAILED and NEEDS_HUMAN with no live
+      // run here are ended runs (tab closed, set aside, server restarted):
+      // nobody else will pick these answers up, so they go back in the queue.
+      return { resumed: 'elsewhere' };
     }
+    const open = await prisma.pendingQuestion.count({ where: { applicationId, answeredAt: null } });
+    if (open > 0) return { resumed: 'waiting' };
+    await prisma.application.update({
+      where: { id: applicationId },
+      data: { status: 'QUEUED', blockedReason: 'Back in the queue with your answers.' },
+    });
+    enqueue(applicationId);
+    return { resumed: 'restarted' };
+  }
+
+  /** "I checked: it did / did not go through" - for a submit nobody could confirm. */
+  app.post<{ Params: { id: string } }>('/api/applications/:id/outcome', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
+    const { submitted } = z.object({ submitted: z.boolean() }).parse(req.body);
+    await prisma.application.update({
+      where: { id: req.params.id },
+      data: submitted
+        ? { status: 'SUBMITTED', submittedAt: new Date(), confirmation: 'You confirmed it went through.', blockedReason: null }
+        : { status: 'FAILED', blockedReason: 'Not submitted - you checked. Resume to fill it in again.' },
+    });
+    await syncLead(req.params.id);
     return { ok: true };
   });
 
@@ -240,4 +303,28 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
     }
     return { ok: true };
   });
+}
+
+/**
+ * NEEDS_HUMAN means four different things, and each wants a different button.
+ * The UI used to guess which from the log text; the run says so instead.
+ *
+ *  - WALL               a live run is parked at a sign-in or captcha; it carries on
+ *  - CAPTCHA_ON_SUBMIT  a live run pressed submit and the captcha challenged
+ *  - UNCONFIRMED        submit was pressed and nobody could see whether it landed
+ *  - SET_ASIDE          autopilot left the form in a tab for you and moved on
+ *  - STOPPED            the run ended before the form (no form found, a wall)
+ */
+export type Handoff = 'WALL' | 'CAPTCHA_ON_SUBMIT' | 'UNCONFIRMED' | 'SET_ASIDE' | 'STOPPED';
+
+function handoffKind(
+  app: { blockedReason: string | null; events: Array<{ type: string; data: Prisma.JsonValue }> },
+  atWall: boolean,
+): Handoff {
+  if (atWall) return 'WALL';
+  // A restart mid-submit leaves no event behind, only this reason.
+  if (/Submit was pressed|mid-submit|may have gone through/i.test(app.blockedReason ?? '')) return 'UNCONFIRMED';
+  const last = [...app.events].reverse().find((e) => e.type === 'STATUS' || e.type === 'BLOCKED');
+  const tagged = (last?.data as { handoff?: Handoff } | null)?.handoff;
+  return tagged ?? 'STOPPED';
 }

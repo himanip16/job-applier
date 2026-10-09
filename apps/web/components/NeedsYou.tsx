@@ -4,6 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useOverview } from '../lib/overview';
 import { useAuth } from '../lib/auth';
+import { AllQuestions } from './AllQuestions';
+import { AccountPassword } from './AccountPassword';
+import { SsoProvider } from './SsoProvider';
+
+/** How many runs were waiting on questions when the popup last opened, this tab session. */
+const SEEN_KEY = 'ja.questionsSeen';
 
 /**
  * The nudge.
@@ -27,9 +33,43 @@ export function NeedsYou() {
   const pathname = usePathname();
   const [dismissed, setDismissed] = useState<string | null>(null);
   const notifiedFor = useRef<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [autoOpened, setAutoOpened] = useState(false);
 
-  const first = data?.needsYou.first ?? null;
-  const total = data?.needsYou.total ?? 0;
+  const needsInput = data?.needsYou.needsInput ?? 0;
+  // Only unanswered questions interrupt you. Questions sort first on the
+  // server, so when there are any, `first` is one of them.
+  const urgent = data?.needsYou.first ?? null;
+  const first = urgent?.status === 'NEEDS_INPUT' ? urgent : null;
+  const total = needsInput;
+  const onRunPage = pathname?.startsWith('/applications/') ?? false;
+  // A job page is for reading about that job; popping every waiting question
+  // over it on open gets in the way. The bar's button still opens them.
+  const onJobPage = pathname?.startsWith('/jobs/') ?? false;
+
+  // Pop the questions up by themselves when a new run starts waiting on them,
+  // rather than waiting for you to notice the bar. Remembered per tab session,
+  // so moving between pages does not reopen it for the same questions.
+  useEffect(() => {
+    // Before the first poll lands needsInput reads 0. Recording that as seen
+    // would make every page load look like new questions arrived.
+    if (!data || onRunPage || onJobPage) return;
+    let seen = 0;
+    try {
+      seen = Number(window.sessionStorage.getItem(SEEN_KEY) ?? 0);
+    } catch {
+      // Blocked storage: it may reopen on navigation, which is the lesser problem.
+    }
+    if (needsInput > seen) {
+      setAsking(true);
+      setAutoOpened(true);
+    }
+    try {
+      window.sessionStorage.setItem(SEEN_KEY, String(needsInput));
+    } catch {
+      // As above.
+    }
+  }, [data, needsInput, onRunPage, onJobPage]);
 
   // Notify on a *new* item, not on every poll. Keyed by id so a second run
   // needing you still gets through while the first is unresolved.
@@ -49,12 +89,24 @@ export function NeedsYou() {
     };
   }, [first]);
 
-  if (!first || total === 0) return null;
-  if (dismissed === first.id) return null;
+  const questions = asking && !onRunPage ? <AllQuestions auto={autoOpened} onClose={() => { setAsking(false); setAutoOpened(false); }} /> : null;
+  // Shown on every page, the run's own included: the run is waiting on it.
+  const popup = (
+    <>
+      {questions}
+      <AccountPassword waiting={urgent} />
+      <SsoProvider waiting={urgent} />
+    </>
+  );
+
+  if (!first || total === 0) return popup;
+  if (dismissed === first.id) return popup;
   // Already looking at it.
-  if (pathname === `/applications/${first.id}`) return null;
+  if (pathname === `/applications/${first.id}`) return popup;
 
   return (
+    <>
+    {popup}
     <div
       role="status"
       style={{
@@ -115,6 +167,11 @@ export function NeedsYou() {
         </div>
         <div className="row" style={{ gap: '.4rem', flex: 'none' }}>
           <NotifyOptIn />
+          {needsInput > 0 && !onRunPage && (
+            <button className="primary" onClick={() => { setAutoOpened(false); setAsking(true); }}>
+              Answer all questions
+            </button>
+          )}
           <a href={`/applications/${first.id}`}>
             <button className="primary">Take the action</button>
           </a>
@@ -124,6 +181,7 @@ export function NeedsYou() {
         </div>
       </div>
     </div>
+    </>
   );
 }
 

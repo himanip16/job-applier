@@ -117,7 +117,7 @@ function SignInForm() {
               height: '2.75rem',
               borderRadius: 'var(--radius)',
               background: 'linear-gradient(155deg, var(--accent), var(--accent-active))',
-              color: '#fff',
+              color: 'var(--accent-contrast)',
               boxShadow: 'var(--shadow-md)',
               marginBottom: '.8rem',
             }}

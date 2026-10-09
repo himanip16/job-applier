@@ -6,7 +6,7 @@ keeps a record of what happened.
 
 Four parts:
 
-1. **Find work** — searches the web for openings that match your resume, with
+1. **Find work** — reads target-company careers sources for openings matching your resume, with
    no list of companies from you, and puts the plausible ones in a triage
    queue. Reject one and say why, and the ranking moves; the sibling job two
    rows down re-ranks immediately.
@@ -30,70 +30,34 @@ required for very much is.
 
 ## Finding work
 
-Press **Find jobs for me**. You do not name any companies.
+Press **Find jobs for me** and choose a country. The app derives role titles
+from your resume, preferences and decisions, then reads the 100 companies in
+`companies_50lpa.json`, ordered by their listed compensation ceiling. Companies
+without a configured careers source are listed separately and are not crawled.
 
-It reads your resume, your stated preferences and — most usefully — the
-postings you have already shortlisted or rejected, turns that into a handful of
-web searches, and runs them **restricted to the job boards it can actually
-submit an application to**. A posting it cannot apply to is not a lead, it is a
-distraction.
+Sources include public ATS board APIs, company careers backends (including
+Amazon, Workday, Google and Eightfold), and a browser crawler for configured
+careers-page URLs. Find Work uses these sources directly and does not require
+Firecrawl search credits. Coverage depends on each source's query, paging and
+detail limits; a successful request does not guarantee a complete company list.
 
-Then the part that makes this cheap and accurate. A search result is just a
-URL, but `job-boards.greenhouse.io/mercury/jobs/6118243004` says the posting is
-Greenhouse board `mercury`, and that is enough to call Greenhouse's own API and
-get *every* opening at that company with full descriptions, real locations and
-posting dates — free, structured, no parsing. So the flow is:
+The report shows postings fetched before filtering, postings that passed,
+new leads saved, duplicates, filter exclusions with example titles, and every
+company attempted. Source failures, query/detail limits and missing descriptions
+are visible under **Source coverage**. Companies with no careers source appear
+in their own list rather than being counted as failures.
 
-```
-search  ->  recognise the board  ->  hydrate from the board's own API
-(paid)      (a regex)                (free, complete, and finds the siblings)
-```
+Titles are normalized across common aliases such as SDE, MTS and Developer.
+A generic title such as Software Engineer II can also match a backend plan when
+its description names backend or server-side work. Explicitly different roles
+still have to pass the title gate. Existing country, age and seniority filters
+continue to apply.
 
-One search hit routinely becomes several leads, and each company found is added
-to the watch list below, so its *future* postings arrive through the ordinary
-crawl without costing another search.
-
-Hydrating a whole board is a gift for coverage and a hazard for a triage queue:
-Mercury has 56 openings and a backend engineer wants one of them. So postings
-the search actually matched are always kept, and their siblings have to look
-like a role the plan asked for — same distinctive words *and* the same kind of
-job, which is what stops a search for "payments" surfacing `Counsel, Product &
-Regulatory - Payments & AML`.
-
-### Boards it can read
-
-| Source | What it uses |
-|---|---|
-| `greenhouse` | `boards-api.greenhouse.io` — the board's own public postings API, full descriptions included |
-| `lever` | `api.lever.co/v0/postings` |
-| `ashby` | `api.ashbyhq.com/posting-api` |
-| `workable` | `apply.workable.com/api/v3` |
-| `careers-page` | a real crawl of a company's own site — same origin, depth-limited, page-budgeted, rate-limited |
-
-Four of the five are the platforms' own public APIs, published so aggregators
-can read them. Structured JSON beats scraping a React page in every respect
-that matters here.
-
-Not every board answers: some Greenhouse boards 404 on the public API even
-though the posting is live. When that happens the posting search found is kept
-anyway, with the shorter description, and the run says so.
-
-Every posting gets a free lexical score; only the top slice gets read in full by
-a model. A 400-job crawl therefore costs a handful of model calls, not 400.
-
-### What search costs
-
-Searching needs a [Firecrawl](https://firecrawl.dev) key — paste it on the
-Settings page, or set `FIRECRAWL_API_KEY`. The free tier is enough for a
-personal job hunt. A run is about two credits
-per query and six queries by default, so roughly a dozen credits; everything
-after the search is done by the boards' own free APIs.
-
-Without the key the rest of the app is unaffected: add companies by hand and
-crawl those, or paste a job URL straight into a run.
-
-Your queries are derived from your resume and sent to Firecrawl, which passes
-them to a web search provider. The resume itself is not sent.
+Every admitted posting gets a lexical score; the top 15 new leads receive a
+model assessment by default. Scores rank jobs without dismissing them or
+changing your saved, applied or rejected decisions. Older automatically dismissed
+jobs remain in Dismissed, but their recorded automatic reasons are excluded from
+both search-planning and fit-assessment preference history.
 
 ### How the ranking learns
 
@@ -165,16 +129,10 @@ long application.
 
 ### What about Google, Amazon, and other in-house systems?
 
-They work the same way, with one caveat. Only Greenhouse, Lever, Ashby and
-Workable publish board APIs, so **Find jobs for me** only searches those — an
-in-house careers site will not turn up there. You can still paste the URL into
-a run and the generic adapter drives it.
-
-Google Careers is the honest example. Its Apply link redirects to
-`accounts.google.com`, whose first screen asks for an email address and nothing
-else — no password field, no "sign in to apply" text. That is why login
-detection also matches known identity-provider hosts. You sign in once, press
-**Done — carry on**, and the wizard continues.
+Find Work can read companies that have a configured careers backend, including
+Google and Amazon. Discovery and application support are separate: when there
+is no dedicated form adapter, the generic adapter drives the application and
+stops for review or human input. You can also paste a job URL directly into a run.
 
 ## One job, one page
 

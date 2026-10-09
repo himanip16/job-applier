@@ -92,6 +92,8 @@ export const config = {
   actionDelayMs: num(process.env.ACTION_DELAY_MS, 120),
 
   requireReview: bool(process.env.REQUIRE_REVIEW, true),
+  /** Screenshots of each step. Off: nobody looked at them, and they are personal data on disk. */
+  saveScreenshots: bool(process.env.SAVE_SCREENSHOTS, false),
   /**
    * How many screens of a wizard to walk before giving up.
    *

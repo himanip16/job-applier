@@ -1,211 +1,417 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { API, api } from '../../lib/api';
+import { Icon, type IconName } from '../../components/Icon';
+import s from './profile.module.css';
+import { History } from './History';
 
 interface Fact { id: string; key: string; label: string; value: string }
 interface Resume { id: string; label: string; filename: string; bytes: number; isDefault: boolean }
 interface Profile {
   id: string; email: string; fullName: string; firstName: string; lastName: string;
   phone: string | null; city: string | null; region: string | null; country: string | null;
-  citizenship: string | null; expectedCTC: string | null; linkedin: string | null; github: string | null; website: string | null; summary: string | null;
+  countryCode: string | null; citizenship: string | null; expectedCTC: string | null; linkedin: string | null; github: string | null; website: string | null; portfolio: string | null; summary: string | null;
   facts: Fact[]; resumes: Resume[];
 }
 
-const FIELDS: [keyof Profile, string][] = [
-  ['fullName', 'Full name'], ['firstName', 'First name'], ['lastName', 'Last name'],
-  ['email', 'Email'], ['phone', 'Phone'], ['city', 'City'], ['region', 'State / region'],
-  ['country', 'Country'], ['citizenship', 'Citizenship'], ['expectedCTC', 'Expected CTC (Salary)'], ['linkedin', 'LinkedIn URL'], ['github', 'GitHub URL'],
-  ['website', 'Website / portfolio'],
+type Key = keyof Profile;
+
+/** The details, in the groups a person thinks of them in. */
+const GROUPS: { title: string; icon: IconName; fields: [Key, string, string?][] }[] = [
+  { title: 'Name', icon: 'user', fields: [['fullName', 'Full name'], ['firstName', 'First name'], ['lastName', 'Last name']] },
+  { title: 'Contact', icon: 'mail', fields: [['email', 'Email', 'you@example.com'], ['phone', 'Phone', '+91 98765 43210']] },
+  { title: 'Location', icon: 'pin', fields: [['city', 'City'], ['region', 'State / region'], ['country', 'Country'], ['countryCode', 'Country code'], ['citizenship', 'Citizenship']] },
+  { title: 'Links', icon: 'link', fields: [['linkedin', 'LinkedIn', 'linkedin.com/in/…'], ['github', 'GitHub', 'github.com/…'], ['website', 'Website'], ['portfolio', 'Portfolio']] },
+  { title: 'Salary', icon: 'wallet', fields: [['expectedCTC', 'Expected CTC', 'e.g. 45 LPA']] },
 ];
 
-/**
- * The facts most forms ask for. Filling these in is what stops the popup from
- * appearing on every single application.
- */
-const SUGGESTED: { key: string; label: string }[] = [
-  { key: 'citizenship.country', label: 'Citizenship country' },
-  { key: 'work_auth.authorized', label: 'Legally authorized to work in the country of the role' },
-  { key: 'work_auth.sponsorship_required', label: 'Requires visa sponsorship now or in future' },
-  { key: 'work_auth.visa_status', label: 'Current visa / work authorization status' },
-  { key: 'experience.years_total', label: 'Years of professional experience' },
-  { key: 'compensation.expectation', label: 'Salary expectation' },
-  { key: 'compensation.expectation_min', label: 'Minimum salary expectation' },
-  { key: 'compensation.expectation_max', label: 'Maximum salary expectation' },
-  { key: 'availability.notice_period', label: 'Notice period' },
-  { key: 'availability.start_date', label: 'Earliest start date' },
-  { key: 'logistics.relocate', label: 'Willing to relocate' },
-  { key: 'legal.age_18', label: 'At least 18 years old' },
-  { key: 'legal.non_compete', label: 'Subject to a non-compete' },
-  { key: 'history.source', label: 'How did you hear about this role' },
-];
+const FIELDS: [Key, string][] = GROUPS.flatMap((g) => g.fields.map(([k, l]) => [k, l] as [Key, string]));
+const URL_FIELDS: Key[] = ['linkedin', 'github', 'website', 'portfolio'];
+
+/** How long after the last keystroke the profile saves itself. */
+const AUTOSAVE_MS = 900;
+
+type SaveState =
+  | { kind: 'idle' }
+  | { kind: 'saving' }
+  | { kind: 'saved' }
+  | { kind: 'waiting'; reason: string }
+  | { kind: 'error'; reason: string };
+
+const trimmed = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+/** "linkedin.com/in/x" is what people type; the server wants a full address. */
+const asUrl = (v: string) => (v && !/^https?:\/\//i.test(v) ? `https://${v}` : v);
 
 export default function ProfilePage() {
   const [profile, setProfile] = useState<Partial<Profile>>({});
-  const [saved, setSaved] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [save, setSave] = useState<SaveState>({ kind: 'idle' });
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [filling, setFilling] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [fresh, setFresh] = useState<Key[]>([]);
+  // Edits since the last save; only these trigger an autosave.
+  const dirty = useRef(false);
 
-  const load = () =>
-    api<{ profile: Profile | null }>('/api/profile').then((d) => setProfile(d.profile ?? {}));
+  const load = useCallback(async () => {
+    const d = await api<{ profile: Profile | null }>('/api/profile');
+    dirty.current = false;
+    setProfile(d.profile ?? {});
+    setLoaded(true);
+  }, []);
 
-  useEffect(() => { load().catch((e) => setError(e.message)); }, []);
+  useEffect(() => { load().catch((e) => setNotice({ ok: false, text: e.message })); }, [load]);
 
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
+  const persist = useCallback(async (p: Partial<Profile>) => {
+    const missing = [
+      !trimmed(p.fullName) && 'name',
+      !trimmed(p.firstName) && 'first name',
+      !trimmed(p.email) && 'email',
+    ].filter(Boolean) as string[];
+    if (missing.length) {
+      setSave({ kind: 'waiting', reason: `Add your ${missing.join(', ')} to start saving` });
+      return;
+    }
+    setSave({ kind: 'saving' });
     try {
+      const opt = (k: Key) => trimmed(p[k]) || undefined;
       await api('/api/profile', {
         method: 'PUT',
         body: JSON.stringify({
-          email: profile.email, fullName: profile.fullName,
-          firstName: profile.firstName, lastName: profile.lastName,
-          phone: profile.phone ?? undefined, city: profile.city ?? undefined,
-          region: profile.region ?? undefined, country: profile.country ?? undefined,
-          citizenship: profile.citizenship ?? undefined, expectedCTC: profile.expectedCTC ?? undefined,
-          linkedin: profile.linkedin ?? undefined, github: profile.github ?? undefined,
-          website: profile.website ?? undefined, summary: profile.summary ?? undefined,
+          email: trimmed(p.email), fullName: trimmed(p.fullName),
+          firstName: trimmed(p.firstName), lastName: trimmed(p.lastName),
+          phone: opt('phone'), city: opt('city'), region: opt('region'), country: opt('country'),
+          countryCode: opt('countryCode'), citizenship: opt('citizenship'), expectedCTC: opt('expectedCTC'),
+          linkedin: opt('linkedin') && asUrl(opt('linkedin')!), github: opt('github') && asUrl(opt('github')!),
+          website: opt('website') && asUrl(opt('website')!), portfolio: opt('portfolio') && asUrl(opt('portfolio')!), summary: opt('summary'),
         }),
       });
-      setSaved('Saved.');
-      setTimeout(() => setSaved(null), 2500);
-      await load();
-    } catch (e) { setError((e as Error).message); }
-  }
+      dirty.current = false;
+      setSave({ kind: 'saved' });
+      // A first save creates the profile: pick up its id so resume and answers unlock.
+      if (!p.id) await load();
+    } catch (e) {
+      const msg = (e as Error).message;
+      setSave({ kind: 'error', reason: /invalid input/i.test(msg) ? 'Check the email and links — one of them is not valid' : msg });
+    }
+  }, [load]);
+
+  // Autosave: a moment after you stop typing.
+  useEffect(() => {
+    if (!loaded || !dirty.current) return;
+    const t = setTimeout(() => void persist(profile), AUTOSAVE_MS);
+    return () => clearTimeout(t);
+  }, [profile, loaded, persist]);
+
+  const edit = (patch: Partial<Profile>) => {
+    dirty.current = true;
+    setProfile((p) => ({ ...p, ...patch }));
+  };
 
   async function upload(file: File) {
     setUploading(true);
-    setError(null);
+    setNotice(null);
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const res = await fetch(`${API}/api/resume`, { method: 'POST', body: fd });
+      const res = await fetch(`${API}/api/resume`, { method: 'POST', body: fd, credentials: 'include' });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? 'Upload failed');
-      setSaved(
-        body.warning
+      // A new resume replaces the current one: apply with it, and update the
+      // details from it rather than only filling blanks.
+      if (body.resume && !body.resume.isDefault) {
+        await switchResume(body.resume, body.warning);
+        return;
+      }
+      const filled: Key[] = body.filled ?? [];
+      await load();
+      setFresh(filled);
+      setNotice({
+        ok: !body.warning,
+        text: body.warning
           ? `Uploaded, but: ${body.warning}`
-          : `Uploaded. Extracted ${body.words} words for the model to work from.`,
+          : filled.length
+            ? `Resume added, and ${filled.length} detail${filled.length === 1 ? '' : 's'} filled in from it: ${filled.map(labelOf).join(', ')}.`
+            : 'Resume added.',
+      });
+    } catch (e) {
+      setNotice({ ok: false, text: (e as Error).message });
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  /**
+   * Switch the resume used for applications, and bring the details in line
+   * with it. Unlike "Autofill from resume" this overwrites: picking a resume
+   * says it is the current one. A detail the resume does not state is left
+   * as it is rather than cleared.
+   */
+  async function switchResume(r: Pick<Resume, 'id' | 'filename'>, warning?: string) {
+    setNotice(null);
+    const caveat = warning ? ` Note: ${warning}` : '';
+    try {
+      await api(`/api/resume/${r.id}/default`, { method: 'POST' });
+      const d = await api<{ details: Record<string, string> }>('/api/profile/autofill');
+      const changed = Object.entries(d.details).filter(
+        ([k, v]) => trimmed(v) && trimmed(v) !== trimmed(profile[k as Key]),
       );
       await load();
-    } catch (e) { setError((e as Error).message); }
-    finally { setUploading(false); }
+      if (!changed.length) {
+        setNotice({ ok: true, text: `Now using ${r.filename}. Your details already match it.${caveat}` });
+        return;
+      }
+      edit(Object.fromEntries(changed) as Partial<Profile>);
+      setFresh(changed.map(([k]) => k as Key));
+      setNotice({
+        ok: true,
+        text: `Now using ${r.filename}. Updated from it: ${changed
+          .map(([k, v]) => {
+            const was = trimmed(profile[k as Key]);
+            return was ? `${labelOf(k)} (was ${was}, now ${v})` : `${labelOf(k)} (${v})`;
+          })
+          .join('; ')}.${caveat}`,
+      });
+    } catch (e) {
+      setNotice({ ok: false, text: (e as Error).message });
+    }
   }
 
-  async function saveFact(key: string, label: string, value: string) {
-    await api('/api/facts', { method: 'POST', body: JSON.stringify({ key, label, value }) });
-    await load();
+  /** Fill the empty boxes from the resume; autosave takes it from there. */
+  async function autofill() {
+    setFilling(true);
+    setNotice(null);
+    try {
+      const d = await api<{ details: Record<string, string>; reason?: string }>('/api/profile/autofill');
+      const empty = Object.entries(d.details).filter(([k, v]) => v && !trimmed(profile[k as Key]));
+      if (!empty.length) {
+        setNotice({ ok: true, text: d.reason ?? 'Nothing new to fill: every detail your resume has is already here.' });
+      } else {
+        edit(Object.fromEntries(empty) as Partial<Profile>);
+        setFresh(empty.map(([k]) => k as Key));
+        setNotice({ ok: true, text: `Filled ${empty.map(([k]) => labelOf(k)).join(', ')} from your resume.` });
+      }
+    } catch (e) {
+      setNotice({ ok: false, text: (e as Error).message });
+    } finally {
+      setFilling(false);
+    }
   }
 
-  const factFor = (key: string) => profile.facts?.find((f) => f.key === key);
+  const filledCount = FIELDS.filter(([k]) => trimmed(profile[k])).length + (profile.resumes?.length ? 1 : 0);
+  const totalCount = FIELDS.length + 1;
+  const canSave = trimmed(profile.fullName) && trimmed(profile.firstName) && trimmed(profile.email);
 
   return (
-    <>
-      <div className="panel">
-        <h2>Who you are</h2>
-        <p className="sub">These fill the name/contact half of every form directly, with no model involved.</p>
-        <form onSubmit={save}>
-          <div className="grid2">
-            {FIELDS.map(([k, label]) => (
-              <label className="field" key={k}>
-                <span>{label}</span>
-                <input
-                  type="text"
-                  value={(profile[k] as string) ?? ''}
-                  onChange={(e) => setProfile((p) => ({ ...p, [k]: e.target.value }))}
-                />
-              </label>
+    <div className={s.page}>
+      <header className={s.header}>
+        <div>
+          <span className={s.eyebrow}>Your profile</span>
+          <h1>Profile</h1>
+          <p>What every application is filled from. Start with your resume; the rest mostly fills itself.</p>
+        </div>
+        <div className={s.meter}>
+          <div className={s.meterLabel}>
+            <span>Profile complete</span>
+            <strong>{filledCount} of {totalCount}</strong>
+          </div>
+          <div className={s.meterTrack}>
+            <div
+              className={`${s.meterFill} ${filledCount === totalCount ? s.done : ''}`}
+              style={{ width: `${Math.round((filledCount / totalCount) * 100)}%` }}
+            />
+          </div>
+          <div className={s.saveActions}>
+            <button
+              type="button"
+              className={s.saveBtn}
+              onClick={() => void persist(profile)}
+              disabled={save.kind === 'saving'}
+              title={!canSave ? 'Fill in your name and email to save' : 'Save your profile'}
+            >
+              {save.kind === 'saving' ? (
+                <>
+                  <Icon name="refresh" size={14} className="spin" /> Saving…
+                </>
+              ) : (
+                <>
+                  <Icon name="check" size={14} /> Save
+                </>
+              )}
+            </button>
+            <SaveStatus state={save} />
+          </div>
+        </div>
+      </header>
+
+      {notice && (
+        <div className={`notice ${notice.ok ? 'good' : 'bad'}`} role="status">
+          <span className={s.toast}>
+            <Icon name={notice.ok ? 'checkCircle' : 'alert'} size={15} /> {notice.text}
+          </span>
+        </div>
+      )}
+
+      {/* ---- Resume: first, because it fills everything else ---- */}
+      <section className={s.section}>
+        <div className={s.sectionHead}>
+          <div className={s.sectionTitle}>
+            <span className={s.sectionIcon}><Icon name="text" size={18} /></span>
+            <div>
+              <h2>Resume</h2>
+              <p>Attached to your applications, and the only thing the AI may make claims from. Adding one fills in your details below.</p>
+            </div>
+          </div>
+        </div>
+
+        <label
+          className={`${s.drop} ${profile.resumes?.length ? s.compact : ''} ${dragOver ? s.over : ''} ${uploading ? s.busy : ''}`}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f && !uploading) void upload(f);
+          }}
+        >
+          <input
+            type="file"
+            accept=".pdf,.doc,.docx"
+            disabled={uploading}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }}
+          />
+          <span className={s.dropIcon}>
+            <Icon name={uploading ? 'refresh' : 'upload'} size={20} className={uploading ? 'spin' : undefined} />
+          </span>
+          <span className={s.dropTitle}>
+            {uploading ? 'Reading your resume…' : profile.resumes?.length ? 'Add another resume' : 'Drop your resume here, or choose a file'}
+          </span>
+          <span className={s.dropHint}>PDF, DOC or DOCX</span>
+        </label>
+
+        {profile.resumes?.length ? (
+          <div className={s.files}>
+            {profile.resumes.map((r) => (
+              <div key={r.id} className={`${s.file} ${r.isDefault ? s.default : ''}`}>
+                <Icon name="text" size={16} />
+                <span className={s.fileName}>{r.filename}</span>
+                <span className={s.fileMeta}>{(r.bytes / 1024).toFixed(0)} KB</span>
+                {r.isDefault ? (
+                  <span className={s.badge}><Icon name="star" size={12} /> Used for applications</span>
+                ) : (
+                  <button
+                    className={s.ghostBtn}
+                    onClick={() => switchResume(r)}
+                    title="Use this resume for applications, and update your details from it"
+                  >
+                    Use this one
+                  </button>
+                )}
+              </div>
             ))}
           </div>
-          <label className="field">
-            <span>Summary — used to ground cover letters</span>
-            <textarea
-              value={profile.summary ?? ''}
-              onChange={(e) => setProfile((p) => ({ ...p, summary: e.target.value }))}
-            />
-          </label>
-          <button className="primary">Save</button>
-          {saved && <span className="small" style={{ marginLeft: '.8rem', color: 'var(--good)' }}>{saved}</span>}
-        </form>
-        {error && <div className="notice bad" style={{ marginTop: '.8rem' }}>{error}</div>}
-      </div>
-
-      <div className="panel">
-        <h2>Resume</h2>
-        <p className="sub">
-          Attached to applications, and its text is the only thing the model is allowed to make
-          claims from. PDF, DOCX or TXT.
-        </p>
-        <input
-          type="file"
-          accept=".pdf,.docx,.txt,.md"
-          disabled={uploading || !profile.id}
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }}
-        />
-        {!profile.id && <p className="muted small">Save your profile first.</p>}
-        {profile.resumes?.length ? (
-          <table style={{ marginTop: '.8rem' }}>
-            <tbody>
-              {profile.resumes.map((r) => (
-                <tr key={r.id}>
-                  <td>{r.filename}</td>
-                  <td className="muted small">{(r.bytes / 1024).toFixed(0)} KB</td>
-                  <td>
-                    {r.isDefault ? (
-                      <span className="src USER">default</span>
-                    ) : (
-                      <button
-                        onClick={async () => {
-                          await api(`/api/resume/${r.id}/default`, { method: 'POST' });
-                          await load();
-                        }}
-                      >
-                        Use this one
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         ) : null}
-      </div>
+      </section>
 
-      <div className="panel">
-        <h2>Standing answers</h2>
-        <p className="sub">
-          The questions nearly every form asks. Anything you fill in here is answered without
-          stopping to ask you. Anything you leave blank becomes a popup the first time it comes up,
-          and is remembered from then on.
-        </p>
-        {!profile.id ? (
-          <p className="muted small">Save your profile first.</p>
-        ) : (
-          <table>
-            <tbody>
-              {SUGGESTED.map((s) => (
-                <tr key={s.key}>
-                  <td style={{ width: '45%' }}>
-                    {s.label}
-                    <div className="muted small">{s.key}</div>
-                  </td>
-                  <td>
+      {/* ---- Details ---- */}
+      <section className={s.section}>
+        <div className={s.sectionHead}>
+          <div className={s.sectionTitle}>
+            <span className={s.sectionIcon}><Icon name="user" size={18} /></span>
+            <div>
+              <h2>Your details</h2>
+              <p>These fill the name and contact half of every form directly, with no AI involved. Changes save automatically.</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            className={s.ghostBtn}
+            onClick={autofill}
+            disabled={filling}
+            title="Fill the empty boxes with the name, email, phone and links on your resume"
+          >
+            <Icon name="sparkles" size={15} className={filling ? 'spin' : undefined} />
+            {filling ? 'Reading…' : 'Autofill from resume'}
+          </button>
+        </div>
+
+        <div className={s.groups}>
+          {GROUPS.map((g) => (
+            <div className={s.group} key={g.title}>
+              <div className={s.groupTitle}><Icon name={g.icon} size={14} /> {g.title}</div>
+              <div className={s.row}>
+                {g.fields.map(([k, label, placeholder]) => (
+                  <label className={`${s.field} ${fresh.includes(k) ? s.fresh : ''}`} key={k}>
+                    <span>{label}</span>
                     <input
-                      type="text"
-                      defaultValue={factFor(s.key)?.value ?? ''}
-                      placeholder="not set — will be asked"
+                      type={k === 'email' ? 'email' : k === 'phone' ? 'tel' : 'text'}
+                      value={(profile[k] as string) ?? ''}
+                      placeholder={placeholder}
+                      onChange={(e) => edit({ [k]: e.target.value } as Partial<Profile>)}
                       onBlur={(e) => {
-                        const v = e.target.value.trim();
-                        if (v && v !== factFor(s.key)?.value) saveFact(s.key, s.label, v);
+                        if (URL_FIELDS.includes(k) && e.target.value.trim()) edit({ [k]: asUrl(e.target.value.trim()) } as Partial<Profile>);
                       }}
                     />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          <div className={s.group}>
+            <div className={s.groupTitle}><Icon name="message" size={14} /> About you</div>
+            <label className={s.field}>
+              <span>Summary — used to ground cover letters</span>
+              <textarea
+                value={profile.summary ?? ''}
+                placeholder="Two or three sentences on what you do and what you are looking for."
+                onChange={(e) => edit({ summary: e.target.value })}
+              />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      {profile.id && (
+        <History
+          key={profile.id}
+          facts={profile.facts ?? []}
+          onError={(text) => setNotice({ ok: false, text })}
+        />
+      )}
+
+      <a href="/answers" className={`${s.section} ${s.linkCard}`}>
+        <span className={s.sectionIcon}><Icon name="checkCircle" size={18} /></span>
+        <span>
+          <strong>Visa, notice period, salary and other common questions</strong>
+          <span className={s.linkHint}>Answer them once on the Answers page and forms stop asking.</span>
+        </span>
+        <Icon name="arrowRight" size={18} />
+      </a>
+    </div>
   );
+}
+
+function SaveStatus({ state }: { state: SaveState }) {
+  const style = { marginTop: '.5rem', fontSize: 'var(--fs-xs)', display: 'flex', alignItems: 'center', gap: '.35rem' } as const;
+  switch (state.kind) {
+    case 'saving':
+      return <div style={{ ...style, color: 'var(--muted)' }} role="status"><Icon name="refresh" size={12} className="spin" /> Saving…</div>;
+    case 'saved':
+      return <div style={{ ...style, color: 'var(--good)' }} role="status"><Icon name="check" size={12} /> All changes saved</div>;
+    case 'waiting':
+      return <div style={{ ...style, color: 'var(--muted)' }} role="status">{state.reason}</div>;
+    case 'error':
+      return <div style={{ ...style, color: 'var(--bad)' }} role="alert"><Icon name="alert" size={12} /> Not saved: {state.reason}</div>;
+    default:
+      return <div style={{ ...style, color: 'var(--muted)' }}>Changes save automatically</div>;
+  }
+}
+
+/** A field key as the form labels it, for messages. */
+function labelOf(key: string): string {
+  return FIELDS.find(([k]) => k === key)?.[1] ?? key;
 }

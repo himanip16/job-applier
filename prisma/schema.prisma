@@ -86,7 +86,7 @@ model Profile {
   /// attaches it to a user on first run.
   userId      String? @unique
   user        User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // Email removed to avoid drift - use User.email via relation
+  email       String  @unique
   fullName    String
   firstName   String
   lastName    String
@@ -97,6 +97,7 @@ model Profile {
   country     String?
   countryCode String? // ISO-2, for phone/country comboboxes
   citizenship String? // Citizenship country for visa sponsorship determination
+  currentCTC  String? // Current salary/CTC
   expectedCTC String? // Expected salary/CTC
   linkedin    String?
   github      String?
@@ -447,6 +448,9 @@ model JobLead {
   rejectCategory String?
   decidedAt      DateTime?
 
+  /// Set once this lead turns into a real application.
+  applicationId String?
+
   discoveredAt DateTime @default(now())
 
   @@unique([profileId, url])
@@ -653,7 +657,16 @@ model Contact {
   isConnection Boolean   @default(false)
   lastSyncedAt DateTime?
 
-  messages      OutreachMessage[]
+  /// When you decided this conversation is finished.
+  ///
+  /// Nothing infers this. A thread that has gone quiet is not the same as one
+  /// that ended - being ghosted by a recruiter looks identical in the message
+  /// history to a polite "we'll keep you in mind", and only you know which it
+  /// was. So it is set by an explicit action and never by a timer, which also
+  /// makes it reversible: reopening is just clearing the date.
+  conversationClosedAt DateTime?
+
+  messages OutreachMessage[]
   conversations LinkedInConversation[]
   outreachItems OutreachItem[]
 

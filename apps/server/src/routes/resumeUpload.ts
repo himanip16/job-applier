@@ -2,7 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import path from 'node:path';
 import { NOT_YOURS, ownedResumeFile } from '../auth/ownership.js';
 import { uploadResume, setDefaultResume } from '../services/resumeService.js';
-import type { RequireProfile } from './discovery.js';
+import { currentUser } from '../auth/sessions.js';
+import { prisma } from '../lib/db.js';
+import { contactDetailsFrom, type ContactDetails } from '../resume/contactDetails.js';
+import type { RequireProfile } from './types.js';
 
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -16,9 +19,16 @@ const MAX_LABEL_LENGTH = 100;
 
 export function registerResumeUploadRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   app.post('/api/resume', {
+    // A resume is the natural first step, so it may arrive before any
+    // profile exists: make one from the account, then fill it from the file.
     preHandler: async (req, reply) => {
-      const profile = await requireProfile(req, reply);
-      if (!profile) return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
+      const user = await currentUser(req);
+      if (!user) return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
+      const profile =
+        (await prisma.profile.findUnique({ where: { userId: user.id } })) ??
+        (await prisma.profile.create({
+          data: { userId: user.id, email: user.email, fullName: '', firstName: '', lastName: '' },
+        }));
       (req as any).profile = profile;
     }
   }, async (req, reply) => {
@@ -46,7 +56,8 @@ export function registerResumeUploadRoutes(app: FastifyInstance, requireProfile:
 
     try {
       const result = await uploadResume(profile.id, file, label);
-      return { resume: { ...result.resume, text: undefined }, words: result.words, warning: result.warning };
+      const filled = await fillBlanksFromResume(profile.id);
+      return { resume: { ...result.resume, text: undefined }, words: result.words, warning: result.warning, filled };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to upload resume';
       return reply.code(500).send({ error: message });
@@ -65,4 +76,25 @@ export function registerResumeUploadRoutes(app: FastifyInstance, requireProfile:
     await setDefaultResume(profile.id, req.params.id);
     return { ok: true };
   });
+}
+
+const FILLABLE: (keyof ContactDetails)[] = [
+  'fullName', 'firstName', 'lastName', 'email', 'phone', 'linkedin', 'github', 'website', 'city', 'region', 'country',
+];
+
+/**
+ * Put what the resume says into the profile's empty boxes. Never overwrites:
+ * anything you typed yourself wins. Returns the boxes it filled.
+ */
+async function fillBlanksFromResume(profileId: string): Promise<string[]> {
+  const profile = await prisma.profile.findUniqueOrThrow({ where: { id: profileId } });
+  const found = contactDetailsFrom(profile.resumeText ?? '');
+  const data: Partial<Record<keyof ContactDetails, string>> = {};
+  for (const key of FILLABLE) {
+    const current = (profile as Record<string, unknown>)[key];
+    if ((current === null || current === undefined || current === '') && found[key]) data[key] = found[key];
+  }
+  if (!Object.keys(data).length) return [];
+  await prisma.profile.update({ where: { id: profileId }, data }).catch(() => {});
+  return Object.keys(data);
 }

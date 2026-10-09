@@ -13,7 +13,7 @@
 
 export interface BoardRef {
   /** Matches a Source id in sources.ts. */
-  ats: 'greenhouse' | 'lever' | 'ashby' | 'workable';
+  ats: 'greenhouse' | 'lever' | 'ashby' | 'workable' | 'workday' | 'careers-page';
   /** The board slug, as those APIs expect it. */
   slug: string;
 }
@@ -25,6 +25,7 @@ export const ATS_SEARCH_DOMAINS = [
   'jobs.lever.co',
   'jobs.ashbyhq.com',
   'apply.workable.com',
+  'myworkdayjobs.com',
 ] as const;
 
 /**

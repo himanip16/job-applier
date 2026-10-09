@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { api } from '../lib/api';
 import { useOverview, type Overview } from '../lib/overview';
 import { useAuth } from '../lib/auth';
@@ -31,6 +30,7 @@ interface Health {
 
 export default function Home() {
   const auth = useAuth();
+  // Without a profile there is no overview to fetch - it would only come back as an error.
   const { data: ov, error } = useOverview(auth.authenticated && !!auth.profile);
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
@@ -39,151 +39,74 @@ export default function Home() {
   // Health is separate and barely changes — a key being added is the only
   // thing that moves it, and that already forces a reload of this page.
   useEffect(() => {
-    let isMounted = true;
-    
     api<Health>('/api/health')
-      .then((data) => {
-        if (isMounted) {
-          setHealth(data);
-        }
-      })
+      .then(setHealth)
       .catch((err) => {
-        if (isMounted) {
-          setHealthError(err.message || 'Failed to load status');
-        }
+        setHealthError(err.message || 'Failed to load status');
       });
-
-    return () => {
-      isMounted = false;
-    };
   }, []);
 
-  // Show loading state while checking authentication
   if (auth.loading) {
     return (
       <div className="panel">
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(9rem, 1fr))',
-            gap: '.75rem',
-            marginTop: '1.1rem',
-          }}
-        >
-          {[0, 1, 2, 3, 4].map((i) => (
-            <div key={i} className="skel" style={{ height: '4.5rem' }} />
-          ))}
-        </div>
+        <div className="skel" style={{ height: '4.5rem' }} />
       </div>
     );
   }
 
-  // Show auth error if authentication check failed
   if (auth.error) {
     return (
       <div className="panel">
-        <h2>Authentication error</h2>
+        <h2>Could not check your sign-in</h2>
         <div className="notice bad">{auth.error}</div>
       </div>
     );
   }
 
-  // Show sign-in prompt if not authenticated
-  if (!auth.authenticated) {
-    return (
-      <div className="panel">
-        <h2>Sign in required</h2>
-        <p className="sub">Please sign in to access your job search dashboard.</p>
-        <Link href="/signin" className="primary" style={{
-          display: 'inline-block',
-          padding: '.4rem .8rem',
-          borderRadius: 'var(--radius-sm)',
-          background: 'var(--accent)',
-          color: 'white',
-          textDecoration: 'none',
-        }}>
-          Sign in
-        </Link>
-      </div>
-    );
-  }
-
-  // Show profile creation prompt if authenticated but no profile
-  if (!auth.profile) {
+  if (auth.authenticated && !auth.profile) {
     return (
       <div className="panel">
         <h2>Create your profile</h2>
-        <p className="sub">Please create your profile to get started with job applications.</p>
-        <Link href="/profile" className="primary" style={{
-          display: 'inline-block',
-          padding: '.4rem .8rem',
-          borderRadius: 'var(--radius-sm)',
-          background: 'var(--accent)',
-          color: 'white',
-          textDecoration: 'none',
-        }}>
+        <p className="sub">Everything here starts from your profile and resume.</p>
+        <a href="/profile" className="btn primary">
           Create profile
-        </Link>
+        </a>
       </div>
     );
   }
 
-  // Show overview error if overview fetch failed
   if (error) {
-    let errorMessage = error;
-    let errorTitle = 'Cannot reach the server';
-
-    // Try to classify error from message string
-    if (error.includes('Failed to fetch') || error.includes('ECONNREFUSED') || error.includes('NetworkError')) {
-      errorTitle = 'Cannot reach the server';
-      errorMessage = 'The application server is unavailable. Please check your connection and try again.';
-    } else if (error.includes('401') || error.includes('AUTH_REQUIRED')) {
-      errorTitle = 'Authentication required';
-      errorMessage = 'Please sign in to access this page.';
-    } else if (error.includes('404') || error.includes('not found')) {
-      errorTitle = 'Resource not found';
-      errorMessage = 'The requested resource could not be found.';
-    } else if (error.includes('500') || error.includes('502') || error.includes('503')) {
-      errorTitle = 'Server error';
-      errorMessage = 'The server encountered an error. Please try again later.';
-    }
-
+    // Say which kind of failure it was; only an unreachable server needs the start command.
+    const unreachable = /failed to fetch|econnrefused|networkerror/i.test(error);
+    const title = unreachable
+      ? 'Cannot reach the server'
+      : /\b5\d\d\b/.test(error)
+        ? 'Server error'
+        : 'Could not load your overview';
     return (
       <div className="panel">
-        <h2>{errorTitle}</h2>
-        <div className="notice bad">{errorMessage}</div>
-        <div className="row" style={{ gap: '.6rem', marginTop: '.6rem' }}>
-          <button
-            onClick={() => {
-              if (navigator.clipboard) {
-                navigator.clipboard.writeText('pnpm dev:server').then(() => {
+        <h2>{title}</h2>
+        <div className="notice bad">{error}</div>
+        {unreachable && (
+          <div className="row" style={{ gap: '.6rem', marginTop: '.6rem' }}>
+            <button
+              onClick={() =>
+                navigator.clipboard?.writeText('pnpm dev:server').then(() => {
                   setCopied(true);
                   setTimeout(() => setCopied(false), 2000);
-                });
+                })
               }
-            }}
-            style={{
-              display: 'inline-block',
-              padding: '.4rem .8rem',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--border)',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: 'inherit',
-            }}
-            title="For local development"
-          >
-            {copied ? 'Copied!' : 'Copy dev start command'}
-          </button>
-          <span className="small muted" style={{ display: 'flex', alignItems: 'center' }}>
-            (For local development only)
-          </span>
-        </div>
+            >
+              {copied ? 'Copied!' : 'Copy start command'}
+            </button>
+            <span className="small muted">Server runs on port 8787</span>
+          </div>
+        )}
       </div>
     );
   }
 
-  const outstanding = ov?.needsYou.total ?? 0;
+  const outstanding = ov?.needsYou.needsInput ?? 0;
 
   return (
     <>
@@ -193,13 +116,12 @@ export default function Home() {
 
       {ov && !ov.ready && <SetupPanel setup={ov.setup} />}
 
-      <details className="panel">
-        <summary style={{ cursor: 'pointer' }}>
-          <strong>How it works</strong>{' '}
-          <span className="muted small">
-            — four parts, each usable on its own
-          </span>
+      <details className="panel disclosure">
+        <summary>
+          <strong>How it works</strong>
+          <span className="muted small">five parts, each usable on its own</span>
         </summary>
+        <div className="disclosure-body">
 
         <Feature
           step="1"
@@ -247,8 +169,8 @@ export default function Home() {
           href="/outreach"
           cta="Open outreach queue"
         >
-          Sync your LinkedIn connections, generate personalized cold messages, track replies,
-          and manage follow-ups — all with AI-generated outreach that stays within character limits.
+          Sync your LinkedIn connections, draft personalised messages to recruiters and engineers,
+          and track replies. Nothing is sent until you approve it.
         </Feature>
 
         <Feature
@@ -262,16 +184,12 @@ export default function Home() {
           wrong.
           {ov?.counts.upcomingRounds ? ` ${ov.counts.upcomingRounds} round(s) scheduled.` : ''}
         </Feature>
+        </div>
       </details>
 
       <div className="panel">
         <h2>Also here</h2>
-        <div className="grid2">
-          <Small
-            href="/outreach"
-            title="LinkedIn outreach"
-            note="Sync connections, generate AI messages, track replies and follow-ups"
-          />
+        <div className="stats" style={{ marginTop: '.7rem' }}>
           <Small
             href="/retro"
             title="Retrospective"
@@ -329,86 +247,37 @@ function NotAppliedYet({ ov }: { ov: Overview | null }) {
 
   return (
     <div className="panel">
-      <div className="spread">
+      <div className="panel-head">
         <div>
-          <h2 style={{ margin: 0 }}>Matches you have not applied to</h2>
-          <p className="sub" style={{ margin: '.2rem 0 0' }}>
-            {total} saved or new. Best {matches.length} first.
-          </p>
+          <h2>Matches you have not applied to</h2>
+          <p className="sub">{total} saved or new. Best {matches.length} first.</p>
         </div>
-        <Link href="/discover" className="primary" style={{
-          display: 'inline-block',
-          padding: '.4rem .8rem',
-          borderRadius: 'var(--radius-sm)',
-          background: 'var(--accent)',
-          color: 'white',
-          textDecoration: 'none',
-        }}>
+        <a href="/discover" className="btn primary">
           See all {total}
-        </Link>
+        </a>
       </div>
 
-      <div style={{ marginTop: '.6rem' }}>
+      <div className="list">
         {matches.map((m) => {
           const score = Math.round(m.score);
-          const tone = score >= 70 ? 'var(--good)' : score >= 45 ? 'var(--warn)' : 'var(--bad)';
+          const band = score >= 70 ? 'high' : score >= 45 ? 'mid' : 'low';
           return (
-            <Link
-              key={m.id}
-              href={`/jobs/${m.id}`}
-              className="spread"
-              style={{
-                borderTop: '1px solid var(--border)',
-                padding: '.6rem .3rem',
-                borderRadius: 'var(--radius-sm)',
-                textDecoration: 'none',
-                color: 'inherit',
-                display: 'flex',
-                alignItems: 'center',
-                overflow: 'hidden',
-              }}
-            >
-              <div className="row" style={{ gap: '.55rem', minWidth: 0, flex: 1, overflow: 'hidden' }}>
-                <span
-                  style={{
-                    flex: 'none',
-                    minWidth: '2.1rem',
-                    textAlign: 'center',
-                    fontWeight: 700,
-                    fontVariantNumeric: 'tabular-nums',
-                    color: tone,
-                    background:
-                      score >= 70 ? 'var(--good-soft)' : score >= 45 ? 'var(--warn-soft)' : 'var(--bad-soft)',
-                    borderRadius: 'var(--radius-sm)',
-                    padding: '.15rem .3rem',
-                    fontSize: '.85rem',
-                  }}
-                >
-                  {score}
-                </span>
-                <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                  <strong style={{ color: 'var(--text)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.title}</strong>
-                  <div className="row" style={{ gap: '.55rem', marginTop: '.1rem', overflow: 'hidden' }}>
-                    <span className="muted small" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.companyName}</span>
-                    {m.remote && <span className="src">remote</span>}
-                    {m.location && <span className="muted small" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.location}</span>}
-                    {m.status === 'SHORTLISTED' && <span className="src">saved</span>}
-                    {!m.deepScored && (
-                      <span className="src" title="Ranked on keywords only, not read in full">
-                        quick score
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <span style={{
-                flex: 'none',
-                padding: '.3rem .6rem',
-                borderRadius: 'var(--radius-sm)',
-                background: 'var(--border)',
-                fontSize: '.85rem',
-              }}>Open</span>
-            </Link>
+            <a key={m.id} href={`/jobs/${m.id}`} className="list-row">
+              <span className="list-row-main">
+                <span className={`score ${band}`}>{score}</span>
+                <span className="list-row-title">{m.title}</span>
+                <span className="muted small">{m.companyName}</span>
+                {m.remote && <span className="src">remote</span>}
+                {m.location && <span className="muted small">{m.location}</span>}
+                {m.status === 'SHORTLISTED' && <span className="src">saved</span>}
+                {!m.deepScored && (
+                  <span className="src" title="Ranked on keywords only, not read in full">
+                    quick score
+                  </span>
+                )}
+              </span>
+              <span className="btn small">Open</span>
+            </a>
           );
         })}
       </div>
@@ -430,53 +299,26 @@ function Hero({ ov }: { ov: Overview | null }) {
       </h1>
       <p className="sub" style={{ marginTop: 0, maxWidth: '42rem' }}>
         It finds the openings, ranks them against what you actually want, fills in the
-        applications, manages LinkedIn outreach, and stops to ask you only when it genuinely cannot answer honestly.
+        applications, and stops to ask you only when it genuinely cannot answer honestly.
       </p>
 
       {loading ? (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(9rem, 1fr))',
-            gap: '.75rem',
-            marginTop: '1.1rem',
-          }}
-        >
+        <div className="stats" style={{ marginTop: '1.1rem' }}>
           {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} className="skel" style={{ height: '4.5rem' }} />
           ))}
         </div>
       ) : nothingYet ? (
         <div className="row" style={{ gap: '.6rem', marginTop: '1rem' }}>
-          <Link href="/discover" className="primary" style={{
-            display: 'inline-block',
-            padding: '.4rem .8rem',
-            borderRadius: 'var(--radius-sm)',
-            background: 'var(--accent)',
-            color: 'white',
-            textDecoration: 'none',
-          }}>
+          <a href="/discover" className="btn primary">
             Find jobs for me
-          </Link>
-          <Link href="/runs" style={{
-            display: 'inline-block',
-            padding: '.4rem .8rem',
-            borderRadius: 'var(--radius-sm)',
-            background: 'var(--border)',
-            textDecoration: 'none',
-          }}>
+          </a>
+          <a href="/runs" className="btn">
             Or paste a job URL
-          </Link>
+          </a>
         </div>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(9rem, 1fr))',
-            gap: '.75rem',
-            marginTop: '1.1rem',
-          }}
-        >
+        <div className="stats" style={{ marginTop: '1.1rem' }}>
           {/*
             Ordered by what you can do something about. "Not applied yet" is
             first because it is the only number that is a to-do list; the ones
@@ -517,24 +359,17 @@ function Hero({ ov }: { ov: Overview | null }) {
               </strong>
               <div className="muted small">
                 {[
-                  y?.needsInput && `${y.needsInput} run(s) asking a question`,
-                  y?.inReview && `${y.inReview} filled and awaiting your approval`,
-                  y?.needsHuman && `${y.needsHuman} blocked on a captcha or login`,
+                  y!.needsInput && `${y!.needsInput} run(s) asking a question`,
+                  y!.inReview && `${y!.inReview} filled and awaiting your approval`,
+                  y!.needsHuman && `${y!.needsHuman} blocked on a captcha or login`,
                 ]
                   .filter(Boolean)
                   .join(' · ')}
               </div>
             </div>
-            <Link href="/runs" className="primary" style={{
-              display: 'inline-block',
-              padding: '.4rem .8rem',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--accent)',
-              color: 'white',
-              textDecoration: 'none',
-            }}>
+            <a href="/runs" className="btn primary">
               Open them
-            </Link>
+            </a>
           </div>
         </div>
       )}
@@ -556,51 +391,73 @@ function Big({
   hint?: string;
 }) {
   return (
-    <Link href={href} className="stat" title={hint} style={{ textDecoration: 'none' }}>
+    <a href={href} className="stat" title={hint}>
       <div className="stat-value" style={{ color: tone ?? 'inherit' }}>
         {value}
       </div>
       <div className="stat-label">{label}</div>
-    </Link>
+    </a>
   );
 }
 
 function SetupPanel({ setup }: { setup: SetupStep[] }) {
-  const remaining = setup.filter((s) => !s.done).length;
+  const todo = setup.filter((s) => !s.done);
+  const done = setup.filter((s) => s.done);
+
+  /*
+   * The unfinished steps are the panel; the finished ones are a receipt.
+   *
+   * Listing all six at equal weight made a tall blue slab in which the two
+   * steps you can actually act on were the hardest to pick out - a checklist
+   * that grows more prominent the more of it you complete has it backwards.
+   */
   return (
-    <div className="panel" style={{ borderColor: 'var(--accent-border)', background: 'var(--accent-soft)' }}>
-      <h2>Finish setting up</h2>
-      <p className="sub">
-        {remaining} step{remaining === 1 ? '' : 's'} left. Each one removes work later.
-      </p>
-      {setup.map((s) => (
-        <div
-          key={s.id}
-          className="spread"
-          style={{ padding: '.45rem 0', borderTop: '1px solid var(--border)' }}
-        >
-          <div>
-            <span style={{ color: s.done ? 'var(--good)' : 'var(--muted)', marginRight: '.5rem' }}>
-              {s.done ? '✓' : '○'}
-            </span>
-            <strong style={{ opacity: s.done ? 0.6 : 1 }}>{s.label}</strong>
-            <div className="muted small" style={{ marginLeft: '1.4rem' }}>
-              {s.detail}
-            </div>
-          </div>
-          {!s.done && s.href && (
-            <Link href={s.href} style={{
-              display: 'inline-block',
-              padding: '.3rem .6rem',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--border)',
-              textDecoration: 'none',
-            }}>
-              Fix
-            </Link>
-          )}
+    <div className="panel" style={{ borderColor: 'var(--accent-border)' }}>
+      <div className="panel-head">
+        <div>
+          <h2>Finish setting up</h2>
+          <p className="sub">
+            {todo.length} step{todo.length === 1 ? '' : 's'} left. Each one removes work later.
+          </p>
         </div>
-      ))}
+        <span className="muted small nums">
+          {done.length}/{setup.length} done
+        </span>
+      </div>
+
+      <div className="list">
+        {todo.map((s) => (
+          <div key={s.id} className="list-row">
+            <span className="list-row-main" style={{ flexWrap: 'nowrap' }}>
+              <span className="setup-dot" aria-hidden="true" />
+              <span style={{ minWidth: 0 }}>
+                <span className="list-row-title">{s.label}</span>
+                <span className="muted small" style={{ display: 'block' }}>
+                  {s.detail}
+                </span>
+              </span>
+            </span>
+            {s.href && (
+              <a href={s.href} className="btn small primary">
+                {s.label.startsWith('Upload') ? 'Upload' : 'Fill in'}
+              </a>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {done.length > 0 && (
+        <div className="row setup-done">
+          {done.map((s) => (
+            <span key={s.id} className="muted small" title={s.detail}>
+              <span className="setup-tick" aria-hidden="true">
+                ✓
+              </span>
+              {s.label}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -620,10 +477,6 @@ function Feature({
   badge?: number;
   children: React.ReactNode;
 }) {
-  const handleLinkClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-  };
-
   return (
     <div
       className="spread"
@@ -648,9 +501,9 @@ function Feature({
         </span>
         <div>
           <div className="row" style={{ gap: '.5rem' }}>
-            <Link href={href} style={{ textDecoration: 'none' }} onClick={handleLinkClick}>
+            <a href={href}>
               <strong>{title}</strong>
-            </Link>
+            </a>
             {badge ? (
               <span className="pill NEEDS_INPUT" style={{ textTransform: 'none' }}>
                 {badge}
@@ -662,48 +515,40 @@ function Feature({
           </p>
         </div>
       </div>
-      <Link href={href} style={{ flex: 'none',
-        display: 'inline-block',
-        padding: '.3rem .6rem',
-        borderRadius: 'var(--radius-sm)',
-        background: 'var(--border)',
-        textDecoration: 'none',
-      }} onClick={handleLinkClick}>
+      <a href={href} className="btn small">
         {cta}
-      </Link>
+      </a>
     </div>
   );
 }
 
 function Small({ href, title, note }: { href: string; title: string; note: string }) {
   return (
-    <Link href={href} style={{ textDecoration: 'none', display: 'block', padding: '.6rem 0' }}>
+    <a href={href} className="stat">
       <strong>{title}</strong>
-      <div className="muted small">{note}</div>
-    </Link>
+      <div className="stat-label">{note}</div>
+    </a>
   );
 }
 
 function StatusPanel({ health, submitted }: { health: Health; submitted: number }) {
+  /*
+   * One line, not a panel. "0 applications submitted / operational" was
+   * taking a full-width card to say nothing you would act on; it belongs at
+   * the bottom of the page in the size of a footnote.
+   */
   return (
-    <div className="panel">
-      <h2>Status</h2>
-      <div className="row" style={{ gap: '2rem', marginTop: '.4rem', alignItems: 'flex-start' }}>
-        <Stat label="applications submitted" value={submitted} />
-        <Stat 
-          label="system" 
-          value={health.ok ? 'operational' : 'degraded'} 
-          tone={health.ok ? undefined : 'var(--warn)'}
-        />
-      </div>
-    </div>
+    <p className="muted small" style={{ textAlign: 'center', marginTop: '1.5rem' }}>
+      <span className="nums">{submitted}</span> application{submitted === 1 ? '' : 's'} submitted ·
+      server {health.ok ? 'operational' : 'degraded'}
+    </p>
   );
 }
 
-function Stat({ label, value, note, tone }: { label: string; value: string | number; note?: string; tone?: string }) {
+function Stat({ label, value, note }: { label: string; value: string | number; note?: string }) {
   return (
     <div>
-      <div style={{ fontSize: '1.25rem', fontWeight: 600, color: tone ?? 'inherit' }}>{value}</div>
+      <div style={{ fontSize: '1.25rem', fontWeight: 600 }}>{value}</div>
       <div className="muted small">{label}</div>
       {note && <div className="muted small" style={{ opacity: 0.75 }}>{note}</div>}
     </div>

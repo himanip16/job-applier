@@ -7,19 +7,26 @@ import fastifyStatic from '@fastify/static';
 import { config, artifactsDir, resumesDir } from './lib/config.js';
 import { prisma } from './lib/db.js';
 import { recoverInterruptedRuns, activeRuns } from './engine/queue.js';
+import { reconcileLeads } from './engine/leadSync.js';
 import { estimateActivityCosts, activeModels } from './llm/models.js';
 import { isConfigured, LlmUnavailableError } from './llm/client.js';
 import { schemaProblem, cachedSchemaProblem } from './lib/schemaCheck.js';
 import { currentUser } from './auth/sessions.js';
 import { loadSettings } from './lib/secrets.js';
 import { isFirecrawlConfigured } from './discovery/firecrawl.js';
+import { ZodError } from 'zod';
+import { requireProfile, requireUser, type RequireUser } from './auth/requireProfile.js';
 import { registerAuthRoutes } from './routes/auth.js';
+import { registerCompanyRoutes } from './routes/companies.js';
 import { registerDiscoveryRoutes } from './routes/discovery.js';
+import { registerLeadRoutes } from './routes/leads.js';
+import { registerPreferenceRoutes } from './routes/preferences.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerJobDetailRoutes } from './routes/jobDetail.js';
 import { registerTrackerRoutes } from './routes/tracker.js';
 import { registerResumeRoutes } from './routes/resume.js';
 import { registerOutreachRoutes } from './routes/outreach.js';
+import { registerConnectionRoutes } from './routes/connections.js';
 import { registerProfileRoutes } from './routes/profile.js';
 import { registerFactsRoutes } from './routes/facts.js';
 import { registerApplicationRoutes } from './routes/applications.js';
@@ -120,12 +127,22 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body,
 // --------------------------------------------------------------- error handling ---
 
 /**
- * Global error handler for LLM and other known error types.
+ * Global error handler for LLM, Zod validation, and other known error types.
  *
- * This ensures that rate limit errors return 429 instead of 500, and other
- * LLM errors return appropriate status codes with user-friendly messages.
+ * This ensures that:
+ * - Rate limit errors return 429 instead of 500
+ * - Zod validation errors return 400 with detailed issues
+ * - Other LLM errors return appropriate status codes with user-friendly messages
  */
 app.setErrorHandler((err, req, reply) => {
+  // Handle Zod validation errors
+  if (err instanceof ZodError) {
+    return reply.code(400).send({
+      error: 'Invalid request',
+      issues: (err as any).issues,
+    });
+  }
+
   if (err instanceof LlmUnavailableError) {
     // Rate limit errors should return 429
     if (err.retryable && /rate limit|quota exhausted|429/i.test(err.message)) {
@@ -142,59 +159,18 @@ app.setErrorHandler((err, req, reply) => {
 
 // --------------------------------------------------------------- routes ---
 
-/**
- * The dossier the caller is allowed to act on.
- *
- * Every feature in this app is scoped by profileId already, so making the app
- * multi-user is almost entirely a matter of this one function no longer
- * answering "the first row in the table".
- */
-async function requireProfile(
-  req: { headers: { cookie?: string } },
-  reply: { code: (n: number) => { send: (b: unknown) => unknown } },
-) {
-  const user = await currentUser(req as FastifyRequest);
-  if (!user) {
-    reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
-    return null;
-  }
-  const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
-  if (!profile) {
-    reply.code(400).send({ error: 'Create your profile first (PUT /api/profile).' });
-    return null;
-  }
-  return profile;
-}
-
-/**
- * Require authentication only, not necessarily a profile.
- * Used for endpoints that need user context but not profile data.
- */
-async function requireUser(
-  req: { headers: { cookie?: string } },
-  reply: { code: (n: number) => { send: (b: unknown) => unknown } },
-) {
-  const user = await currentUser(req as FastifyRequest);
-  if (!user) {
-    reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
-    return null;
-  }
-  return user;
-}
-
-export type RequireUser = (
-  req: { headers: { cookie?: string } },
-  reply: { code: (n: number) => { send: (b: unknown) => unknown } },
-) => Promise<{ id: string } | null>;
-
 registerAuthRoutes(app);
+registerCompanyRoutes(app, requireProfile);
 registerDiscoveryRoutes(app, requireProfile);
+registerLeadRoutes(app, requireProfile);
+registerPreferenceRoutes(app, requireProfile);
 registerResumeRoutes(app, requireProfile);
 registerTrackerRoutes(app, requireProfile);
 registerSettingsRoutes(app);
 registerJobDetailRoutes(app, requireProfile);
 registerOutreachRoutes(app, requireProfile);
 registerProfileRoutes(app, requireProfile);
+registerConnectionRoutes(app, requireProfile);
 registerFactsRoutes(app, requireProfile);
 registerApplicationRoutes(app, requireProfile);
 registerAnswerRoutes(app, requireProfile);
@@ -238,6 +214,10 @@ const recovered = await recoverInterruptedRuns();
 if (recovered) {
   process.stdout.write(`Requeued ${recovered} run(s) interrupted by a restart.\n`);
 }
+
+// Cards a run moved before Applied meant submitted go where their run says now.
+const moved = Object.entries(await reconcileLeads().catch(() => ({})));
+if (moved.length) process.stdout.write(`Re-sorted job cards: ${moved.map(([tab, n]) => `${n} to ${tab}`).join(', ')}.\n`);
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
 process.stdout.write(`API on http://localhost:${config.port}\n`);

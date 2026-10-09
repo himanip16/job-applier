@@ -2,25 +2,21 @@
 
 import type { ReactNode } from 'react';
 import { useEffect } from 'react';
-import { usePathname } from 'next/navigation';
 import { Nav } from '../components/Nav';
 import { NeedsYou } from '../components/NeedsYou';
 import { AuthGate } from '../components/AuthGate';
 import { AccountMenu } from '../components/AccountMenu';
-import { ErrorProvider } from '../contexts/ErrorContext';
+import { ErrorProvider, useError } from '../contexts/ErrorContext';
 import { RateLimitModal } from '../components/RateLimitModal';
-import { useError } from '../contexts/ErrorContext';
 import { setRateLimitModalHandler } from '../lib/api';
+import { ToastProvider } from '../components/Toast';
 
-export function LayoutContent({ children }: { children: ReactNode }) {
-  const pathname = usePathname();
+function ClientLayout({ children }: { children: ReactNode }) {
   const { rateLimitError, showRateLimitModal, hideRateLimitModal } = useError();
 
   useEffect(() => {
     setRateLimitModalHandler(showRateLimitModal);
   }, [showRateLimitModal]);
-
-  const isPublicRoute = pathname?.startsWith('/signin') || pathname?.startsWith('/signup') || pathname?.startsWith('/reset');
 
   return (
     <>
@@ -38,19 +34,25 @@ export function LayoutContent({ children }: { children: ReactNode }) {
           <AccountMenu />
         </div>
       </header>
-      {isPublicRoute ? (
+      <AuthGate>
+        <NeedsYou />
         <div className="wrap">{children}</div>
-      ) : (
-        <AuthGate>
-          <NeedsYou />
-          <div className="wrap">{children}</div>
-        </AuthGate>
-      )}
+      </AuthGate>
       <RateLimitModal
         isOpen={rateLimitError !== null}
         onClose={hideRateLimitModal}
         provider={rateLimitError?.provider ?? null}
       />
     </>
+  );
+}
+
+export function LayoutContent({ children }: { children: ReactNode }) {
+  return (
+    <ErrorProvider>
+      <ToastProvider>
+        <ClientLayout>{children}</ClientLayout>
+      </ToastProvider>
+    </ErrorProvider>
   );
 }
