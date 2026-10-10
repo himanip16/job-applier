@@ -3,6 +3,7 @@ import { greenhouseAdapter } from './adapters/greenhouse.js';
 import { leverAdapter } from './adapters/lever.js';
 import { ashbyAdapter } from './adapters/ashby.js';
 import { workableAdapter } from './adapters/workable.js';
+import { oktaAdapter } from './adapters/okta.js';
 import { googleAdapter } from './adapters/google.js';
 import { microsoftAdapter } from './adapters/microsoft.js';
 import { appleAdapter } from './adapters/apple.js';
@@ -17,6 +18,7 @@ export const ADAPTERS: AtsAdapter[] = [
   leverAdapter,
   ashbyAdapter,
   workableAdapter,
+  oktaAdapter,
   googleAdapter,
   microsoftAdapter,
   appleAdapter,

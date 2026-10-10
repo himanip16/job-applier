@@ -15,7 +15,7 @@ export async function requireProfile(
 ) {
   const user = await currentUser(req as FastifyRequest);
   if (!user) {
-    reply.code(401).send({ error: 'Sign in to use this.' });
+    reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
     return null;
   }
   const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
@@ -37,7 +37,7 @@ export async function requireUser(
 ) {
   const user = await currentUser(req as FastifyRequest);
   if (!user) {
-    reply.code(401).send({ error: 'Sign in to use this.' });
+    reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
     return null;
   }
   return user;

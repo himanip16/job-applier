@@ -1,8 +1,9 @@
 import type { Country } from '@ja/shared';
 import { z } from 'zod';
-import { normalizeLabel, tokenize } from '@ja/shared';
 import { prisma } from '../lib/db.js';
 import { generate, isConfigured } from '../llm/client.js';
+import { tokenize, normalizeLabel } from '@ja/shared';
+import { extractResumeKeywords, getTopSkills, getPrimaryRole, getDomains, type ResumeKeyword } from './keywordExtraction.js';
 import { MAX_QUERY_LENGTH } from './firecrawl.js';
 import { candidateRejections } from './decisionHistory.js';
 
@@ -107,6 +108,12 @@ export async function buildSearchPlan(
   // The country you picked for this search wins over the profile's own.
   const country = opts.country?.code ?? (profile.countryCode || undefined);
 
+  // Keywords extracted from the resume at upload sharpen both the model's plan and the fallback.
+  const resumeKeywords = profile.resumeKeywords as ResumeKeyword[] | null;
+  const primaryRole = resumeKeywords ? getPrimaryRole(resumeKeywords) : null;
+  const topSkills = resumeKeywords ? getTopSkills(resumeKeywords, 10) : [];
+  const domains = resumeKeywords ? getDomains(resumeKeywords) : [];
+
   if (isConfigured()) {
     try {
       const plan = await generate({
@@ -118,6 +125,9 @@ export async function buildSearchPlan(
       });
       const queries = cleanQueries(plan?.queries ?? [], maxQueries);
       const roleTitles = (plan?.roleTitles ?? []).map((t) => t.trim()).filter(Boolean).slice(0, 8);
+      if (primaryRole && !roleTitles.some((r) => r.toLowerCase().includes(primaryRole.toLowerCase()))) {
+        roleTitles.push(primaryRole);
+      }
       if (queries.length && roleTitles.length) {
         return { roleTitles, queries, country, source: 'model', notes };
       }
@@ -133,6 +143,13 @@ export async function buildSearchPlan(
   }
 
   const fallback = profileDerivedPlan({ profile, summary, resume, accepted, maxQueries });
+  if (primaryRole && !fallback.roleTitles.some((r) => r.toLowerCase().includes(primaryRole.toLowerCase()))) {
+    fallback.roleTitles.push(primaryRole);
+  }
+  if (topSkills.length > 0) {
+    const skillQueries = topSkills.slice(0, 3).map((skill) => `${primaryRole || 'engineer'} ${skill}`);
+    fallback.queries = [...fallback.queries, ...skillQueries].slice(0, maxQueries);
+  }
   const place = opts.country?.name;
   const queries = place
     ? fallback.queries.map((q) => (q.toLowerCase().includes(place.toLowerCase()) ? q : `${q} ${place}`))
@@ -243,12 +260,13 @@ const SKILL_VOCAB = [
   'machine learning', 'llm', 'nlp', 'computer vision', 'recommendation',
   'payments', 'fintech', 'ledger', 'billing', 'healthcare', 'security', 'infrastructure',
   'distributed systems', 'observability', 'streaming', 'embedded', 'robotics',
+  'backend', 'frontend', 'full stack', 'api', 'microservices', 'rest', 'grpc',
 ];
 
 const ROLE_FAMILIES: [RegExp, string][] = [
   [/\b(backend|back[- ]end|server[- ]side|api)\b/i, 'Backend Engineer'],
   [/\b(frontend|front[- ]end|react|ui engineer)\b/i, 'Frontend Engineer'],
-  [/\bfull[- ]?stack\b/i, 'Full Stack Engineer'],
+  [/\b(full[- ]?stack|full stack)\b/i, 'Full Stack Engineer'],
   [/\b(infrastructure|platform|sre|site reliability|devops)\b/i, 'Platform Engineer'],
   [/\b(data engineer|etl|pipeline|airflow|dbt)\b/i, 'Data Engineer'],
   [/\b(machine learning|ml engineer|deep learning|llm)\b/i, 'Machine Learning Engineer'],

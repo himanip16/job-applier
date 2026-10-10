@@ -375,7 +375,10 @@ async function fillReactSelect(page: Page, field: FormField, value: string | str
     // Typing narrows a long list (country pickers run to 240 entries) and also
     // opens the menu when a bare click did not.
     await input.fill('').catch(() => {});
-    await input.type(want.slice(0, 40), { delay: 15 });
+    // Location pickers search on the city: "Bengaluru, Karnataka, India"
+    // typed whole often filters to nothing.
+    const searchTerm = /location|city/i.test(field.label) ? (want.split(',')[0]?.trim() || want) : want.slice(0, 40);
+    await input.type(searchTerm, { delay: 15 });
 
     const option = await waitForOption(page, field, want);
     if (!option) {

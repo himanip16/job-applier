@@ -69,7 +69,7 @@ app.addHook('onRequest', async (req, reply) => {
   const protectedArray = Array.isArray(PROTECTED_STATIC) ? PROTECTED_STATIC : [];
   if (protectedArray.some(prefix => path.startsWith(prefix))) {
     if (await currentUser(req)) return;
-    return reply.code(401).send({ error: 'Sign in to use this.' });
+    return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
   }
 });
 
@@ -93,7 +93,7 @@ app.addHook('preHandler', async (req, reply) => {
   const path = req.url.split('?')[0] ?? '';
   if (!path.startsWith('/api/') || PUBLIC_API.has(path)) return;
   if (await currentUser(req)) return;
-  return reply.code(401).send({ error: 'Sign in to use this.' });
+  return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
 });
 await mkdir(artifactsDir, { recursive: true });
 await mkdir(resumesDir, { recursive: true });
@@ -168,7 +168,7 @@ registerResumeRoutes(app, requireProfile);
 registerTrackerRoutes(app, requireProfile);
 registerSettingsRoutes(app);
 registerJobDetailRoutes(app, requireProfile);
-registerOutreachRoutes(app);
+registerOutreachRoutes(app, requireProfile);
 registerProfileRoutes(app, requireProfile);
 registerConnectionRoutes(app, requireProfile);
 registerFactsRoutes(app, requireProfile);

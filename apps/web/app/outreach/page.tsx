@@ -46,6 +46,7 @@ interface ColdTarget {
 }
 
 type TabType = 'COLD' | 'REPLY' | 'FOLLOW_UP';
+type LinkedInStatus = 'NOT_CONNECTED' | 'WAITING_FOR_SIGN_IN' | 'CONNECTED' | 'CHALLENGE_REQUIRED' | 'REAUTH_REQUIRED';
 
 /** A banner, replacing the alert() calls this page used to interrupt you with. */
 type Notice = { kind: 'info' | 'good' | 'bad' | 'warn'; text: string } | null;
@@ -94,11 +95,16 @@ export default function OutreachPage() {
   const [connectionsRefresh, setConnectionsRefresh] = useState(0);
   const [editingItem, setEditingItem] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [tabCounts, setTabCounts] = useState<Record<TabType, number>>({ COLD: 0, REPLY: 0, FOLLOW_UP: 0 });
+  const [linkedIn, setLinkedIn] = useState<LinkedInStatus | null>(null);
+  const [connecting, setConnecting] = useState(false);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
     try {
       setItems(await api<OutreachItem[]>(`/api/outreach/items?type=${activeTab}`));
+      // Waiting-on-you counts for every tab, so the other tabs say whether they need a look.
+      api<Record<TabType, number>>('/api/outreach/items/counts').then(setTabCounts).catch(() => {});
     } catch (err) {
       setNotice({ kind: 'bad', text: err instanceof Error ? err.message : 'Could not load messages.' });
     }
@@ -128,6 +134,52 @@ export default function OutreachPage() {
   }, [loadItems, loadColdTargets, activeTab]);
 
   useEffect(() => { loadSyncStatus(); }, [loadSyncStatus]);
+
+  const loadLinkedIn = useCallback(async () => {
+    try {
+      const { status } = await api<{ status: LinkedInStatus }>('/api/linkedin/connection-status');
+      setLinkedIn(status);
+      return status;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  useEffect(() => { if (hasProfile) loadLinkedIn(); }, [hasProfile, loadLinkedIn]);
+
+  // While the sign-in window is open, check back - less often the longer it takes.
+  useEffect(() => {
+    if (linkedIn !== 'WAITING_FOR_SIGN_IN') return;
+    let delay = 2000;
+    let timer: ReturnType<typeof setTimeout>;
+    let stopped = false;
+    const poll = async () => {
+      const status = await loadLinkedIn();
+      if (stopped || status !== 'WAITING_FOR_SIGN_IN') return;
+      delay = Math.min(delay * 2, 32_000);
+      timer = setTimeout(poll, delay);
+    };
+    timer = setTimeout(poll, delay);
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [linkedIn, loadLinkedIn]);
+
+  const handleConnectLinkedIn = async () => {
+    setConnecting(true);
+    setNotice(null);
+    try {
+      const { status } = await api<{ status: LinkedInStatus }>('/api/linkedin/connect', { method: 'POST' });
+      setLinkedIn(status);
+      setNotice(
+        status === 'CONNECTED'
+          ? { kind: 'good', text: 'LinkedIn is connected.' }
+          : { kind: 'info', text: 'A LinkedIn window opened. Sign in there; this page notices when you are done.' },
+      );
+    } catch (err) {
+      setNotice({ kind: 'bad', text: err instanceof Error ? err.message : 'Could not open LinkedIn.' });
+    } finally {
+      setConnecting(false);
+    }
+  };
 
   useEffect(() => {
     api<{ profile: { id: string } | null }>('/api/profile')
@@ -297,7 +349,7 @@ export default function OutreachPage() {
             you, never sent on their own.
           </p>
         </div>
-        <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
+        <Tabs activeTab={activeTab} onTabChange={setActiveTab} counts={tabCounts} />
       </div>
 
       {notice && (
@@ -321,6 +373,11 @@ export default function OutreachPage() {
         {activeTab === 'COLD' && (
           <>
             <div className="sync-bar">
+              {hasProfile && linkedIn && linkedIn !== 'CONNECTED' && (
+                <button className="primary" onClick={handleConnectLinkedIn} disabled={connecting || linkedIn === 'WAITING_FOR_SIGN_IN'}>
+                  {linkedIn === 'WAITING_FOR_SIGN_IN' ? 'Waiting for sign-in…' : connecting ? 'Opening LinkedIn…' : 'Connect LinkedIn'}
+                </button>
+              )}
               <button onClick={handleSyncConnections} disabled={!hasProfile || syncing}>
                 {syncing ? 'Syncing connections…' : 'Sync connections'}
               </button>
@@ -401,7 +458,7 @@ export default function OutreachPage() {
   );
 }
 
-function Tabs({ activeTab, onTabChange }: { activeTab: TabType; onTabChange: (tab: TabType) => void }) {
+function Tabs({ activeTab, onTabChange, counts }: { activeTab: TabType; onTabChange: (tab: TabType) => void; counts: Record<TabType, number> }) {
   const tabs: TabType[] = ['COLD', 'REPLY', 'FOLLOW_UP'];
   return (
     <div className="tabs" role="tablist" aria-label="Outreach stage">
@@ -415,6 +472,7 @@ function Tabs({ activeTab, onTabChange }: { activeTab: TabType; onTabChange: (ta
           onClick={() => onTabChange(tab)}
         >
           {TAB_LABEL[tab]}
+          {counts[tab] > 0 && <span className="group-count">{counts[tab]}</span>}
         </button>
       ))}
     </div>

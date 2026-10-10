@@ -113,11 +113,11 @@ export function registerJobDetailRoutes(app: FastifyInstance, requireProfile: Re
                   tailored: true,
                   label: tailored.label,
                   coverage: Math.round(tailored.coverage),
-                  insertions: (tailored.insertions as unknown[] | null)?.length ?? 0,
+                  insertions: Array.isArray(tailored.insertions) ? tailored.insertions.length : 0,
                   // The number that matters, and the reason the tailor exists:
                   // keywords the job wanted that could not be grounded were
                   // left out rather than written in.
-                  unsupported: (tailored.unsupported as unknown[] | null)?.length ?? 0,
+                  unsupported: Array.isArray(tailored.unsupported) ? tailored.unsupported.length : 0,
                 }
               : { tailored: false },
             fields: summariseFields(plan, application.pending),
@@ -198,19 +198,22 @@ async function locate(profileId: string, id: string) {
 }
 
 async function findApplicationByUrl(profileId: string, url: string) {
-  let job = await prisma.job.findFirst({ where: { url } });
-  if (!job) {
-    // Try the canonical form too: a lead stored from search and a job created
-    // from a pasted URL can differ by scheme or a tracking parameter, and
-    // failing the join would silently show an applied job as untouched.
-    const canonical = canonicalUrl(url);
-    const all = await prisma.job.findMany({ select: { id: true, url: true } });
-    const hit = all.find((j) => canonicalUrl(j.url) === canonical);
-    if (!hit) return null;
-    job = await prisma.job.findUnique({ where: { id: hit.id } });
-    if (!job) return null;
-  }
-  return prisma.application.findFirst({ where: { jobId: job.id, profileId }, include: FULL });
+  const canonical = canonicalUrl(url);
+
+  // Scope the search to only the user's jobs to avoid global table scans
+  // This prevents loading the entire job table into memory
+  const userJobs = await prisma.job.findMany({
+    where: { applications: { some: { profileId } } },
+    select: { id: true, url: true },
+  });
+
+  const hit = userJobs.find((j) => j.url === url || canonicalUrl(j.url) === canonical);
+  if (!hit) return null;
+
+  return prisma.application.findFirst({
+    where: { jobId: hit.id, profileId },
+    include: FULL,
+  });
 }
 
 /**
@@ -271,6 +274,13 @@ function nextAction(
         return application.outcome === 'IN_PROGRESS'
           ? { label: 'Log what happened next', href: '/tracker', urgent: false }
           : null;
+      // Terminal statuses - no next action needed
+      case 'REJECTED':
+      case 'WITHDRAWN':
+      case 'HIRED':
+      case 'OFFER':
+      case 'ACCEPTED':
+        return null;
       default:
         return { label: 'Open the run', href: `/applications/${application.id}`, urgent: false };
     }

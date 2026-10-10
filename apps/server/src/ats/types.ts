@@ -44,6 +44,8 @@ export interface AtsAdapter {
   afterWall?(page: Page, formUrl: string): Promise<void>;
   /** Click the real submit control. */
   submit(page: Page): Promise<void>;
+  /** Optional custom file attachment logic for sites with non-standard upload flows. */
+  attachFile?(page: Page, field: FormField, filePath: string): Promise<void>;
   /** Human-readable notes shown in the UI: known quirks, captcha, etc. */
   notes: string[];
   /**

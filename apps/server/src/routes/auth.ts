@@ -25,7 +25,7 @@ const DUMMY_HASH = 'scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAA
 
 const Credentials = z.object({
   email: z.string().trim().min(3).max(320),
-  password: z.string().min(1).max(200),
+  password: z.string().min(10).max(200),
 });
 
 /** Deliberately identical for "no such account" and "wrong password". */
@@ -63,7 +63,9 @@ export function registerAuthRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: 'Give an email and a password.' });
     const email = parsed.data.email.toLowerCase();
 
-    if (!email.includes('@')) return reply.code(400).send({ error: 'That does not look like an email address.' });
+    // Basic email validation - must have @, domain with at least one dot, and valid characters
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) return reply.code(400).send({ error: 'That does not look like a valid email address.' });
     const weak = passwordProblem(parsed.data.password);
     if (weak) return reply.code(400).send({ error: weak });
 
@@ -73,10 +75,29 @@ export function registerAuthRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: 'There is already an account with that email. Sign in instead.' });
     }
 
-    let user;
+    let user: { id: string; email: string } | null = null;
+    let adoptedExistingProfile = false;
     try {
-      user = await prisma.user.create({
-        data: { email, passwordHash: await hashPassword(parsed.data.password) },
+      user = await prisma.$transaction(async (tx) => {
+        // Create user
+        const createdUser = await tx.user.create({
+          data: { email, passwordHash: await hashPassword(parsed.data.password) },
+        });
+
+        // Adopt the pre-sign-in profile rather than stranding it. This is for single-user
+        // migrations where a profile existed before sign-in was implemented. We adopt
+        // the first orphan profile found - if multiple orphans exist, this is non-deterministic,
+        // but that should not happen in normal operation.
+        const orphan = await tx.profile.findFirst({
+          where: { userId: null },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (orphan) {
+          await tx.profile.update({ where: { id: orphan.id }, data: { userId: createdUser.id } });
+          adoptedExistingProfile = true;
+        }
+
+        return { id: createdUser.id, email: createdUser.email };
       });
     } catch (err) {
       // Handle race condition: another request may have created the user first
@@ -86,20 +107,13 @@ export function registerAuthRoutes(app: FastifyInstance) {
       throw err;
     }
 
-    // Adopt the pre-sign-in profile rather than stranding it. This is for single-user
-    // migrations where a profile existed before sign-in was implemented. We adopt
-    // the first orphan profile found - if multiple orphans exist, this is non-deterministic,
-    // but that should not happen in normal operation.
-    const orphan = await prisma.profile.findFirst({ 
-      where: { userId: null },
-      orderBy: { createdAt: 'asc' },
-    });
-    if (orphan) {
-      await prisma.profile.update({ where: { id: orphan.id }, data: { userId: user.id } });
+    // user should never be null here since transaction would have thrown
+    if (!user) {
+      return reply.code(500).send({ error: 'Failed to create user.' });
     }
 
     await startSession(reply, req, user.id);
-    return { user: { id: user.id, email: user.email }, adoptedExistingProfile: Boolean(orphan) };
+    return { user, adoptedExistingProfile };
   });
 
   app.post('/api/auth/login', async (req, reply) => {
@@ -114,6 +128,22 @@ export function registerAuthRoutes(app: FastifyInstance) {
       ? await verifyPassword(parsed.data.password, user.passwordHash)
       : await verifyPassword(parsed.data.password, DUMMY_HASH);
     if (!user || !ok) return reply.code(401).send({ error: BAD_CREDENTIALS, code: 'BAD_CREDENTIALS' });
+
+    // Check for existing recent session to prevent double-click creating multiple sessions
+    const recentSession = await prisma.session.findFirst({
+      where: {
+        userId: user.id,
+        expiresAt: { gt: new Date() },
+        createdAt: { gt: new Date(Date.now() - 60 * 1000) }, // Created within last minute
+      },
+    });
+
+    if (recentSession) {
+      // Reuse existing session for idempotency
+      setSessionCookie(reply, recentSession.token, recentSession.expiresAt);
+      await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+      return { user: { id: user.id, email: user.email } };
+    }
 
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     await startSession(reply, req, user.id);
@@ -132,7 +162,7 @@ export function registerAuthRoutes(app: FastifyInstance) {
     if (!user) return reply.code(401).send({ error: 'Sign in first.', code: 'AUTH_REQUIRED' });
 
     const body = z
-      .object({ current: z.string().min(1).max(200), next: z.string().min(1).max(200) })
+      .object({ current: z.string().min(1).max(200), next: z.string().min(10).max(200) })
       .safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'Give your current and new password.' });
 
@@ -229,7 +259,7 @@ export function registerAuthRoutes(app: FastifyInstance) {
     const body = z
       .object({
         token: z.string().min(1),
-        password: z.string().min(1).max(200),
+        password: z.string().min(10).max(200),
       })
       .safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'Give a token and a new password.' });

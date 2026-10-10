@@ -21,6 +21,9 @@ export const SESSION_COOKIE = 'ja_session';
 /** Long enough not to nag a daily user, short enough to expire a stale laptop. */
 const SESSION_DAYS = 30;
 
+/** Maximum number of concurrent sessions per user to prevent unbounded growth. */
+const MAX_SESSIONS_PER_USER = 5;
+
 export interface SessionUser {
   id: string;
   email: string;
@@ -32,6 +35,30 @@ export async function createSession(
 ): Promise<{ token: string; expiresAt: Date }> {
   const token = randomBytes(32).toString('base64url');
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+
+  // Enforce session limit: delete oldest sessions if limit exceeded
+  const sessionCount = await prisma.session.count({
+    where: { userId, expiresAt: { gt: new Date() } },
+  });
+
+  if (sessionCount >= MAX_SESSIONS_PER_USER) {
+    // Delete oldest sessions beyond the limit
+    const sessionsToDelete = await prisma.session.findMany({
+      where: { userId, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'asc' },
+      take: sessionCount - MAX_SESSIONS_PER_USER + 1,
+      select: { id: true },
+    });
+
+    if (sessionsToDelete.length > 0) {
+      await prisma.session.deleteMany({
+        where: {
+          id: { in: sessionsToDelete.map((s) => s.id) },
+        },
+      });
+    }
+  }
+
   await prisma.session.create({
     data: { token, userId, expiresAt, userAgent: userAgent?.slice(0, 300) ?? null },
   });
@@ -103,20 +130,31 @@ function serialiseCookie(value: string, expiresAt: Date): string {
 }
 
 function isHttps(): boolean {
-  // Render, Vercel and every other managed host terminates TLS in front of the
-  // process, so the app itself only ever speaks http. PUBLIC_URL is how it
-  // learns what the browser actually sees.
+  // Check explicit evidence of HTTPS deployment
+  // 1. Explicit environment variables (most reliable)
   const url = process.env.PUBLIC_API_URL ?? process.env.RENDER_EXTERNAL_URL ?? '';
-  return url.startsWith('https://');
+  if (url.startsWith('https://')) return true;
+  if (url.startsWith('http://')) return false;
+
+  // 2. Common production platforms that always use HTTPS
+  if (process.env.VERCEL_ENV === 'production') return true;
+  if (process.env.RENDER === 'true') return true;
+
+  // 3. If we have no URL info, assume HTTP (safer default)
+  // In production, you should set PUBLIC_API_URL explicitly
+  return false;
 }
 
 export function readCookie(header: string | undefined, name: string): string | null {
   if (!header) return null;
   for (const part of header.split(';')) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() !== name) continue;
-    const raw = part.slice(eq + 1).trim();
+    const trimmed = part.trim();
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue; // Skip malformed parts without '='
+    if (eq === 0) continue; // Skip parts that start with '=' (unkeyed data)
+    const key = trimmed.slice(0, eq).trim();
+    if (key !== name) continue;
+    const raw = trimmed.slice(eq + 1).trim();
     try {
       return decodeURIComponent(raw) || null;
     } catch {

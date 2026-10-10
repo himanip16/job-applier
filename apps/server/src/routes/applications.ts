@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { prisma, type Prisma } from '../lib/db.js';
+import { prisma, Prisma } from '../lib/db.js';
 import { enqueue, activeRuns } from '../engine/queue.js';
 import { submitAnswers, decideReview, continueRun } from '../engine/runner.js';
 import { rememberAnswer } from '../engine/answerBank.js';
@@ -38,11 +38,22 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
     const existing = await prisma.application.findUnique({
       where: { profileId_jobId: { profileId: profile.id, jobId: job.id } },
     });
+
+    // Already submitted - cannot re-apply
     if (existing && existing.status === 'SUBMITTED') {
       return reply.code(409).send({
         error: 'You already applied to this job.',
         applicationId: existing.id,
         submittedAt: existing.submittedAt,
+      });
+    }
+
+    // Currently being processed - prevent dual-worker collision
+    if (existing && ['FILLING', 'PREPARING', 'SUBMITTING', 'QUEUED'].includes(existing.status)) {
+      return reply.code(409).send({
+        error: 'This application is currently being processed. Please wait for it to complete.',
+        applicationId: existing.id,
+        status: existing.status,
       });
     }
 
@@ -52,6 +63,7 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
         data: { profileId: profile.id, jobId: job.id, requiresReview, writeCoverLetter },
       }));
 
+    // Re-queue if application exists in a terminal/blocked state
     if (existing) {
       await prisma.application.update({
         where: { id: existing.id },
@@ -114,6 +126,34 @@ export function registerApplicationRoutes(app: FastifyInstance, requireProfile: 
     // Unanswered questions belong to the run that died; the new one re-reads
     // the form and asks again. Answered ones are kept and reused.
     await prisma.pendingQuestion.deleteMany({ where: { applicationId: req.params.id, answeredAt: null } });
+    enqueue(req.params.id);
+    return { ok: true };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/applications/:id/restart', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    if (!(await ownedApplication(profile.id, req.params.id))) return reply.code(404).send(NOT_YOURS);
+    
+    // Clear all state and start fresh - only for a run that ended without submitting.
+    const reset = await prisma.application.updateMany({
+      where: { id: req.params.id, status: { in: ['FAILED', 'CANCELLED'] } },
+      data: {
+        status: 'QUEUED',
+        blockedReason: null,
+        attempts: 0,
+        fieldPlan: Prisma.DbNull,
+        coverLetter: null,
+        confirmation: null,
+      },
+    });
+    if (reset.count === 0) return reply.code(409).send({ error: 'Only a failed or cancelled run can be restarted.' });
+    
+    // Clear pending questions, events, and artifacts
+    await prisma.pendingQuestion.deleteMany({ where: { applicationId: req.params.id } });
+    await prisma.applicationEvent.deleteMany({ where: { applicationId: req.params.id } });
+    await prisma.artifact.deleteMany({ where: { applicationId: req.params.id } });
+    
     enqueue(req.params.id);
     return { ok: true };
   });

@@ -34,8 +34,8 @@ model User {
   createdAt    DateTime  @default(now())
   lastLoginAt  DateTime?
 
-  profile       Profile?
-  sessions      Session[]
+  profile        Profile?
+  sessions       Session[]
   passwordResets PasswordReset[]
 
   @@map("users")
@@ -65,13 +65,13 @@ model Session {
 /// These are short-lived, single-use tokens sent by email to let a user
 /// regain access to their account without knowing their current password.
 model PasswordReset {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   /// SHA-256 hash of the random token sent to the user's email.
-  tokenHash String   @unique
+  tokenHash String    @unique
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
   /// Set when the token is successfully used, to prevent reuse.
   usedAt    DateTime?
 
@@ -110,13 +110,19 @@ model Profile {
   // this, never the raw PDF bytes.
   resumeText String? @db.Text
 
+  // Extracted keywords from resume for job matching and search
+  resumeKeywords Json? // Array of {keyword, weight, category}
+
+  // LinkedIn connection state
+  linkedinConnectionStatus LinkedInConnectionStatus @default(NOT_CONNECTED)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  facts        ProfileFact[]
-  resumes      ResumeFile[]
-  answers      Answer[]
-  applications Application[]
+  facts         ProfileFact[]
+  resumes       ResumeFile[]
+  answers       Answer[]
+  applications  Application[]
   linkedinSyncs LinkedInSync[]
   conversations LinkedInConversation[]
   outreachItems OutreachItem[]
@@ -164,6 +170,8 @@ model ResumeFile {
   isDefault Boolean  @default(false)
   text      String?  @db.Text
   createdAt DateTime @default(now())
+
+  tailoredResumes TailoredResume[] @relation("TailoredResumeBase")
 
   @@map("resume_files")
 }
@@ -250,7 +258,8 @@ model Job {
   descriptionText String?  @db.Text
   discoveredAt    DateTime @default(now())
 
-  applications Application[]
+  applications    Application[]
+  tailoredResumes TailoredResume[] @relation("TailoredResumeJob")
 
   @@map("jobs")
 }
@@ -268,14 +277,14 @@ model Application {
 
   /// Snapshot of every field we discovered plus what we filled. This is the
   /// audit trail — you can prove exactly what was submitted on your behalf.
-  fieldPlan    Json?
+  fieldPlan        Json?
   /// Whether to write one at all. Off by default: most applications do not
   /// need a cover letter, and generating one for every job spends a model
   /// call and thirty seconds on something nobody reads. A form that *requires*
   /// one still gets one - the run says so in its log.
   writeCoverLetter Boolean @default(false)
-  coverLetter  String? @db.Text
-  resumeFileId String?
+  coverLetter      String? @db.Text
+  resumeFileId     String?
 
   requiresReview Boolean   @default(true)
   submittedAt    DateTime?
@@ -289,13 +298,14 @@ model Application {
   /// Where this stands with the employer, as opposed to `status`, which is
   /// where the automation got to. A run can be SUBMITTED and the outcome
   /// REJECTED; they are different facts and conflating them loses both.
-  outcome          Outcome   @default(IN_PROGRESS)
+  outcome          Outcome         @default(IN_PROGRESS)
   outcomeAt        DateTime?
-  outcomeNote      String?   @db.Text
+  outcomeNote      String?         @db.Text
   /// The tailored resume that actually went out, if one did.
   tailoredResumeId String?
+  tailoredResume   TailoredResume? @relation("ApplicationTailoredResume", fields: [tailoredResumeId], references: [id], onDelete: SetNull)
   /// Free-form notes: recruiter name, referral, salary discussed.
-  notes            String?   @db.Text
+  notes            String?         @db.Text
 
   events    ApplicationEvent[]
   pending   PendingQuestion[]
@@ -489,10 +499,12 @@ model PreferenceSignal {
 /// that the base resume did not contain, together with the evidence that let
 /// us add it. Nothing lands in a tailored resume without a line in there.
 model TailoredResume {
-  id           String  @id @default(cuid())
+  id           String     @id @default(cuid())
   profileId    String
   jobId        String?
+  job          Job?       @relation("TailoredResumeJob", fields: [jobId], references: [id], onDelete: SetNull)
   baseResumeId String
+  baseResume   ResumeFile @relation("TailoredResumeBase", fields: [baseResumeId], references: [id], onDelete: Cascade)
 
   label    String
   text     String  @db.Text
@@ -509,6 +521,8 @@ model TailoredResume {
   covered     Json
   /// 0-100 estimate of keyword coverage against the job description.
   coverage    Float @default(0)
+
+  applications Application[] @relation("ApplicationTailoredResume")
 
   createdAt DateTime @default(now())
 
@@ -619,7 +633,7 @@ model Contact {
   profileId String
 
   fullName    String
-  headline    String? @db.Text
+  headline    String?     @db.Text
   companyName String
   /// Lowercased, punctuation-stripped company name, so "Mercury," and
   /// "mercury" are one company when grouping messages.
@@ -640,8 +654,8 @@ model Contact {
   discoveredAt DateTime @default(now())
 
   // Sync state
-  isConnection      Boolean @default(false)
-  lastSyncedAt      DateTime?
+  isConnection Boolean   @default(false)
+  lastSyncedAt DateTime?
 
   /// When you decided this conversation is finished.
   ///
@@ -693,9 +707,9 @@ model OutreachMessage {
 
   channel   OutreachChannel
   /// What the model wrote. Never overwritten by an edit.
-  draftBody String  @db.Text
+  draftBody String          @db.Text
   /// What you approved. Null until you approve it.
-  finalBody String? @db.Text
+  finalBody String?         @db.Text
   /// The channel's hard cap, so the editor can enforce the same number the
   /// send step will.
   charLimit Int
@@ -746,14 +760,18 @@ enum OutreachStatus {
 // ---------------------------------------------------------------------------
 
 model LinkedInSync {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   profileId String
-  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
-  syncType  SyncType
+  syncType   SyncType
   lastSyncAt DateTime?
-  status    SyncStatus @default(PENDING)
-  error     String?   @db.Text
+  status     SyncStatus @default(PENDING)
+  error      String?    @db.Text
+
+  // Heartbeat mechanism to detect stuck syncs
+  startedAt   DateTime?
+  heartbeatAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -772,25 +790,34 @@ enum SyncStatus {
   RUNNING
   COMPLETED
   FAILED
+  TIMEOUT // When heartbeat expires for stuck syncs
+}
+
+enum LinkedInConnectionStatus {
+  NOT_CONNECTED
+  WAITING_FOR_SIGN_IN
+  CONNECTED
+  CHALLENGE_REQUIRED
+  REAUTH_REQUIRED // When user needs to manually re-authenticate
 }
 
 model LinkedInConversation {
-  id          String   @id @default(cuid())
-  profileId   String
-  profile     Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
-  contactId   String
-  contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  id        String  @id @default(cuid())
+  profileId String
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   linkedinConversationId String
   linkedinProfileUrl     String
 
   lastMessageAt DateTime?
-  lastSyncedAt DateTime?
+  lastSyncedAt  DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  messages LinkedInMessage[]
+  messages      LinkedInMessage[]
   outreachItems OutreachItem[]
 
   @@unique([profileId, linkedinConversationId])
@@ -800,15 +827,15 @@ model LinkedInConversation {
 }
 
 model LinkedInMessage {
-  id              String   @id @default(cuid())
-  conversationId  String
-  conversation    LinkedInConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  id             String               @id @default(cuid())
+  conversationId String
+  conversation   LinkedInConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   linkedinMessageId String
-  senderProfileUrl String
-  isFromMe         Boolean
-  body             String   @db.Text
-  sentAt           DateTime
+  senderProfileUrl  String
+  isFromMe          Boolean
+  body              String   @db.Text
+  sentAt            DateTime
 
   createdAt DateTime @default(now())
 
@@ -822,23 +849,23 @@ model LinkedInMessage {
 // ---------------------------------------------------------------------------
 
 model OutreachItem {
-  id        String @id @default(cuid())
+  id        String  @id @default(cuid())
   profileId String
   profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
   contactId String
   contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
-  type      OutreachType
+  type OutreachType
 
   leadId      String?
   jobTitle    String?
-  jobUrl      String?
+  jobUrl      String? @default("") // Uses empty string as default to avoid NULL unique constraint bug
   companyName String?
 
   channel   OutreachChannel
-  draftBody String  @db.Text
-  finalBody String? @db.Text
+  draftBody String          @db.Text
+  finalBody String?         @db.Text
   charLimit Int
 
   status       OutreachStatus @default(DRAFT)

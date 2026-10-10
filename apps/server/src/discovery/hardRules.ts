@@ -34,29 +34,25 @@ export interface HardRuleVerdict {
  */
 export function parseSalary(text: string): number | null {
   const patterns = [
-    // $100,000 - $150,000 per year
-    /\$\s*([0-9,]+(?:\.[0-9]+)?)\s*[-–]\s*\$?\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:per\s+year|annual|annually|year|yr)/i,
-    // $100k - $150k
-    /\$\s*([0-9,]+(?:\.[0-9]+)?)\s*[-–]\s*\$?\s*([0-9,]+(?:\.[0-9]+)?)\s*k\b/i,
-    // $100,000 per year
-    /\$\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:per\s+year|annual|annually|year|yr)/i,
-    // 100k - 150k
-    /([0-9,]+(?:\.[0-9]+)?)\s*[-–]\s*([0-9,]+(?:\.[0-9]+)?)\s*k\b/i,
+    // Range: $100k - $150k or $100,000 - $150,000
+    /\$\s*([0-9,]+)\s*k?\s*[-–]\s*\$?\s*([0-9,]+)\s*k?/i,
+    // Single: $150,000 or $150k
+    /\$\s*([0-9,]+)\s*(?:k\b|per\s+year|annual|yr)?/i,
+    // Range without a currency sign: 130k - 170k
+    /\b([0-9,]+)\s*k?\s*[-–]\s*([0-9,]+)\s*k\b/i,
+    // Single: 150k
+    /\b([0-9]+)\s*k\b/i,
   ];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match) {
-      // For ranges, use the upper bound as the potential salary
-      const value = match[2] ? match[2] : match[1];
-      if (!value) continue;
-      // Remove commas and handle 'k' suffix
-      let numStr = value.replace(/,/g, '').toLowerCase();
-      if (numStr.endsWith('k')) {
-        numStr = numStr.slice(0, -1);
-        return Number(numStr) * 1000;
-      }
-      return Number(numStr);
+      const rawVal = match[2] ?? match[1];
+      if (!rawVal) continue;
+      let val = rawVal.replace(/,/g, '').toLowerCase();
+      let num = Number(val);
+      if (val.endsWith('k') || num < 1000) num *= 1000; // Handle k suffix or values like 150
+      if (num >= 20000 && num <= 1000000) return num; // Reasonable annual salary range
     }
   }
   return null;

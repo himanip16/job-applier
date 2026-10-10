@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma, type Prisma } from '../lib/db.js';
 import { listLeads } from '../discovery/leadListing.js';
 import { learnFromDecision } from '../discovery/scoring.js';
-import { rescoreByIds, rescoreLexically } from '../discovery/rescoreLeads.js';
+import { cleanupLeads, rescoreByIds, rescoreLeadsBatch, rescoreLexically } from '../discovery/rescoreLeads.js';
 import { NOT_YOURS, ownedLead } from '../auth/ownership.js';
 import { adapterFor } from '../ats/registry.js';
 import { enqueue } from '../engine/queue.js';
@@ -67,6 +67,54 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
 
     const results = await rescoreByIds(profile.id, ids);
     return { results, rescored: results.filter((r) => r.ok).length };
+  });
+
+  /**
+   * Read the top of the queue in full, a batch of leads per model call
+   * rather than one call each.
+   */
+  app.post('/api/leads/rescore-all', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    const { status, limit } = z
+      .object({
+        status: z.enum(['NEW', 'ALL']).default('NEW'),
+        limit: z.number().min(1).max(200).default(50),
+      })
+      .parse(req.body ?? {});
+
+    const leads = await prisma.jobLead.findMany({
+      where: { profileId: profile.id, ...(status === 'ALL' ? {} : { status }) },
+      orderBy: [{ score: 'desc' }, { discoveredAt: 'desc' }],
+      take: limit,
+    });
+    if (!leads.length) return { results: [], rescored: 0, failed: 0, message: 'No jobs to rescore.' };
+
+    const results = await rescoreLeadsBatch(profile.id, leads);
+    const rescored = results.filter((r) => r.ok).length;
+    const failed = results.length - rescored;
+    return {
+      results,
+      rescored,
+      failed,
+      message: `Rescored ${rescored} job${rescored === 1 ? '' : 's'}.${failed ? ` ${failed} failed.` : ''}`,
+    };
+  });
+
+  /** Delete old, low-scoring leads in bulk. `dryRun` counts them and deletes nothing. */
+  app.post('/api/leads/cleanup', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+    const body = z
+      .object({
+        olderThanDays: z.number().min(1).max(365).default(20),
+        status: z.enum(['NEW', 'SHORTLISTED', 'REJECTED', 'APPLIED', 'EXPIRED', 'ALL']).default('ALL'),
+        maxScore: z.number().min(0).max(100).default(40),
+        quickScoreOnly: z.boolean().default(false),
+        dryRun: z.boolean().default(false),
+      })
+      .parse(req.body ?? {});
+    return cleanupLeads(profile.id, body);
   });
 
   const flag = z.enum(['true', 'false', '1', '0']).optional().transform((v) => v === 'true' || v === '1');

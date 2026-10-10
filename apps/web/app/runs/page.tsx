@@ -88,6 +88,15 @@ export default function RunsPage() {
     }
   }
 
+  async function handleRestart(applicationId: string) {
+    try {
+      await api(`/api/applications/${applicationId}/restart`, { method: 'POST' });
+      load();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   return (
     <>
       {health && !health.llmConfigured && (
@@ -212,6 +221,17 @@ export default function RunsPage() {
                           aria-label="Retry"
                         >
                           <Icon name="refresh" size={14} className={retrying === r.id ? 'spin' : undefined} />
+                        </button>
+                      )}
+                      {(r.status === 'FAILED' || r.status === 'CANCELLED') && (
+                        <button
+                          className="ghost small"
+                          disabled={retrying !== null}
+                          onClick={() => handleRestart(r.id)}
+                          title="Start over from the beginning, discarding this run's answers and log"
+                          aria-label="Restart from scratch"
+                        >
+                          <Icon name="arrowRight" size={14} />
                         </button>
                       )}
                       {r.status !== 'SUBMITTED' && (

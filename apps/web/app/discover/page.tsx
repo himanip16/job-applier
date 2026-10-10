@@ -5,6 +5,7 @@ import { countryByCode, countryFromText } from '@ja/shared/countries';
 import { api, needsProfile } from '../../lib/api';
 import { Icon, type IconName } from '../../components/Icon';
 import { ApplyPreferences, useApplyPrefs } from './components/ApplyPreferences';
+import { CleanupDialog } from './components/CleanupDialog';
 import { CountryDialog, WORLDWIDE, type CountryAction } from './components/CountryDialog';
 import { FilterBar } from './components/FilterBar';
 import { LeadCard } from './components/LeadCard';
@@ -76,6 +77,7 @@ export default function DiscoverPage() {
   const [picked, setPicked] = useState<string[]>([]);
   const [applying, setApplying] = useState<string | null>(null);
   const [confirmAuto, setConfirmAuto] = useState<{ ids: string[]; which: string } | null>(null);
+  const [cleaning, setCleaning] = useState(false);
 
   // The address bar wins; a bare /discover (the nav link) falls back to the
   // last view, so opening a job or another page and coming back keeps the
@@ -313,6 +315,26 @@ export default function DiscoverPage() {
     }
   }
 
+  /** Read the top of the For you queue in full, in batches rather than one model call per job. */
+  async function rescoreAll() {
+    setBusy('rescore-all');
+    setError(null);
+    setFlash(null);
+    setLeadErrors({});
+    try {
+      const r = await api<{ message: string }>('/api/leads/rescore-all', {
+        method: 'POST',
+        body: JSON.stringify({ status: 'NEW', limit: 50 }),
+      });
+      setFlash(r.message);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   /**
    * Autopilot: apply to every ticked job and submit each without asking.
    *
@@ -452,6 +474,14 @@ export default function DiscoverPage() {
                   <Icon name="refresh" className={busy === 'crawl' ? 'spin' : undefined} />
                   <span>Search my watch list<span className={styles.menuHint}>Re-read every company on your watch list for new jobs</span></span>
                 </button>
+                <button disabled={busy !== null} onClick={rescoreAll}>
+                  <Icon name="sparkles" className={busy === 'rescore-all' ? 'spin' : undefined} />
+                  <span>{busy === 'rescore-all' ? 'Rescoring…' : 'Rescore all new jobs'}<span className={styles.menuHint}>Read the top 50 in For you in full and re-rank them</span></span>
+                </button>
+                <button disabled={busy !== null} onClick={() => setCleaning(true)}>
+                  <Icon name="archive" />
+                  <span>Clean up old jobs<span className={styles.menuHint}>Delete jobs older and lower-scoring than you choose, after a preview</span></span>
+                </button>
                 <a href="/watchlist" className={styles.menuLink}>
                   <Icon name="list" />
                   <span>Edit watch list<span className={styles.menuHint}>See, add or remove the companies it checks</span></span>
@@ -560,6 +590,16 @@ export default function DiscoverPage() {
         </div>
       </div>
 
+      {cleaning && (
+        <CleanupDialog
+          onClose={() => setCleaning(false)}
+          onDone={async (message) => {
+            setCleaning(false);
+            setFlash(message);
+            await load();
+          }}
+        />
+      )}
       {asking && (
         <CountryDialog value={country} action={asking} onChange={setCountry} onCancel={() => setAsking(null)} onConfirm={() => run(asking)} />
       )}

@@ -143,6 +143,25 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
                 Resume
               </button>
             )}
+            {(detail.status === 'FAILED' || detail.status === 'CANCELLED') && (
+              <button
+                className="ghost"
+                onClick={async () => {
+                  if (!window.confirm('Start over from the beginning? This run\'s answers and log are cleared.')) return;
+                  try {
+                    setActionError(null);
+                    await api(`/api/applications/${id}/restart`, { method: 'POST' });
+                    await refresh();
+                  } catch (e) {
+                    setActionError(`Could not restart: ${(e as Error).message}. Try again in a moment.`);
+                  }
+                }}
+                style={{ fontSize: '.85rem', padding: '.3rem .6rem' }}
+                title="Start fresh from the beginning, clearing this run's progress"
+              >
+                Restart
+              </button>
+            )}
           </div>
         </div>
         {actionError && <div className="notice bad" style={{ marginTop: '.9rem' }}>{actionError}</div>}
