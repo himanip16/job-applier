@@ -358,8 +358,12 @@ async function fillReactSelect(page: Page, field: FormField, value: string | str
 
   // Rippling's EEO dropdowns are a <div role="combobox">: nothing to type
   // into, and a space in "Choose not to disclose" would toggle the menu.
+  // SuccessFactors' picklists do not filter as you type, and every key
+  // toggles the list open or shut; pick from the open list instead.
   const typeable = await input
-    .evaluate((e) => e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement)
+    .evaluate(
+      (e) => (e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement) && !e.closest('.sfCascadingPicklist'),
+    )
     .catch(() => true);
 
   for (const want of wants) {
@@ -419,9 +423,12 @@ async function waitForOption(page: Page, field: FormField, want: string): Promis
   // the phone field's 240-country list in the DOM, hidden, at all times; a
   // page-wide lookup found that first, waited for it to show, and reported
   // every dropdown on the form as "could not find option".
+  const input = page.locator(field.selector).first();
+  // SuccessFactors links its listbox with aria-owns instead of aria-controls.
   const controls = field.optionContainerSelector
     ? null
-    : await page.locator(field.selector).first().getAttribute('aria-controls').catch(() => null);
+    : ((await input.getAttribute('aria-controls').catch(() => null)) ??
+      (await input.getAttribute('aria-owns').catch(() => null)));
   const container = field.optionContainerSelector
     ? page.locator(field.optionContainerSelector)
     : controls
@@ -720,6 +727,14 @@ async function labelTextFor(page: Page, input: Locator): Promise<string> {
 }
 
 export async function attachFile(page: Page, selector: string, filePath: string): Promise<void> {
+  // A button that opens an upload dialog rather than a file input
+  // (SuccessFactors' "+ Upload a CV"): press it and feed what it opens.
+  const target = page.locator(selector).first();
+  const isFileInput = await target
+    .evaluate((el) => el instanceof HTMLInputElement && el.type === 'file')
+    .catch(() => true);
+  if (!isFileInput) return uploadThroughOpener(page, target, filePath);
+
   // Where a site offers a choice of source, take the one that means "a file
   // from this machine". Greenhouse's resume field is Attach / Dropbox /
   // Google Drive / Enter manually, and only the first of those is a thing we
@@ -732,6 +747,44 @@ export async function attachFile(page: Page, selector: string, filePath: string)
   // setInputFiles works on inputs hidden behind a styled "Attach" button,
   // which is how every modern ATS renders file upload.
   await input.setInputFiles(filePath);
+}
+
+/**
+ * Press a control that opens an upload and give it the file: the browser's
+ * own file picker if it raises one, otherwise the file box in whatever
+ * dialog appeared. Then confirm the dialog and wait out "Uploading...".
+ */
+async function uploadThroughOpener(page: Page, opener: Locator, filePath: string): Promise<void> {
+  const chooser = page.waitForEvent('filechooser', { timeout: 8000 }).catch(() => null);
+  await opener.click({ timeout: FIELD_TIMEOUT_MS }).catch(() => opener.dispatchEvent('click'));
+  let picker = await chooser;
+  if (!picker) {
+    // Some dialogs ask for the source first ("Upload from my device").
+    const fromDevice = page.getByRole('button', { name: /(upload|choose|select).*(device|computer)|^browse/i }).first();
+    if (await fromDevice.isVisible().catch(() => false)) {
+      const second = page.waitForEvent('filechooser', { timeout: 8000 }).catch(() => null);
+      await fromDevice.click().catch(() => {});
+      picker = await second;
+    }
+  }
+  if (picker) {
+    await picker.setFiles(filePath);
+  } else {
+    const inDialog = page.locator('[role="dialog"] input[type="file"], .modal input[type="file"], .sfDialogBox input[type="file"]');
+    const input = (await inDialog.count().catch(() => 0)) ? inDialog.last() : page.locator('input[type="file"]').last();
+    await input.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
+    await input.setInputFiles(filePath);
+  }
+  const confirm = page
+    .locator('[role="dialog"], .modal, .sfDialogBox')
+    .getByRole('button', { name: /^(upload|ok|done|attach|save|submit)$/i })
+    .first();
+  if (await confirm.isVisible().catch(() => false)) await confirm.click().catch(() => {});
+  await page
+    .getByText(/^uploading/i)
+    .first()
+    .waitFor({ state: 'hidden', timeout: 30_000 })
+    .catch(() => {});
 }
 
 /** Controls that mean "upload a file from this computer". */
@@ -821,6 +874,15 @@ export async function verifyFilled(
 
   try {
     if (field.widget === 'react-select') {
+      // SuccessFactors shows the choice as the box's own value and submits a
+      // hidden id beside it. Words typed but never picked fill the box and
+      // leave the id empty, so both have to agree.
+      const sf = await sfPicklistState(page, field);
+      if (sf) {
+        const shown = normalizeLabel(sf.shown);
+        const ok = sf.picked && wants.every((w) => shown === normalizeLabel(w) || showsChosenOption(field, w, shown));
+        return { ok, actual: sf.picked ? sf.shown : '' };
+      }
       // The chosen value renders as text in the control, not as input.value.
       const shell = page
         .locator(field.selector)
@@ -977,6 +1039,22 @@ async function byNameInRow(page: Page, field: FormField): Promise<Locator> {
 }
 
 /** The text shown in the smallest box around one control, without the next question's. */
+/** A SuccessFactors picklist's shown text, and whether its hidden value is set. */
+async function sfPicklistState(page: Page, field: FormField): Promise<{ shown: string; picked: boolean } | null> {
+  return page
+    .locator(field.selector)
+    .first()
+    .evaluate((el) => {
+      const shell = el.closest('.sfCascadingPicklist')?.parentElement;
+      if (!shell) return null;
+      // <div id="picklist_country">...</div><input type="hidden" id="tor__fcountry">
+      const holder = shell.nextElementSibling;
+      const picked = holder instanceof HTMLInputElement && holder.type === 'hidden' ? Boolean(holder.value) : true;
+      return { shown: (el as HTMLInputElement).value.trim(), picked };
+    })
+    .catch(() => null);
+}
+
 async function shownAroundControl(page: Page, field: FormField): Promise<string> {
   return page
     .locator(field.selector)

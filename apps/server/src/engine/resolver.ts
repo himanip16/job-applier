@@ -237,7 +237,7 @@ async function resolveWithoutModel(field: FormField, ctx: ResolveContext): Promi
         jobTitle: ctx.jobTitle,
         jobDescription: ctx.jobDescription,
         question: field.label,
-        maxChars: field.kind === 'TEXTAREA' ? 1400 : 400,
+        maxChars: Math.min(field.kind === 'TEXTAREA' ? 1400 : 400, statedLimit(field) ?? Infinity),
       });
     } catch (err) {
       essayError = (err as Error).message;
@@ -355,8 +355,26 @@ function fromInference(field: FormField, inference: Inference, pending: NeedsMod
 function isEssayField(field: FormField): boolean {
   return (
     field.kind === 'TEXTAREA' &&
-    /\bwhy\b|motivat|interest|excite|tell us|describe|what (makes|draws)/i.test(field.label)
+    /\bwhy\b|motivat|interest|excite|tell us|describe|what (makes|draws)|\bwrite\b|feedback|explain|elaborate|\bshare\b|comment|summar/i.test(
+      field.label,
+    )
   );
+}
+
+/**
+ * The length the form says an answer may be, in characters: "200 characters
+ * or less", "maximum 500 characters", "in 100 words or fewer". Words count as
+ * six characters each, which leaves room for a long one.
+ */
+function statedLimit(field: FormField): number | null {
+  const text = `${field.label} ${field.helpText ?? ''}`;
+  const m =
+    text.match(/(\d[\d,]*)\s*(characters?|chars?|words?)\s*(or (less|fewer)|max(imum)?|limit)/i) ??
+    text.match(/(?:max(?:imum)?|up to|limit(?: of)?|no more than)\s*(?:of\s*)?(\d[\d,]*)\s*(characters?|chars?|words?)/i);
+  if (!m) return null;
+  const n = Number(m[1]!.replace(/,/g, ''));
+  if (!n) return null;
+  return /^w/i.test(m[2]!) ? n * 6 : n;
 }
 
 /** Pull an answer straight off the structured profile record. */

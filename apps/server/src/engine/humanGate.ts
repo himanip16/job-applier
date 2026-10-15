@@ -211,13 +211,19 @@ async function signInWithSavedAccount(
   if (!password) return false;
   const app = await prisma.application.findUnique({
     where: { id: applicationId },
-    select: { profile: { select: { email: true } } },
+    select: { profile: { select: { email: true, firstName: true, lastName: true } } },
   });
   const email = app?.profile.email;
   if (!email) return false;
 
   await bus.emitEvent(applicationId, 'LOG', 'Account wall: using your saved email and password.');
-  const attempt = await signInOrRegister(page, { email, password }).catch((err: unknown) => ({
+  const { firstName, lastName } = app.profile;
+  const attempt = await signInOrRegister(page, {
+    email,
+    password,
+    firstName: firstName ?? undefined,
+    lastName: lastName ?? undefined,
+  }).catch((err: unknown) => ({
     ok: false,
     detail: `Sign-in failed: ${(err as Error).message}`,
   }));

@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import { normalizeLabel, type FormField, type ResolvedAnswer } from '@ja/shared';
 import type { AtsAdapter } from '../ats/types.js';
-import { assertOpen } from '../browser/session.js';
+import { assertOpen, PageClosedError } from '../browser/session.js';
 import {
   fillField, verifyFilled, inspectControl, alreadyHolds, FillError, type ControlState,
 } from '../browser/fill.js';
@@ -272,6 +272,13 @@ async function fillWithRecovery(
     check = await attempt(field);
   } catch (err) {
     failure = err instanceof FillError ? err.message : (err as Error).message;
+    if (page.isClosed()) throw new PageClosedError('while the form was being filled');
+
+    // The control was there; its list just has no such option. Re-reading the
+    // form opens every dropdown on it and cannot add one. On IMC's 52-field
+    // Greenhouse form that kept the browser on School for two minutes, and the
+    // tab was closed before the "Other" fallback ever ran.
+    if (/Could not find option/.test(failure)) return { check, failure };
 
     // Filling one control routinely re-renders its neighbours — a phone
     // country picker rebuilds the number input beside it — and the

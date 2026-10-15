@@ -1,5 +1,6 @@
 import type { Country } from '@ja/shared';
 import { prisma } from '../lib/db.js';
+import { capPerCompany, MAX_LEADS_PER_COMPANY } from './capPerCompany.js';
 import { canonicalUrl } from './jobSearchUtils.js';
 import { screen } from './leadIntake.js';
 import { eachLimited, postingStatus } from './postingStatus.js';
@@ -19,12 +20,18 @@ import { API_SOURCES, sourceById, type DiscoveredJob } from './sources/index.js'
  * rejections are what stop a job coming back. A closed posting is removed from
  * Saved too: there is nothing left there to apply to. Applied cards and ones
  * with a run attached stay.
+ *
+ * Then each company is cut down to its best few undecided leads (newest and
+ * best-matching; see capPerCompany.ts), before the slow page checks so they
+ * only read postings that would be kept anyway.
  */
 
 export interface RecheckReport {
   checked: number;
   removed: number;
-  removedBy: { tooOld: number; wrongDomain: number; tooSenior: number; otherCountry: number; closed: number };
+  removedBy: { tooOld: number; wrongDomain: number; tooSenior: number; otherCountry: number; closed: number; overCap: number };
+  /** Undecided leads kept per company. */
+  maxPerCompany: number;
   /** Boards that could not be read; their leads were checked one by one instead. */
   unreachable: string[];
   /** Leads whose page gave no clear answer (a client-rendered shell, a block, a timeout), so they were kept. */
@@ -42,19 +49,20 @@ export async function recheckLeads(profileId: string, opts: { country?: Country 
     where: { profileId, OR: [{ status: 'NEW' }, { status: 'SHORTLISTED', applicationId: null }] },
     select: {
       id: true, status: true, url: true, ats: true, title: true, companyName: true, location: true, remote: true,
-      descriptionText: true, postedAt: true, company: { select: { id: true, name: true, source: true, handle: true } },
+      descriptionText: true, postedAt: true, score: true, discoveredAt: true, company: { select: { id: true, name: true, source: true, handle: true } },
     },
   });
 
   const report: RecheckReport = {
     checked: leads.length,
     removed: 0,
-    removedBy: { tooOld: 0, wrongDomain: 0, tooSenior: 0, otherCountry: 0, closed: 0 },
+    removedBy: { tooOld: 0, wrongDomain: 0, tooSenior: 0, otherCountry: 0, closed: 0, overCap: 0 },
+    maxPerCompany: MAX_LEADS_PER_COMPANY,
     unreachable: [],
     unknown: 0,
   };
   const doomed: string[] = [];
-  const survivors: typeof leads = [];
+  let survivors: typeof leads = [];
 
   // ---- 1. the intake rules --------------------------------------------------
   for (const lead of leads) {
@@ -77,7 +85,14 @@ export async function recheckLeads(profileId: string, opts: { country?: Country 
     }
   }
 
-  // ---- 2. still open? -------------------------------------------------------
+  // ---- 2. the best few per company ------------------------------------------
+  // Saved cards are your picks and do not count against the limit.
+  const { kept, extra } = capPerCompany(survivors.filter((l) => l.status === 'NEW'));
+  report.removedBy.overCap = extra.length;
+  doomed.push(...extra.map((l) => l.id));
+  survivors = [...survivors.filter((l) => l.status !== 'NEW'), ...kept];
+
+  // ---- 3. still open? -------------------------------------------------------
   const byCompany = new Map<string, typeof leads>();
   // Not on a board that lists everything, so only the posting can say.
   const onePage: typeof leads = [];

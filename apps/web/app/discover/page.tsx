@@ -232,17 +232,18 @@ export default function DiscoverPage() {
         );
       } else {
         const { report: r } = await api<{
-          report: { checked: number; removed: number; removedBy: Record<string, number>; unreachable: string[]; unknown?: number };
+          report: { checked: number; removed: number; removedBy: Record<string, number>; unreachable: string[]; unknown?: number; maxPerCompany?: number };
         }>('/api/discovery/recheck-leads', { method: 'POST', body: JSON.stringify({ country: target }) });
         const b = r.removedBy;
         const unknown = r.unknown ?? 0;
         setFlash(
           (r.removed === 0
-            ? `Checked ${r.checked} jobs — none were closed, too old or off-target${worldwide ? '' : ` for ${name}`}.`
+            ? `Checked ${r.checked} jobs — none were closed, too old, off-target${worldwide ? '' : ` for ${name}`} or over the per-company limit.`
             : `Checked ${r.checked} jobs and removed ${r.removed}: ${b.wrongDomain} not engineering roles, ` +
                 (worldwide ? '' : `${b.otherCountry} outside ${name}, `) +
                 `${b.closed} closed, ${b.tooOld} older than 3 months, ${b.tooSenior} too senior` +
                 (b.tooJunior ? `, ${b.tooJunior} internship or new-grad` : '') +
+                (b.overCap ? `, ${b.overCap} beyond the best ${r.maxPerCompany ?? 3} per company` : '') +
                 '.') +
             (unknown ? ` ${unknown} posting page${unknown === 1 ? '' : 's'} gave no clear answer, so ${unknown === 1 ? 'it was' : 'they were'} kept.` : ''),
         );
@@ -442,7 +443,7 @@ export default function DiscoverPage() {
               <Icon name="send" className={busy === 'collect' ? 'spin' : undefined} />
               {applying ?? (busy === 'collect' ? 'Finding matches…' : `Apply to all ${AUTO_APPLY_MIN_MATCH}%+ matches`)}
             </button>
-            <button disabled={busy !== null} onClick={() => setAsking('recheck')} title="Remove jobs in For you that are closed, too old, too senior, or in the wrong country. Never adds jobs.">
+            <button disabled={busy !== null} onClick={() => setAsking('recheck')} title="Remove jobs in For you that are closed, too old, too senior, or in the wrong country, and keep only the best few per company. Never adds jobs.">
               <Icon name="checkCircle" className={busy === 'recheck' ? 'spin' : undefined} />
               {busy === 'recheck' ? 'Removing…' : 'Remove stale jobs'}
             </button>

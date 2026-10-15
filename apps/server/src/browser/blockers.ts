@@ -44,6 +44,22 @@ export interface Blocker {
  * they are a straightforward violation of every one of these sites' terms.
  * Detection plus handoff keeps the whole flow defensible.
  */
+/**
+ * An application that makes the site account as part of itself, with its
+ * password boxes empty: SuccessFactors' quick apply (`fbclc_*` account boxes
+ * under the same Apply button as the application). Not a wall in front of the
+ * form - the boxes are filled, then the rest of the form is.
+ */
+export async function inlineAccountPending(page: Page): Promise<boolean> {
+  return page
+    .evaluate(() => {
+      if (!document.querySelector('#fbqa_apply')) return false;
+      const boxes = Array.from(document.querySelectorAll<HTMLInputElement>('input[name^="fbclc_pwd"]'));
+      return boxes.length > 0 && boxes.some((b) => !b.value);
+    })
+    .catch(() => false);
+}
+
 export async function detectBlockers(page: Page): Promise<Blocker[]> {
   const found: Blocker[] = [];
 
@@ -126,9 +142,17 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
       typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null,
     );
 
+    // SuccessFactors' quick apply puts "Choose Password" on the application
+    // itself, beside Country, Mobile Phone and the rest, under one Apply
+    // button. Read as a wall, the run filled the email and passwords, ticked
+    // every box on the page (the marketing opt-in too), found no Create
+    // Account button and paused with the application itself still blank.
+    // Those boxes are fields of this form; see inlineAccountPending.
+    const inlineAccount = !!document.querySelector('#fbqa_apply') && !!document.querySelector('input[name="fbclc_pwd"]');
+
     return {
       login:
-        visiblePassword ||
+        (visiblePassword && !inlineAccount) ||
         has(/sign in to (continue|apply)/) ||
         has(/log ?in to your account/) ||
         has(/(log ?in|sign ?in) or (create|register) (an )?account/) ||
@@ -150,7 +174,7 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
       createAccount:
         has(/create (an )?account to apply/) ||
         has(/register to (continue|apply)/) ||
-        (visiblePassword && has(/confirm password/)),
+        (visiblePassword && !inlineAccount && has(/confirm password/)),
       emailVerification:
         has(/verify your email/) ||
         has(/we sent (you )?a (verification )?(code|link)/) ||

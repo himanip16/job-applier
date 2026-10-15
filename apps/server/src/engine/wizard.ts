@@ -6,7 +6,7 @@ import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
 import { PageClosedError, screenshot } from '../browser/session.js';
 import { attachFile, inspectControl, readShown } from '../browser/fill.js';
-import { detectBlockers } from '../browser/blockers.js';
+import { detectBlockers, inlineAccountPending } from '../browser/blockers.js';
 import {
   detectAutofillPrompt,
   findAdvanceControl,
@@ -209,6 +209,20 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
     // of the form, and every Workday run went to review on the start page.
     state.handledPrompts.clear();
     return 'CONTINUE';
+  }
+  // The account is made by the application itself (SuccessFactors quick
+  // apply): its boxes take the saved email and password - asking for the
+  // password first if none is saved - and the rest of the form is read below.
+  if (await inlineAccountPending(page)) {
+    const account = {
+      kind: 'ACCOUNT_CREATION' as const,
+      detail: 'This application creates an account on the site as part of the form; it needs a password.',
+      humanCanClear: true,
+      // detectBlockers does not report these boxes as a wall, so it would call
+      // this cleared at once; it is cleared when the password boxes are filled.
+      clearedWhen: async () => !(await inlineAccountPending(page)),
+    };
+    if (!(await pauseForHuman(applicationId, page, account))) return 'ABANDONED';
   }
   if (await handleAutofillPrompt(context, state, signature)) return 'CONTINUE';
 

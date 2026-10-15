@@ -255,8 +255,10 @@ const EXTRACTOR = () => {
         .filter((t) => t && !/error/i.test(t) && !/^\d+ items? selected\b/i.test(t));
       if (parts.length) return parts.join(' ');
     }
-    const wrapper = el.closest('.field-wrapper, fieldset, .field, .form-group');
-    const hint = wrapper?.querySelector('.description, .help-text, .hint, small');
+    // SuccessFactors puts a question's limit ("Answer size should be 200
+    // characters or less.") in a span beside its textarea.
+    const wrapper = el.closest('.field-wrapper, fieldset, .field, .form-group, .checkbox_column_wrapper');
+    const hint = wrapper?.querySelector('.description, .help-text, .hint, small, .questionAnswerMsg');
     return hint ? textOf(hint) : '';
   };
 
@@ -416,6 +418,28 @@ const EXTRACTOR = () => {
       });
     }
 
+    // ---- SuccessFactors attachments -----------------------------------------
+    // "Resume / CV" and "Cover Letter" are a "+" icon that opens an upload
+    // dialog; there is no file input on the page until it is pressed, so the
+    // sweep below never saw a resume field and the CV went unattached. The
+    // field points at the icon, and attachFile knows to press it.
+    root.querySelectorAll<HTMLElement>('.RCMFormField.attachmentField').forEach((box) => {
+      const icon = box.querySelector<HTMLElement>('.addAttachments');
+      if (!icon || !visible(icon)) return;
+      const label = textOf(box.querySelector('.rcmFormFieldLabel') ?? box).replace(/^\*\s*/, '');
+      results.push({
+        handle: mark(icon),
+        name: '',
+        tag: 'span', type: 'sf-attachment',
+        kind: 'FILE',
+        widget: 'file',
+        label: label || 'Resume',
+        helpText: '',
+        required: !!box.querySelector('.requiredField'),
+        options: [],
+      });
+    });
+
     // ---- Workday dropdown ---------------------------------------------------
     // "Phone Device Type": a <button aria-haspopup="listbox"> showing the
     // choice, with the real value in a text input beside it. Neither looks
@@ -445,6 +469,9 @@ const EXTRACTOR = () => {
       const id = el.getAttribute('id') ?? '';
 
       if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'image') continue;
+      // A site account's password is never a question for the model or for
+      // you to answer per job: the account wall fills it from the saved one.
+      if (type === 'password') continue;
 
       // ---- select2 (Amazon's applicant forms, jQuery-era boards) ----------
       // The real <select> is aria-hidden and clipped to 1px; the box a person
@@ -597,7 +624,10 @@ const EXTRACTOR = () => {
           kind: 'TEXTAREA',
           widget: 'native',
           label: labelFor(el),
-          helpText: helpFor(el),
+          // A maxlength is a limit the answer must fit; the resolver reads it here.
+          helpText: [helpFor(el), (el as HTMLTextAreaElement).maxLength > 0 ? `Maximum ${(el as HTMLTextAreaElement).maxLength} characters.` : '']
+            .filter(Boolean)
+            .join(' '),
           required: isRequired(el),
           options: [],
         });
@@ -628,7 +658,13 @@ const EXTRACTOR = () => {
 
       // ---- combobox (react-select and friends) -----------------------------
       const role = el.getAttribute('role');
-      if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox') {
+      // SuccessFactors' picklists are a text box over a listbox it owns. One
+      // that depends on another (State under Country, Details under "How did
+      // you hear") starts disabled with no role at all, and read as a plain
+      // text box it was typed into: the box showed the words and the hidden
+      // value the form submits stayed empty.
+      const sfPicklist = !!el.closest('.sfCascadingPicklist');
+      if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox' || sfPicklist) {
         const multi = !!el.closest('.select__value-container--is-multi, [class*="is-multi"]');
         results.push({
           handle: mark(el),
@@ -738,7 +774,8 @@ async function harvestOptions(page: Page, selector: string, max: number): Promis
     // picked up the phone field's always-rendered, hidden country list first,
     // waited for it to become visible, timed out - and the question reached
     // you as a text box with no choices.
-    const controls = await input.getAttribute('aria-controls');
+    // SuccessFactors links its listbox with aria-owns instead.
+    const controls = (await input.getAttribute('aria-controls')) ?? (await input.getAttribute('aria-owns'));
     const scoped = controls
       ? page.locator(`[id="${controls}"] [role="option"]`)
       : input
@@ -757,5 +794,17 @@ async function harvestOptions(page: Page, selector: string, max: number): Promis
     return [];
   } finally {
     await page.keyboard.press('Escape').catch(() => {});
+    await closeOwnedList(page, input);
   }
+}
+
+/**
+ * SuccessFactors' picklists ignore Escape and Tab; a second click on the box
+ * is what closes one. Left open, its list sat over the next question.
+ */
+export async function closeOwnedList(page: Page, input: ReturnType<Page['locator']>): Promise<void> {
+  const owns = await input.getAttribute('aria-owns', { timeout: 1000 }).catch(() => null);
+  if (!owns) return;
+  const open = () => page.locator(`[id="${owns}"] [role="option"]:visible`).count().catch(() => 0);
+  if (await open()) await input.click({ timeout: 2000 }).catch(() => {});
 }

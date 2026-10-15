@@ -21,7 +21,7 @@ const COPY: Record<CountryAction, { sub: string; icon: IconName; verb: (country:
     verb: (c) => `Search watch list in ${c}`,
   },
   recheck: {
-    sub: 'Goes through the jobs waiting in "For you" and removes any outside this country, older than 3 months, too senior, or no longer open. Saved, applied and dismissed jobs are not touched.',
+    sub: 'Goes through the jobs waiting in "For you" and removes any outside this country, older than 3 months, too senior, or no longer open, and keeps only the newest, best-matching few from each company. Saved, applied and dismissed jobs are not touched.',
     icon: 'checkCircle',
     verb: (c) => `Remove stale jobs for ${c}`,
   },
@@ -32,7 +32,7 @@ const WORLDWIDE_COPY: Record<CountryAction, { sub: string; icon: IconName; verb:
   crawl: { ...COPY.crawl, sub: 'Re-reads every company on your watch list and keeps jobs in any country.', verb: () => 'Search whole watch list' },
   recheck: {
     ...COPY.recheck,
-    sub: 'Goes through the jobs waiting in "For you" and removes any older than 3 months, too senior, or no longer open. Location is not checked. Saved, applied and dismissed jobs are not touched.',
+    sub: 'Goes through the jobs waiting in "For you" and removes any older than 3 months, too senior, or no longer open, and keeps only the newest, best-matching few from each company. Location is not checked. Saved, applied and dismissed jobs are not touched.',
     verb: () => 'Remove stale jobs',
   },
 };

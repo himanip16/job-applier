@@ -16,6 +16,9 @@ import type { Locator, Page } from 'playwright';
 export interface SiteAccount {
   email: string;
   password: string;
+  /** For Create Account forms that ask for a name (SuccessFactors does). */
+  firstName?: string;
+  lastName?: string;
 }
 
 export interface AccountAttempt {
@@ -23,6 +26,8 @@ export interface AccountAttempt {
   detail: string;
   /** The site answered that this email is already registered. */
   exists?: boolean;
+  /** The site turned the email and password down. */
+  refused?: boolean;
 }
 
 const VISIBLE_PASSWORD = 'input[type="password"]:visible';
@@ -70,6 +75,9 @@ export async function signInOrRegister(page: Page, account: SiteAccount): Promis
   }
   if (IDENTITY_HOST.test(host)) {
     return { ok: false, detail: `${host} is a third-party sign-in; that one is yours to do.` };
+  }
+  if (await isInlineAccount(page)) {
+    return fillInlineAccount(page, account);
   }
 
   // Email-first wall ("Log in or create account": one email box and
@@ -135,7 +143,62 @@ export async function signInOrRegister(page: Page, account: SiteAccount): Promis
       ? signedIn
       : { ...signedIn, detail: `An account with this email already exists, so switched to Sign In. ${signedIn.detail}` };
   }
-  return submitSignIn(page, account, emailEntered);
+  const signedIn = await submitSignIn(page, account, emailEntered);
+  if (signedIn.ok || !signedIn.refused) return signedIn;
+  // "Invalid email or password" is what SuccessFactors says when no account
+  // has this email yet. Registering is safe either way: an email that does
+  // have an account is turned down with "already exists", and that stops here.
+  const opened =
+    (await clickFirst(page, CREATE_LINK)) ||
+    (await clickByName(page, /^(create (an )?account|register|sign up)$/i));
+  if (!opened) return signedIn;
+  await page.waitForLoadState('domcontentloaded').catch(() => {});
+  await page.locator(VISIBLE_PASSWORD).nth(1).waitFor({ timeout: 15_000 }).catch(() => {});
+  const created = (await isInlineAccount(page))
+    ? await fillInlineAccount(page, account)
+    : (await visibleCount(page, VISIBLE_PASSWORD)) >= 2
+      ? await submitCreate(page, account)
+      : { ok: false, detail: 'Opened Create Account, but no password boxes appeared.' };
+  return { ...created, detail: `Sign In refused the saved email and password, so made an account instead. ${created.detail}` };
+}
+
+/** SuccessFactors quick apply: the account boxes are part of the application. */
+async function isInlineAccount(page: Page): Promise<boolean> {
+  const count = (sel: string) => page.locator(sel).count().catch(() => 0);
+  return (await count('#fbqa_apply')) > 0 && (await count('input[name="fbclc_pwd"]')) > 0;
+}
+
+/**
+ * Fill the account boxes that sit on the application itself and stop there.
+ *
+ * Nothing is ticked and nothing is pressed: the only button is the
+ * application's own Apply, and the boxes beside these (job alerts, marketing
+ * opt-in) are questions on the form like any other, answered with the rest.
+ * Each box is left with a blur, which is when the site checks it - its
+ * "Retype" boxes refuse a paste, which `fill` does not do.
+ */
+async function fillInlineAccount(page: Page, account: SiteAccount): Promise<AccountAttempt> {
+  const boxes: Array<[string, string]> = [
+    ['input[name="fbclc_userName"]', account.email],
+    ['input[name="fbclc_emailConf"]', account.email],
+    ['input[name="fbclc_pwd"]', account.password],
+    ['input[name="fbclc_pwdConf"]', account.password],
+  ];
+  for (const [selector, value] of boxes) {
+    const box = page.locator(selector).first();
+    if (!(await box.isVisible().catch(() => false))) continue;
+    if (!(await box.isEditable().catch(() => false))) continue;
+    await box.fill(value);
+    await box.dispatchEvent('blur').catch(() => {});
+  }
+  const empty = await page
+    .locator('input[name^="fbclc_pwd"]')
+    .evaluateAll((els) => els.filter((e) => !(e as HTMLInputElement).value).length)
+    .catch(() => 1);
+  if (empty) return { ok: false, detail: 'Could not fill the account password boxes on this application.' };
+  const said = await siteError(page);
+  if (said && REJECTED.test(said)) return { ok: false, detail: `The site refused the password: "${said}".` };
+  return { ok: true, detail: 'Filled the account boxes on this application with your saved email and password.' };
 }
 
 /** An email box with a Continue/Next button and no password box anywhere on the page. */
@@ -158,13 +221,23 @@ async function submitCreate(page: Page, account: SiteAccount, emailEntered = fal
   const n = await passwords.count();
   for (let i = 0; i < n; i++) await passwords.nth(i).fill(account.password);
 
+  // SuccessFactors' form also wants the email typed again and a name, and
+  // refuses the whole form ("The following fields require a valid input:
+  // Retype Email Address, First Name, Last Name") without them.
+  await fillByLabel(page, /^(retype|confirm|re-?enter|verify|repeat)\b.*e-?mail/i, account.email);
+  if (account.firstName) await fillByLabel(page, /^(first|given) name/i, account.firstName);
+  if (account.lastName) await fillByLabel(page, /^(last|family) name|^surname/i, account.lastName);
+
   // The consent tick ("I agree", "By creating an account…") is required to
-  // submit; anything else checkable on this screen is the same kind of box.
+  // submit. Job alerts and marketing opt-ins on the same screen are not, and
+  // are left as the site set them.
   // Not only `:visible`: Workday's createAccountCheckbox is a transparent
   // input under a drawn box, which can measure as nothing.
   const boxes = page.locator(`${CONSENT_BOX}, form input[type="checkbox"]:visible`);
   for (let i = 0; i < (await boxes.count()); i++) {
-    if (!(await tick(page, boxes.nth(i)))) {
+    const box = boxes.nth(i);
+    if (!(await isConsentBox(box))) continue;
+    if (!(await tick(page, box))) {
       return { ok: false, detail: 'Filled the Create Account form but could not tick its terms checkbox.' };
     }
   }
@@ -214,16 +287,24 @@ async function awaitOutcome(page: Page, success: string, before: string): Promis
   while (Date.now() < deadline) {
     await page.waitForTimeout(750);
     if (!(await visibleCount(page, VISIBLE_PASSWORD))) {
-      return { ok: true, detail: `${success} with your saved email.` };
+      // A form that posts back reloads the page: the password box is gone for
+      // a moment and then the same sign-in screen returns with an error. Only
+      // a box still gone once the page has loaded counts.
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+      await page.waitForTimeout(1500);
+      if (!(await visibleCount(page, VISIBLE_PASSWORD))) {
+        return { ok: true, detail: `${success} with your saved email.` };
+      }
     }
     const text = await bodyText(page);
     if (newly(text, before, ALREADY_EXISTS)) {
       return { ok: false, exists: true, detail: 'An account with this email already exists.' };
     }
     const refused = newly(text, before, REJECTED);
-    if (refused) return { ok: false, detail: `The site refused it: "${refused}".` };
+    if (refused) return { ok: false, refused: true, detail: `The site refused it: "${refused}".` };
   }
   const said = await siteError(page);
+  if (said && REJECTED.test(said)) return { ok: false, refused: true, detail: `The site refused it: "${said}".` };
   return {
     ok: false,
     detail: said
@@ -262,6 +343,35 @@ function newly(text: string, before: string, re: RegExp): string | null {
   const was = tally(before);
   for (const [m, n] of tally(text)) if (n > (was.get(m) ?? 0)) return m;
   return null;
+}
+
+/** Fill an empty, editable text box by its label, then leave it (sites validate on blur). */
+async function fillByLabel(page: Page, label: RegExp, value: string): Promise<void> {
+  const box = page.getByLabel(label).first();
+  if (!(await box.isVisible().catch(() => false))) return;
+  if (!(await box.isEditable().catch(() => false))) return;
+  if (await box.inputValue().catch(() => '')) return;
+  await box.fill(value).catch(() => {});
+  await box.dispatchEvent('blur').catch(() => {});
+}
+
+/**
+ * A box that has to be ticked to make the account: Workday's own, one the
+ * page marks required, or one whose wording is about terms and privacy.
+ */
+async function isConsentBox(box: Locator): Promise<boolean> {
+  return box
+    .evaluate((el, consentSel) => {
+      const input = el as HTMLInputElement;
+      if (input.matches(consentSel) || input.required || input.getAttribute('aria-required') === 'true') return true;
+      const label =
+        (input.id && document.querySelector(`label[for="${CSS.escape(input.id)}"]`)?.textContent) ||
+        input.closest('label')?.textContent ||
+        input.parentElement?.textContent ||
+        '';
+      return /\b(agree|accept|terms|privacy|consent|acknowledge|i have read)\b/i.test(label);
+    }, CONSENT_BOX)
+    .catch(() => false);
 }
 
 async function siteError(page: Page): Promise<string | null> {

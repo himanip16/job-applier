@@ -47,6 +47,10 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   const [error, setError] = useState<string | null>(null);
   // A failed button press. Shown beside the buttons, never in place of the page.
   const [actionError, setActionError] = useState<string | null>(null);
+  // The question ids the popup was closed on. Close used to just refresh, and
+  // the same unanswered questions put the popup straight back. Keyed by ids so
+  // a new question still opens it.
+  const [closedOn, setClosedOn] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(
@@ -91,6 +95,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   if (!detail) return <Loading />;
 
   const open = detail.pending.filter((q) => !q.answeredAt);
+  const openKey = open.map((q) => q.id).join(',');
 
   return (
     <>
@@ -172,7 +177,21 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
         ))}
 
       {/* Questions from a run that has since ended are stale: a restart re-asks them. */}
-      {open.length > 0 && detail.status === 'NEEDS_INPUT' && <QuestionModal applicationId={id} questions={open} onDone={refresh} />}
+      {open.length > 0 && detail.status === 'NEEDS_INPUT' && (closedOn === openKey ? (
+        <div className="panel spread" style={{ alignItems: 'center' }}>
+          <p className="sub" style={{ margin: 0 }}>
+            {open.length} question{open.length === 1 ? '' : 's'} waiting for you. The run is paused until they are answered.
+          </p>
+          <button className="primary" onClick={() => setClosedOn(null)}>Answer</button>
+        </div>
+      ) : (
+        <QuestionModal
+          applicationId={id}
+          questions={open}
+          onDone={refresh}
+          onClose={() => setClosedOn(openKey)}
+        />
+      ))}
 
       {detail.status === 'REVIEW' && <ReviewPanel applicationId={id} detail={detail} onDone={refresh} />}
 
@@ -212,10 +231,12 @@ function QuestionModal({
   applicationId,
   questions,
   onDone,
+  onClose,
 }: {
   applicationId: string;
   questions: PendingQuestion[];
   onDone: () => void;
+  onClose: () => void;
 }) {
   const [values, setValues] = useState<Record<string, string | string[]>>(() =>
     Object.fromEntries(questions.map((q) => [q.id, initialValue(q)])),
@@ -279,7 +300,7 @@ function QuestionModal({
             type="button"
             className="ghost"
             disabled={busy}
-            onClick={() => onDone()}
+            onClick={onClose}
             style={{ marginLeft: '.5rem' }}
           >
             Close
