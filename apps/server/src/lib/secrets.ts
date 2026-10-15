@@ -60,6 +60,18 @@ export const EDITABLE_SETTINGS = {
     where: 'myaccount.google.com/apppasswords',
     secret: true,
   },
+  APPLE_ID: {
+    label: 'Apple ID',
+    help: 'The Apple Account Apple Careers applications sign in with. Blank uses your profile email.',
+    where: '',
+    secret: false,
+  },
+  APPLE_ID_PASSWORD: {
+    label: 'Apple Account password',
+    help: 'Fills the Apple Account sign-in on jobs.apple.com. The code Apple sends to your devices still waits for you.',
+    where: '',
+    secret: true,
+  },
   LLM_PROVIDER: {
     label: 'Model provider',
     help: 'Leave blank to use whichever key is set. Gemini wins if both are.',

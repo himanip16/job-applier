@@ -11,6 +11,7 @@ import { setStatus, artifact } from './runLog.js';
 import { whileWaitingOnHuman } from './slots.js';
 import { secret } from '../lib/secrets.js';
 import { signInOrRegister } from '../browser/accountWall.js';
+import { onAppleSignIn, signInWithAppleId } from '../browser/appleId.js';
 import { clearEmailVerification } from '../browser/emailCode.js';
 import { recordManualSubmit, watchForManualSubmit } from './manualSubmit.js';
 import { PostingGoneError, postingGone } from './deadPosting.js';
@@ -238,6 +239,36 @@ async function signInWithSavedAccount(
 }
 
 /**
+ * Apple Careers' Apple Account sign-in, filled with the saved Apple ID and
+ * password; see browser/appleId.ts. True only when it got all the way back to
+ * the job site. Apple's six-digit code goes to the person's own devices, so
+ * that screen - like no password saved, or a refused one - falls through to
+ * the ordinary pause, which carries on by itself once the page leaves Apple.
+ */
+async function signInWithSavedAppleId(applicationId: string, page: Page, blocker: Blocker): Promise<boolean> {
+  if (blocker.kind !== 'LOGIN_REQUIRED' || !onAppleSignIn(page)) return false;
+  const password = secret('APPLE_ID_PASSWORD');
+  if (!password) return false;
+  let appleId = secret('APPLE_ID');
+  if (!appleId) {
+    const app = await prisma.application.findUnique({
+      where: { id: applicationId },
+      select: { profile: { select: { email: true } } },
+    });
+    appleId = app?.profile.email ?? '';
+  }
+  if (!appleId) return false;
+
+  await bus.emitEvent(applicationId, 'LOG', 'Apple Account sign-in: using your saved Apple ID and password.');
+  const attempt = await signInWithAppleId(page, { appleId, password }).catch((err: unknown) => ({
+    outcome: 'failed' as const,
+    detail: `Apple sign-in failed: ${(err as Error).message}`,
+  }));
+  await bus.emitEvent(applicationId, 'LOG', attempt.detail);
+  return attempt.outcome === 'signed-in';
+}
+
+/**
  * "We emailed you a code": with a Gmail app password saved, fetch it and put
  * it in. False hands over to the ordinary pause - no password, no matching
  * email in time, or a code the site would not take.
@@ -295,11 +326,12 @@ export async function pauseForHuman(
   page: Page,
   blocker: Blocker,
 ): Promise<boolean> {
+  if (await signInWithSavedAppleId(applicationId, page, blocker)) return true;
   if (await signInWithSavedAccount(applicationId, page, blocker)) return true;
   if (await enterEmailedCode(applicationId, page, blocker)) return true;
   // The app asks for the password in a popup; worth waiting for even on
   // autopilot, because every later account wall then clears by itself.
-  const askingForPassword = isAccountWall(blocker) && !secret('JOB_SITE_PASSWORD');
+  const askingForPassword = isAccountWall(blocker) && !onAppleSignIn(page) && !secret('JOB_SITE_PASSWORD');
   if (askingForPassword) {
     await bus.emitEvent(
       applicationId,

@@ -18,9 +18,27 @@ import { openApplicationForm } from '../../browser/openForm.js';
  *     `#jobdetails-jobdescription`, `#jobdetails-minimumqualifications`,
  *     `#jobdetails-preferredqualifications`.
  *
- * The form behind the sign-in has not been seen yet, so extraction is the
- * label-driven default and every run goes through review.
+ *   - the sign-in itself is filled from the saved Apple ID (engine/humanGate.ts,
+ *     browser/appleId.ts); Apple's six-digit device code still waits for you.
+ *   - after the resume is parsed, a "review" step (`#parsedmodal-review-container`)
+ *     shows Contact Information with ordinary labelled inputs (`#profile-firstname`,
+ *     `#apply-contact-pref-phone-0`, a native Country/Region `<select>` whose
+ *     values are `iso-country-XXX`, `#profile-field-city` ...), "Add education" /
+ *     "Add employment" / "Add language" buttons, a Skills search box, and an
+ *     "Add files" input (`#attachfile-resume-supportfile`) for a cover letter or
+ *     portfolio. `#apply-step-continue-button` ("Continue") moves on.
+ *
+ * Two controls there are not questions. The Skills search box carries
+ * `required` but only searches Apple's skill list - read as a required blank,
+ * it stopped the run to ask - so it is left out. The "Add files" input is the
+ * only file input on the step, and taking the first file input as the resume
+ * attached the resume a second time; it gets the cover letter instead.
+ *
+ * The last step has not been seen yet, so every run still goes through review.
  */
+const SKILL_SEARCH = /apply-skills-typeahead/i;
+const SUPPORT_FILE = /supportfile/i;
+
 export const appleAdapter: AtsAdapter = {
   id: 'apple',
 
@@ -43,6 +61,7 @@ export const appleAdapter: AtsAdapter = {
       const description = [
         'jobdetails-jobsummary',
         'jobdetails-jobdescription',
+        'jobdetails-responsibilities',
         'jobdetails-minimumqualifications',
         'jobdetails-preferredqualifications',
       ]
@@ -59,14 +78,18 @@ export const appleAdapter: AtsAdapter = {
   },
 
   async extractForm(page) {
-    return extractFields(page, { harvestComboboxOptions: true });
+    const fields = await extractFields(page, { harvestComboboxOptions: true });
+    return fields.filter((f) => !SKILL_SEARCH.test(`${f.name ?? ''} ${f.selector}`));
   },
 
   fileInputs(fields) {
     const files = fields.filter((f) => f.kind === 'FILE');
+    // `attachfile-resume-supportfile` says "resume" too; it is the extras box.
+    const extras = files.find((f) => SUPPORT_FILE.test(fileHint(f)));
+    const own = files.filter((f) => f !== extras);
     return {
-      resume: files.find((f) => /resume|cv/i.test(fileHint(f))) ?? files[0],
-      coverLetter: files.find((f) => /cover/i.test(fileHint(f))),
+      resume: own.find((f) => /resume|cv/i.test(fileHint(f))) ?? own[0],
+      coverLetter: own.find((f) => /cover/i.test(fileHint(f))) ?? extras,
     };
   },
 
@@ -77,7 +100,8 @@ export const appleAdapter: AtsAdapter = {
   alwaysReview: true,
 
   notes: [
-    'Needs an Apple ID sign-in: the run pauses at idmsa.apple.com the first time; sign in once in the open browser.',
-    'The form behind the sign-in has not been mapped yet, so fields are matched on their labels.',
+    'Signs in with the Apple ID saved in Settings; the six-digit code Apple sends to your devices waits for you the first time.',
+    'The Skills search box is skipped, and "Add files" gets the cover letter.',
+    'The final step has not been mapped yet, so every run stops for review.',
   ],
 };
