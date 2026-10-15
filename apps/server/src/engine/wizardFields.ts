@@ -8,6 +8,7 @@ import {
 import { bus } from '../lib/events.js';
 import { entry, type FieldPlanEntry } from './fieldPlan.js';
 import { truncate } from './runLog.js';
+import { degreeLevel } from './repeatableSections.js';
 
 interface FillStepContext {
   applicationId: string;
@@ -56,6 +57,9 @@ async function fillPlannedField(planned: FormField, context: FillStepContext): P
   if (afterHumanPause && (await preserveHumanValue(context, field, answer))) return false;
 
   const { check, failure } = await fillWithRecovery(applicationId, page, adapter, field, wanted);
+  if (!check && /Could not find option/.test(failure)) {
+    if (await fillListFallback(context, field, answer, wanted)) return false;
+  }
   if (check) {
     plan.push({
       ...entry(field, answer, true),
@@ -75,6 +79,51 @@ async function fillPlannedField(planned: FormField, context: FillStepContext): P
   plan.push({ ...entry(field, answer, false), error: failure });
   await bus.emitEvent(applicationId, 'WARNING', `Could not fill "${field.label}": ${failure}`);
   return field.required;
+}
+
+/**
+ * What else to look for when a dropdown has no option for the answer as
+ * saved. Each is the same fact in the list's own words, never a guess:
+ *
+ * - School: a board's school list leaves out many colleges. IMC's Greenhouse
+ *   list has no Haldia Institute of Technology at all, and a required School
+ *   stopped the run. The list's "Other" is what a person would pick.
+ * - Degree: "Bachelor of Technology" is listed as "Bachelor's Degree" or
+ *   "Bachelors". Walmart's Workday degree list stopped on it.
+ */
+function listFallbacks(field: FormField, wanted: string | string[]): { values: string[]; why: string }[] {
+  if (Array.isArray(wanted)) return [];
+  const out: { values: string[]; why: string }[] = [];
+  if (/degree|qualification/i.test(field.label) && !/field of study|discipline|major/i.test(field.label)) {
+    const level = degreeLevel(wanted);
+    if (level) {
+      const word = level.replace(/'s\b.*$/, '');
+      out.push({ values: [level, `${word}s`, word], why: `listed as the degree level` });
+    }
+  }
+  if (/school|university|college|institution/i.test(field.label)) {
+    out.push({ values: ['Other'], why: 'not in this form\'s school list, so "Other" was chosen' });
+  }
+  return out;
+}
+
+async function fillListFallback(
+  { applicationId, page, adapter, plan }: FillStepContext,
+  field: FormField,
+  answer: ResolvedAnswer,
+  wanted: string | string[],
+): Promise<boolean> {
+  for (const { values, why } of listFallbacks(field, wanted)) {
+    for (const value of values) {
+      const { check } = await fillWithRecovery(applicationId, page, adapter, field, value);
+      if (!check?.ok) continue;
+      const said = `"${truncate(String(wanted))}" is ${why} ("${value}").`;
+      plan.push({ ...entry(field, answer, true), value, rationale: said, verified: check.actual });
+      await bus.emitEvent(applicationId, 'LOG', `${field.label}: ${said}`);
+      return true;
+    }
+  }
+  return false;
 }
 
 const GENERATED_ID = /^(input|select|react-select|downshift|mui|headlessui|radix)[-_:]?[\w-]*\d+(-input)?$|^:r\w+:$/i;

@@ -11,7 +11,9 @@ import { setStatus, artifact } from './runLog.js';
 import { whileWaitingOnHuman } from './slots.js';
 import { secret } from '../lib/secrets.js';
 import { signInOrRegister } from '../browser/accountWall.js';
+import { clearEmailVerification } from '../browser/emailCode.js';
 import { recordManualSubmit, watchForManualSubmit } from './manualSubmit.js';
+import { PostingGoneError, postingGone } from './deadPosting.js';
 
 /**
  * Every point where the run needs a person.
@@ -229,6 +231,33 @@ async function signInWithSavedAccount(
   return !still;
 }
 
+/**
+ * "We emailed you a code": with a Gmail app password saved, fetch it and put
+ * it in. False hands over to the ordinary pause - no password, no matching
+ * email in time, or a code the site would not take.
+ */
+async function enterEmailedCode(applicationId: string, page: Page, blocker: Blocker): Promise<boolean> {
+  if (blocker.kind !== 'EMAIL_VERIFICATION') return false;
+  const appPassword = secret('EMAIL_APP_PASSWORD');
+  if (!appPassword) return false;
+  const app = await prisma.application.findUnique({
+    where: { id: applicationId },
+    select: { profile: { select: { email: true } }, job: { select: { company: true } } },
+  });
+  const email = app?.profile.email;
+  if (!email) return false;
+
+  const log = (line: string) => bus.emitEvent(applicationId, 'LOG', line).then(() => {});
+  const result = await clearEmailVerification(page, {
+    email,
+    appPassword,
+    company: app?.job.company,
+    log,
+  }).catch((err: unknown) => ({ ok: false, detail: `Could not read your inbox: ${(err as Error).message}` }));
+  await log(result.ok ? result.detail : `${result.detail} Waiting for you to enter it instead.`);
+  return result.ok;
+}
+
 const isAccountWall = (blocker: Blocker) =>
   blocker.kind === 'LOGIN_REQUIRED' || blocker.kind === 'ACCOUNT_CREATION';
 
@@ -261,6 +290,7 @@ export async function pauseForHuman(
   blocker: Blocker,
 ): Promise<boolean> {
   if (await signInWithSavedAccount(applicationId, page, blocker)) return true;
+  if (await enterEmailedCode(applicationId, page, blocker)) return true;
   // The app asks for the password in a popup; worth waiting for even on
   // autopilot, because every later account wall then clears by itself.
   const askingForPassword = isAccountWall(blocker) && !secret('JOB_SITE_PASSWORD');
@@ -441,6 +471,8 @@ export async function handleOpenFailure(applicationId: string, page: Page, err: 
     return;
   }
   if (err instanceof NoFormError) {
+    // No form because the posting is gone: nothing for you to clear.
+    if (await postingGone(page, err.diagnosis.url)) throw new PostingGoneError();
     await bus.emitEvent(applicationId, 'ERROR', describeDiagnosis(err.diagnosis));
     await handOffToHuman(applicationId, page, {
       kind: 'UNKNOWN',

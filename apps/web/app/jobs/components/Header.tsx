@@ -18,7 +18,10 @@ export function Header({
   applying?: boolean;
   applyError?: string | null;
 }) {
-  const submitted = d.application?.status === 'SUBMITTED';
+  // Apply starts a new run, so offer it only when there is no live one: none
+  // yet, or the last one died. Otherwise the next action is the way forward.
+  const runStatus = d.application?.status;
+  const canApply = !runStatus || runStatus === 'FAILED' || runStatus === 'CANCELLED';
   // "Triage this lead" and the shortlist's "Apply" only link back to the
   // queue, to make the same apply-or-reject call these buttons already make.
   const nextAction = onApply && d.nextAction?.href === '/discover' ? null : d.nextAction;
@@ -49,9 +52,9 @@ export function Header({
             <button className={`${s.pill} ${nextAction.urgent ? 'primary' : ''}`}>{nextAction.label}</button>
           </a>
         )}
-        {d.job.url && onApply && !submitted && (
+        {d.job.url && onApply && canApply && (
           <button className={`${s.pill} ${nextAction?.urgent ? '' : 'primary'}`} onClick={onApply} disabled={applying}>
-            {applying ? 'Starting…' : 'Apply'}
+            {applying ? 'Starting…' : runStatus ? 'Try again' : 'Apply'}
           </button>
         )}
         {d.job.url && (
@@ -111,7 +114,7 @@ function Journey({ d }: { d: Detail }) {
     },
   ];
 
-  const dotClass: Record<Tone, string> = {
+  const dotClass: Record<Tone, string | undefined> = {
     good: s.dotGood,
     warn: s.dotWarn,
     bad: s.dotBad,

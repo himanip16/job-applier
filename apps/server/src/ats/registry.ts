@@ -9,6 +9,7 @@ import { appleAdapter } from './adapters/apple.js';
 import { workdayAdapter } from './adapters/workday.js';
 import { smartRecruitersAdapter } from './adapters/smartrecruiters.js';
 import { ripplingAdapter } from './adapters/rippling.js';
+import { turboHireAdapter } from './adapters/turbohire.js';
 import { genericAdapter } from './adapters/generic.js';
 
 /** Order matters: generic must be last, it matches everything. */
@@ -23,6 +24,7 @@ export const ADAPTERS: AtsAdapter[] = [
   workdayAdapter,
   smartRecruitersAdapter,
   ripplingAdapter,
+  turboHireAdapter,
   genericAdapter,
 ];
 

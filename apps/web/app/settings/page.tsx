@@ -112,6 +112,9 @@ export default function SettingsPage() {
       {byKey.get('JOB_SITE_PASSWORD') && (
         <JobSiteAccount setting={byKey.get('JOB_SITE_PASSWORD')!} onChange={load} />
       )}
+      {byKey.get('EMAIL_APP_PASSWORD') && (
+        <InboxCodes setting={byKey.get('EMAIL_APP_PASSWORD')!} onChange={load} />
+      )}
       {byKey.get('SSO_PROVIDER') && (
         <SignInProvider setting={byKey.get('SSO_PROVIDER')!} onChange={load} />
       )}
@@ -738,6 +741,127 @@ function JobSiteAccount({ setting, onChange }: { setting: Setting; onChange: () 
       {!setting.set && (
         <p className={s.hint} style={{ marginTop: '.5rem' }}>
           Most sites want 8+ characters with upper and lower case, a number and a symbol.
+        </p>
+      )}
+
+      {result && (
+        <div className={`notice ${result.ok ? 'good' : 'bad'} ${s.message}`} role="status">
+          {result.detail}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * A Gmail app password, so "we sent a code to your email" walls clear by
+ * themselves. Saving it logs in to Gmail once to prove it works.
+ */
+function InboxCodes({ setting, onChange }: { setting: Setting; onChange: () => Promise<void> }) {
+  const [value, setValue] = useState('');
+  const [editing, setEditing] = useState(!setting.set);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; detail: string } | null>(null);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await api<{ check: { ok: boolean; detail: string } | null }>('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ key: setting.key, value }),
+      });
+      setValue('');
+      setEditing(false);
+      setResult(r.check ?? { ok: true, detail: 'Saved.' });
+      await onChange();
+    } catch (err) {
+      setResult({ ok: false, detail: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clear() {
+    if (!confirm('Remove the Gmail app password? Emailed codes will wait for you again.')) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      await api(`/api/settings/${setting.key}`, { method: 'DELETE' });
+      await onChange();
+      setEditing(true);
+    } catch (err) {
+      setResult({ ok: false, detail: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className={s.card}>
+      <div className={s.cardHead}>
+        <div>
+          <h2>Email verification codes</h2>
+          <p>
+            When a job site emails you a code or a verify link, the run reads it from your Gmail
+            (the email on your profile) and puts it in. It only looks at mail from the last few
+            minutes that is from that company or its job board, and never marks anything read. If
+            no clear code arrives within two minutes it waits for you as before.
+          </p>
+        </div>
+      </div>
+
+      {setting.set && !editing ? (
+        <div className={`${s.row} ${s.rowActive}`}>
+          <span className={`${s.dot} ${s.dotFirecrawl}`} aria-hidden />
+          <div className={s.rowMain}>
+            <span className={s.rowName}>Gmail app password</span>
+            <span className={s.rowMeta}>
+              <code>••••••••</code>
+              {setting.origin === 'env' && ' · from .env'}
+            </span>
+          </div>
+          <span className={s.inUse}>
+            <Check /> Saved
+          </span>
+          <button className={s.pill} disabled={busy} onClick={() => setEditing(true)}>
+            Replace
+          </button>
+          {setting.origin === 'saved' && (
+            <button className={s.quiet} disabled={busy} onClick={clear}>
+              Remove
+            </button>
+          )}
+        </div>
+      ) : (
+        <form className={s.inline} onSubmit={save}>
+          <input
+            type="password"
+            placeholder="xxxx xxxx xxxx xxxx"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            aria-label="Gmail app password"
+          />
+          {setting.set && (
+            <button type="button" className={`ghost ${s.pill}`} onClick={() => setEditing(false)} disabled={busy}>
+              Cancel
+            </button>
+          )}
+          <button type="submit" className={`primary ${s.pill}`} disabled={busy || !value.trim()}>
+            {busy ? 'Checking…' : 'Save'}
+          </button>
+        </form>
+      )}
+      {!setting.set && (
+        <p className={s.hint} style={{ marginTop: '.5rem' }}>
+          Not your Gmail password. Turn on 2-Step Verification, then make one at{' '}
+          <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">
+            myaccount.google.com/apppasswords
+          </a>
+          . It can only read mail, and you can revoke it there any time.
         </p>
       )}
 

@@ -232,18 +232,19 @@ export default function DiscoverPage() {
         );
       } else {
         const { report: r } = await api<{
-          report: { checked: number; removed: number; removedBy: Record<string, number>; unreachable: string[] };
+          report: { checked: number; removed: number; removedBy: Record<string, number>; unreachable: string[]; unknown?: number };
         }>('/api/discovery/recheck-leads', { method: 'POST', body: JSON.stringify({ country: target }) });
         const b = r.removedBy;
+        const unknown = r.unknown ?? 0;
         setFlash(
-          r.removed === 0
-            ? `Checked ${r.checked} jobs — all still fit${worldwide ? '' : ` ${name}`}.`
+          (r.removed === 0
+            ? `Checked ${r.checked} jobs — none were closed, too old or off-target${worldwide ? '' : ` for ${name}`}.`
             : `Checked ${r.checked} jobs and removed ${r.removed}: ${b.wrongDomain} not engineering roles, ` +
                 (worldwide ? '' : `${b.otherCountry} outside ${name}, `) +
                 `${b.closed} closed, ${b.tooOld} older than 3 months, ${b.tooSenior} too senior` +
                 (b.tooJunior ? `, ${b.tooJunior} internship or new-grad` : '') +
-                '.' +
-                (r.unreachable.length ? ` Could not reach ${r.unreachable.length} board(s), so their jobs were left alone.` : ''),
+                '.') +
+            (unknown ? ` ${unknown} posting page${unknown === 1 ? '' : 's'} gave no clear answer, so ${unknown === 1 ? 'it was' : 'they were'} kept.` : ''),
         );
       }
       await load();

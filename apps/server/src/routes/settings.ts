@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   EDITABLE_SETTINGS,
@@ -18,6 +18,9 @@ import {
 import { provider, resetProvider, isConfigured } from '../llm/client.js';
 import { activeModels } from '../llm/models.js';
 import { firecrawlSearch, isFirecrawlConfigured } from '../discovery/firecrawl.js';
+import { checkInboxLogin } from '../lib/inbox.js';
+import { currentUser } from '../auth/sessions.js';
+import { prisma } from '../lib/db.js';
 
 /**
  * Keys, from the UI.
@@ -119,7 +122,7 @@ export function registerSettingsRoutes(app: FastifyInstance) {
       return { setting: describe(key), check: null };
     }
 
-    const check = await verify(key);
+    const check = key === 'EMAIL_APP_PASSWORD' ? await verifyInbox(req, body.value) : await verify(key);
     if (!check.ok) {
       // Do not leave a key in place that has just been shown not to work: the
       // next run would fail somewhere far less obvious than this page.
@@ -162,9 +165,29 @@ function describe(key: SettingKey) {
     // Masked for the secrets; LLM_PROVIDER is not one, and hiding it would
     // just make the page harder to read.
     // Not even four characters of a password.
-    preview: key === 'JOB_SITE_PASSWORD' ? (value ? '••••' : '') : meta.secret ? maskSecret(value) : value,
+    preview: key === 'JOB_SITE_PASSWORD' || key === 'EMAIL_APP_PASSWORD' ? (value ? '••••' : '') : meta.secret ? maskSecret(value) : value,
     set: Boolean(value),
   };
+}
+
+/**
+ * Log in to Gmail with the profile email and this app password. The profile
+ * email, because that is where job sites send the codes.
+ */
+async function verifyInbox(req: FastifyRequest, appPassword: string): Promise<{ ok: boolean; detail: string }> {
+  const user = await currentUser(req);
+  const profile = user
+    ? await prisma.profile.findUnique({ where: { userId: user.id }, select: { email: true } })
+    : await prisma.profile.findFirst({ select: { email: true } });
+  if (!profile?.email) {
+    return { ok: false, detail: 'Add your email to your profile first: that is the inbox the codes go to.' };
+  }
+  try {
+    await checkInboxLogin(profile.email, appPassword);
+    return { ok: true, detail: `Signed in to ${profile.email}. Emailed codes are filled in automatically from now on.` };
+  } catch (err) {
+    return { ok: false, detail: (err as Error).message };
+  }
 }
 
 /** Does this key actually work? One real call, with a message worth reading. */

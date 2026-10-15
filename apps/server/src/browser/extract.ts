@@ -138,7 +138,15 @@ const EXTRACTOR = () => {
    * Lever's "Years of Exp" came out as "Less than 2 yrs".
    */
   const labelFor = (el: HTMLElement, grouped = false): string => {
-    const aria = el.getAttribute('aria-label');
+    // Workday's dropdown buttons append their placeholder and required flag to
+    // the aria-label ("Phone Device Type Select One Required"); on application
+    // questions that is the *whole* aria-label, and the question lives in a
+    // <label for>. Morningstar's three screening questions all reached you as
+    // "Select One Required". Strip the suffix and, if nothing is left, look
+    // further.
+    const rawAria = el.getAttribute('aria-label');
+    const aria = rawAria?.replace(/\s*\bselect one\b(\s+required)?\s*$/i, '').trim() || null;
+    const placeholderAria = !!rawAria?.trim() && !aria;
     // Rippling labels every dropdown "Search", "Select..." or "textbox" and
     // names the actual question ("Gender", "Location") via aria-labelledby.
     // Read aria-label first and those questions reached you as "Search".
@@ -204,7 +212,12 @@ const EXTRACTOR = () => {
    * that points at the real question with aria-labelledby. Read on its own
    * label, every one of them came out as a required question called "Yes".
    */
-  const BARE_ANSWER = /^(yes|i agree|agree|i accept|accept|i acknowledge|acknowledge|i confirm|confirm|ok)\.?$/i;
+  //
+  // Okta's are the same idea without the ARIA: a box captioned "Yes" or
+  // "Yes, I acknowledge" under a plain heading that holds the question. So a
+  // bare answer also looks for the nearest heading before the box.
+  const BARE_ANSWER =
+    /^((yes|no|ok|okay|true)\b[,.!]?\s*)?((i\s+)?(agree|accept|acknowledge|confirm|understand|consent|certify|do|have read and (agree|understand|accept)))?[.!]?$/i;
   const loneCheckboxLabel = (el: HTMLElement): string => {
     const own = labelFor(el);
     if (own && !BARE_ANSWER.test(own)) return own;
@@ -216,7 +229,20 @@ const EXTRACTOR = () => {
           .filter(Boolean)
           .join(' ')
       : '';
-    return named || textOf(el.closest('fieldset')?.querySelector('legend') ?? null) || own;
+    if (named) return named;
+    const legend = textOf(el.closest('fieldset')?.querySelector('legend') ?? null);
+    if (legend) return legend;
+    // The heading just before the box, or before one of its wrappers - as
+    // long as that wrapper holds this box and no other control.
+    let node: HTMLElement | null = el.closest('label') ?? el;
+    for (let depth = 0; node && depth < 4; depth++, node = node.parentElement) {
+      if (depth && node.querySelectorAll('input:not([type="hidden"]), select, textarea').length > 1) break;
+      const before = questionBefore(node);
+      const text = before ? textOf(before) : '';
+      if (text && !BARE_ANSWER.test(text)) return text;
+    }
+    const wrapper = (el.closest('label') ?? el).parentElement;
+    return (wrapper && captionAbove(wrapper, [el])) || own;
   };
 
   const helpFor = (el: HTMLElement): string => {

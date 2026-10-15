@@ -185,7 +185,7 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
     }
     case 'CHECKBOX': {
       const on = /^(true|yes|1|on|checked)$/i.test(asOne(value, field));
-      await el.setChecked(on);
+      await setCheckedCovered(page, el, on);
       break;
     }
     default: {
@@ -466,7 +466,8 @@ async function waitForOption(page: Page, field: FormField, want: string): Promis
  * instead of choosing, look for the answer one level down; past that it is a
  * question for a person, not a guess.
  */
-async function fillWorkdayPrompt(page: Page, field: FormField, want: string): Promise<void> {
+async function fillWorkdayPrompt(page: Page, field: FormField, saved: string): Promise<void> {
+  const want = workdayPlain(saved) || saved;
   const input = page.locator(field.selector).first();
   await input.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
   if (workdayShows(want, await workdaySelection(page, field))) return;
@@ -575,6 +576,37 @@ async function workdaySelection(page: Page, field: FormField): Promise<string> {
   return normalizeLabel(said.join(' '));
 }
 
+/** The items picked in a Workday search box, as drawn, once each. */
+async function workdayChosen(page: Page, field: FormField): Promise<string[]> {
+  let input = page.locator(field.selector).first();
+  if (!(await input.count()) && field.name) input = page.locator(`[id="${cssEscape(field.name)}"]`).first();
+  const items = await input
+    .locator('xpath=ancestor::*[@data-automation-id="multiSelectContainer"][1]')
+    .locator('[data-automation-id="selectedItem"]')
+    .allInnerTexts()
+    .catch(() => [] as string[]);
+  return [...new Set(items.map((t) => t.replace(/\s+/g, ' ').trim()).filter(Boolean))];
+}
+
+/**
+ * A Workday selection without the screen reader's words around it:
+ * "expanded 1 item selected electronics electronics" is "electronics". Also
+ * cleans answers saved in that shape before the fix, so they still replay.
+ */
+export function workdayPlain(text: string): string {
+  let s = text.replace(/^\s*(expanded|collapsed)\b\s*/i, '').trim();
+  const counted = /^\d+ items? selected\b/i.test(s);
+  s = s.replace(/^\d+ items? selected\b\s*/i, '').trim();
+  // The count is followed by the item twice (drawn, then announced); only
+  // then is a doubled phrase an echo rather than a name like "New York New York".
+  const words = s.split(/\s+/);
+  const half = words.length / 2;
+  if (counted && words.length % 2 === 0 && words.slice(0, half).join(' ').toLowerCase() === words.slice(half).join(' ').toLowerCase()) {
+    s = words.slice(0, half).join(' ');
+  }
+  return s;
+}
+
 function workdayShows(want: string, shown: string): boolean {
   const w = normalizeLabel(want);
   if (!w || !shown || /^0 items? selected/.test(shown)) return false;
@@ -637,6 +669,37 @@ async function fillCheckboxGroup(page: Page, field: FormField, wants: string[]):
       field,
     );
   }
+}
+
+/**
+ * Tick or clear a checkbox, including one hidden under its own label.
+ *
+ * Okta's (and many styled) forms draw a fake box in the <label> and leave the
+ * real input underneath it. setChecked() waits for the input to be clickable,
+ * which never happens, so every such box spent 30+ seconds timing out and was
+ * then handed to you. Try the normal way briefly, then the label, then the
+ * input itself, checking the tick after each.
+ */
+async function setCheckedCovered(page: Page, el: Locator, on: boolean): Promise<void> {
+  const holds = async () => (await el.isChecked().catch(() => !on)) === on;
+  if (await holds()) return;
+  try {
+    await el.setChecked(on, { timeout: 2_500 });
+    if (await holds()) return;
+  } catch {
+    // Covered or styled box; fall through.
+  }
+  const id = await el.getAttribute('id').catch(() => null);
+  const byFor = id ? page.locator(`label[for="${cssEscape(id)}"]`) : null;
+  const label = byFor && (await byFor.count()) ? byFor.first() : el.locator('xpath=ancestor::label[1]');
+  if (await label.count()) {
+    await label.first().click({ timeout: 2_500 }).catch(() => {});
+    if (await holds()) return;
+  }
+  await el.setChecked(on, { force: true, timeout: 2_500 }).catch(() => {});
+  if (await holds()) return;
+  // Last resort: a native click on the input fires the events React listens to.
+  await el.evaluate((node) => (node as HTMLInputElement).click()).catch(() => {});
 }
 
 /** Resolve the human-visible text attached to an input. */
@@ -778,7 +841,7 @@ export async function verifyFilled(
     }
     if (field.widget === 'workday-prompt') {
       const shown = await workdaySelection(page, field);
-      return { ok: wants.every((w) => workdayShows(w, shown)), actual: shown };
+      return { ok: wants.every((w) => workdayShows(workdayPlain(w) || w, shown)), actual: shown };
     }
     if (field.widget === 'workday-dropdown') {
       const shown = normalizeLabel(await page.locator(field.selector).first().innerText().catch(() => ''));
@@ -801,9 +864,7 @@ export async function verifyFilled(
     let el = page.locator(field.selector).first();
     // Workday replaces a text input with a new node on blur, and our stamp
     // leaves with the old one. The name attribute survives the swap.
-    if (!(await el.count()) && field.name) {
-      el = page.locator(`[name="${cssEscape(field.name)}"]`).first();
-    }
+    if (!(await el.count()) && field.name) el = await byNameInRow(page, field);
     if (field.kind === 'CHECKBOX') {
       // The input's value is whatever the site set ("1", "on"); what matters is the tick.
       const want = /^(true|yes|1|on|checked)$/i.test(wants[0] ?? '');
@@ -825,6 +886,10 @@ export async function verifyFilled(
         wants.every((w) => selectedText.includes(w) || actual.includes(w)) ||
         wants.every((w) => showsChosenOption(field, w, shown));
       return { ok, actual: shown };
+    }
+    // Workday's month box shows "2" once "02" is typed into it.
+    if (/^\d{1,4}$/.test(actual) && wants.every((w) => /^\d{1,4}$/.test(w))) {
+      return { ok: wants.every((w) => Number(w) === Number(actual)), actual };
     }
     return { ok: wants.every((w) => actual.includes(w)), actual };
   } catch (err) {
@@ -865,7 +930,7 @@ export async function readShown(page: Page, field: FormField): Promise<string[] 
       return asOptions(labels);
     }
     let el = page.locator(field.selector).first();
-    if (!(await el.count()) && field.name) el = page.locator(`[name="${cssEscape(field.name)}"]`).first();
+    if (!(await el.count()) && field.name) el = await byNameInRow(page, field);
     if (!(await el.count())) return null;
     if (field.widget === 'button-group') {
       const pressed = el.locator(':scope > button[aria-pressed="true"]');
@@ -878,7 +943,13 @@ export async function readShown(page: Page, field: FormField): Promise<string[] 
       const text = (await shell.count()) ? await shell.first().innerText().catch(() => '') : '';
       return fromText(text || (await shownAroundControl(page, field)));
     }
-    if (field.widget === 'workday-prompt') return fromText(await workdaySelection(page, field));
+    if (field.widget === 'workday-prompt') {
+      // The chosen items alone. The whole selection text carries the screen
+      // reader's "expanded" and "1 item selected", and it went into the answer
+      // bank as "1 item selected electronics electronics", which no list offers.
+      const chosen = await workdayChosen(page, field);
+      return chosen.length ? asOptions(chosen) : fromText(workdayPlain(await workdaySelection(page, field)));
+    }
     if (field.widget === 'workday-dropdown') return fromText(await el.innerText().catch(() => ''));
     if (field.kind === 'CHECKBOX') return (await el.isChecked().catch(() => false)) ? ['Yes'] : [];
     if (field.kind === 'SELECT' && (await el.evaluate((n) => n.tagName === 'SELECT').catch(() => false))) {
@@ -890,6 +961,19 @@ export async function readShown(page: Page, field: FormField): Promise<string[] 
   } catch {
     return null;
   }
+}
+
+/**
+ * The control found by its name attribute, in this field's own row.
+ *
+ * Workday gives the inputs of every Employment row the same names, so the
+ * first match is always row 1: on Walmart, rows 2-4 read back as "deliveroo"
+ * and "software engineer 2" and were reported as not holding what was typed.
+ */
+async function byNameInRow(page: Page, field: FormField): Promise<Locator> {
+  const all = page.locator(`[name="${cssEscape(field.name!)}"]`);
+  const row = Number(/^(?:Employment|Education) (\d+):/.exec(field.label)?.[1] ?? 1);
+  return row > 1 && (await all.count()) >= row ? all.nth(row - 1) : all.first();
 }
 
 /** The text shown in the smallest box around one control, without the next question's. */

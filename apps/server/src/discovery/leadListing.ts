@@ -74,6 +74,27 @@ export function recommendedRank(score: number, report: CompanyReport | undefined
   return score * pay * fresh;
 }
 
+/** How many leads one company gets in each pass down the list. */
+const PER_COMPANY_ROUND = 2;
+
+/**
+ * Reorder so no company gets more than PER_COMPANY_ROUND leads before every
+ * other company has had its turn: each company's first two, in the given
+ * order, then each one's next two, and so on. Stable, so within a round the
+ * sort the person chose still decides.
+ */
+export function spreadByCompany<T extends { companyName: string }>(rows: T[]): T[] {
+  const seen = new Map<string, number>();
+  const round = new Map<T, number>();
+  for (const r of rows) {
+    const key = r.companyName.trim().toLowerCase();
+    const n = seen.get(key) ?? 0;
+    seen.set(key, n + 1);
+    round.set(r, Math.floor(n / PER_COMPANY_ROUND));
+  }
+  return [...rows].sort((a, b) => round.get(a)! - round.get(b)!);
+}
+
 export async function listLeads(profileId: string, query: LeadListQuery) {
   // ---- the SQL-expressible part ---------------------------------------------
   const tab: Prisma.JobLeadWhereInput = { profileId };
@@ -143,13 +164,17 @@ export async function listLeads(profileId: string, query: LeadListQuery) {
     discovered: (a, b) => time(b.discoveredAt) - time(a.discoveredAt),
   };
   kept.sort(rank[query.sort]);
+  // A company that posts thirty roles in a day used to fill the first page on
+  // its own. Spread it out, keeping the chosen order otherwise; picking that
+  // company in the filter still shows all of them in plain order.
+  const listed = query.company ? kept : spreadByCompany(kept);
 
   // Clamp rather than 404: deciding on the last lead of the last page would
   // otherwise land you on an empty one, which reads as "everything is gone".
   const total = kept.length;
   const pages = Math.max(1, Math.ceil(total / query.limit));
   const page = Math.min(query.page, pages);
-  const pageIds = kept.slice((page - 1) * query.limit, page * query.limit).map((r) => r.id);
+  const pageIds = listed.slice((page - 1) * query.limit, page * query.limit).map((r) => r.id);
   const leads = (await prisma.jobLead.findMany({ where: { id: { in: pageIds } } })).sort(
     (a, b) => pageIds.indexOf(a.id) - pageIds.indexOf(b.id),
   );

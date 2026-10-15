@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
 import { AllQuestions } from '../../components/AllQuestions';
 import { Icon } from '../../components/Icon';
+import { Pager } from '../discover/components/Pager';
 
 interface AppRow {
   id: string;
@@ -11,8 +12,38 @@ interface AppRow {
   blockedReason: string | null;
   submittedAt: string | null;
   requiresReview: boolean;
+  createdAt: string;
   job: { url: string; company: string; title: string; ats: string };
   _count: { pending: number };
+}
+
+/** Status tabs. "Needs you" overlaps the others on purpose: it is a to-do list, not a state. */
+const BUCKETS = [
+  { key: 'ALL', label: 'All', test: () => true },
+  { key: 'NEEDS_YOU', label: 'Needs you', test: needsYou },
+  { key: 'IN_PROGRESS', label: 'In progress', test: (r: AppRow) => ['QUEUED', 'PREPARING', 'FILLING', 'SUBMITTING'].includes(r.status) },
+  { key: 'SUBMITTED', label: 'Submitted', test: (r: AppRow) => r.status === 'SUBMITTED' },
+  { key: 'FAILED', label: 'Failed', test: (r: AppRow) => r.status === 'FAILED' },
+  { key: 'CANCELLED', label: 'Cancelled', test: (r: AppRow) => r.status === 'CANCELLED' },
+] as const;
+type Bucket = (typeof BUCKETS)[number]['key'];
+
+/** Started within the last N days; 0 means since midnight today. */
+const SINCE = [
+  { value: '', label: 'Any time' },
+  { value: '0', label: 'Today' },
+  { value: '7', label: 'Last 7 days' },
+  { value: '30', label: 'Last 30 days' },
+  { value: '90', label: 'Last 90 days' },
+];
+const PAGE_SIZE = 25;
+
+function sinceCutoff(days: string): number {
+  if (!days) return 0;
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - Number(days));
+  return d.getTime();
 }
 
 export default function RunsPage() {
@@ -24,6 +55,30 @@ export default function RunsPage() {
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState(false);
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [bucket, setBucket] = useState<Bucket>('ALL');
+  const [query, setQuery] = useState('');
+  const [ats, setAts] = useState('');
+  const [since, setSince] = useState('');
+  const [page, setPage] = useState(1);
+  // Any filter change goes back to the first page; polling does not.
+  useEffect(() => setPage(1), [bucket, query, ats, since]);
+
+  const atsOptions = [...new Set(rows.map((r) => r.job.ats))].sort();
+  const q = query.trim().toLowerCase();
+  const cutoff = sinceCutoff(since);
+  // Search, ATS and date narrow first so the tab counts say what each tab would show.
+  const narrowed = rows.filter(
+    (r) =>
+      (!ats || r.job.ats === ats) &&
+      (!cutoff || new Date(r.createdAt).getTime() >= cutoff) &&
+      (!q || [r.job.title, r.job.company, r.job.url].some((s) => s.toLowerCase().includes(q))),
+  );
+  const shown = sortNeedsYouFirst(narrowed.filter(BUCKETS.find((b) => b.key === bucket)!.test));
+  const pages = Math.max(1, Math.ceil(shown.length / PAGE_SIZE));
+  // A run leaving the list can shrink it under the current page; clamp rather than show nothing.
+  const current = Math.min(page, pages);
+  const pageRows = shown.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
+  const filtering = bucket !== 'ALL' || q !== '' || ats !== '' || since !== '';
 
   /** Start a failed run again. Answers already given are kept and reused. */
   async function retry(id: string) {
@@ -153,8 +208,69 @@ export default function RunsPage() {
           )}
         </div>
         {asking && <AllQuestions onClose={() => { setAsking(false); load(); }} />}
+        {rows.length > 0 && (
+          <div className="stack" style={{ margin: '.8rem 0' }}>
+            <div className="tabs" role="tablist" aria-label="Application status">
+              {BUCKETS.map((b) => {
+                const n = narrowed.filter(b.test).length;
+                return (
+                  <button key={b.key} role="tab" aria-selected={bucket === b.key} onClick={() => setBucket(b.key)}>
+                    {b.label}
+                    {n ? <span className="muted nums"> {n}</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="toolbar">
+              <label className="field grow">
+                <span className="cap">Search</span>
+                <input
+                  type="search"
+                  placeholder="Role, company or URL"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span className="cap">ATS</span>
+                <select value={ats} onChange={(e) => setAts(e.target.value)}>
+                  <option value="">All</option>
+                  {atsOptions.map((a) => (
+                    <option key={a} value={a}>{a}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="cap">Started</span>
+                <select value={since} onChange={(e) => setSince(e.target.value)}>
+                  {SINCE.map((s) => (
+                    <option key={s.value} value={s.value}>{s.label}</option>
+                  ))}
+                </select>
+              </label>
+              {filtering && (
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    setBucket('ALL');
+                    setQuery('');
+                    setAts('');
+                    setSince('');
+                  }}
+                >
+                  Clear
+                </button>
+              )}
+              <span className="toolbar-note">
+                {shown.length} of {rows.length}
+              </span>
+            </div>
+          </div>
+        )}
         {rows.length === 0 ? (
           <div className="empty-state">Nothing yet. Paste a job URL above to start one.</div>
+        ) : shown.length === 0 ? (
+          <div className="empty-state">No applications match these filters.</div>
         ) : (
           <table>
             <thead>
@@ -162,10 +278,11 @@ export default function RunsPage() {
                 <th>Role</th>
                 <th>Status</th>
                 <th>Needs you</th>
+                <th>Started</th>
               </tr>
             </thead>
             <tbody>
-              {sortNeedsYouFirst(rows).map((r) => (
+              {pageRows.map((r) => (
                 <tr
                   key={r.id}
                   // The whole row opens the run; the links inside still work on their own.
@@ -237,11 +354,15 @@ export default function RunsPage() {
                       <span className="muted">—</span>
                     )}
                   </td>
+                  <td className="small muted nums" title={new Date(r.createdAt).toLocaleString()}>
+                    {new Date(r.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
+        <Pager page={current} pages={pages} total={shown.length} limit={PAGE_SIZE} shown={pageRows.length} onPage={setPage} />
       </div>
     </>
   );
@@ -259,6 +380,12 @@ function canRetry(r: AppRow, active: string[]): boolean {
   if (r.status !== 'NEEDS_HUMAN' || active.includes(r.id)) return false;
   // Submit may already have gone through: check the job board, never resend blind.
   return !/Submit was pressed|mid-submit/i.test(r.blockedReason ?? '');
+}
+
+/** Waiting on you: approval, open questions, or a wall only a person can get past. */
+function needsYou(r: AppRow): boolean {
+  if (['REVIEW', 'NEEDS_HUMAN', 'NEEDS_INPUT'].includes(r.status)) return true;
+  return r._count.pending > 0 && !['SUBMITTED', 'CANCELLED'].includes(r.status);
 }
 
 /**

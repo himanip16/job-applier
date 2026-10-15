@@ -23,6 +23,7 @@ import { finishApplication } from './submission.js';
 import { abandon, release, questionsKey, reviewKey, blockerKey } from './waiters.js';
 import { watchLeftOpenTab } from './manualSubmit.js';
 import { BrowserEdits } from './browserEdits.js';
+import { PostingGoneError, postingGone, removeDeadPosting } from './deadPosting.js';
 
 export { SubmissionBudgetError } from './submission.js';
 
@@ -147,6 +148,12 @@ export async function runApplication(applicationId: string): Promise<void> {
       // Already recorded where it stopped and why; this is not a failure.
       await bus.emitEvent(applicationId, 'LOG', err.message);
       closePage = !err.keepPage;
+      return;
+    }
+    // A failure on a posting that has since closed is not worth keeping.
+    if (err instanceof PostingGoneError || (await postingGone(page, app.job.url).catch(() => false))) {
+      await removeDeadPosting(applicationId);
+      closePage = true;
       return;
     }
     const message = explainFailure(err, page);

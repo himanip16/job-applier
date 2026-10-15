@@ -26,6 +26,11 @@ const QUESTIONS: { key: string; label: string }[] = [
   { key: 'logistics.relocate', label: 'Willing to relocate' },
   { key: 'legal.age_18', label: 'At least 18 years old' },
   { key: 'legal.non_compete', label: 'Subject to a non-compete' },
+  { key: 'legal.meets_min_qualifications', label: 'Certify you meet the minimum qualifications of jobs you apply to' },
+  { key: 'identity.legal_name_matches_id', label: 'Legal name matches your government ID' },
+  { key: 'history.worked_here_before', label: 'Previously worked for the companies you apply to' },
+  { key: 'history.family_employed', label: 'Family member works at the companies you apply to' },
+  { key: 'contact.sms_opt_in', label: 'Get recruiting updates by text message' },
   { key: 'history.source', label: 'How did you hear about this role' },
 ];
 

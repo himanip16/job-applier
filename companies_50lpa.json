@@ -1481,10 +1481,10 @@
   },
   {
     "company": "PayU",
-    "domain": "",
+    "domain": "payu.in",
     "job_links": [],
-    "source": "linkedin-company",
-    "handle": "2046824",
+    "source": "successfactors",
+    "handle": "careers.payu.in",
     "tier": "shortlist",
     "sde2_ctc_lpa": "",
     "india_locations": "Bengaluru"

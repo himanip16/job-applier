@@ -54,6 +54,12 @@ export const EDITABLE_SETTINGS = {
     where: '',
     secret: true,
   },
+  EMAIL_APP_PASSWORD: {
+    label: 'Gmail app password',
+    help: 'Reads the codes job sites email to your profile address, so verification walls clear by themselves.',
+    where: 'myaccount.google.com/apppasswords',
+    secret: true,
+  },
   LLM_PROVIDER: {
     label: 'Model provider',
     help: 'Leave blank to use whichever key is set. Gemini wins if both are.',

@@ -21,6 +21,8 @@ export interface SiteAccount {
 export interface AccountAttempt {
   ok: boolean;
   detail: string;
+  /** The site answered that this email is already registered. */
+  exists?: boolean;
 }
 
 const VISIBLE_PASSWORD = 'input[type="password"]:visible';
@@ -115,7 +117,7 @@ export async function signInOrRegister(page: Page, account: SiteAccount): Promis
     const created = await submitCreate(page, account, emailEntered);
     if (created.ok) return created;
     // Made on an earlier application: switch to signing in.
-    if (!ALREADY_EXISTS.test(await bodyText(page))) return created;
+    if (!created.exists) return created;
     const switched =
       (await clickFirst(page, SIGN_IN_LINK)) || (await clickByName(page, /^(sign in|log ?in)$/i));
     if (!switched) return { ok: false, detail: 'An account already exists, but there was no Sign In link to switch to.' };
@@ -167,11 +169,12 @@ async function submitCreate(page: Page, account: SiteAccount, emailEntered = fal
     }
   }
 
+  const before = await bodyText(page);
   const clicked =
     (await clickFirst(page, CREATE_BUTTON)) ||
     (await clickByName(page, /^(create (an )?account|register|sign up|submit|continue)$/i));
   if (!clicked) return { ok: false, detail: 'Filled the Create Account form but found no button to submit it.' };
-  return awaitOutcome(page, 'Created an account');
+  return awaitOutcome(page, 'Created an account', before);
 }
 
 async function submitSignIn(page: Page, account: SiteAccount, emailEntered = false): Promise<AccountAttempt> {
@@ -190,15 +193,23 @@ async function submitSignIn(page: Page, account: SiteAccount, emailEntered = fal
     return { ok: false, detail: 'Entered the email, but no password box followed.' };
   }
   await password.fill(account.password);
+  const before = await bodyText(page);
   const clicked =
     (await clickFirst(page, SIGN_IN_BUTTON)) ||
     (await clickByName(page, /^(sign in|log ?in|continue|submit)$/i));
   if (!clicked) await password.press('Enter');
-  return awaitOutcome(page, 'Signed in');
+  return awaitOutcome(page, 'Signed in', before);
 }
 
-/** Signed in once the password boxes are gone; refused if the site says so. */
-async function awaitOutcome(page: Page, success: string): Promise<AccountAttempt> {
+/**
+ * Signed in once the password boxes are gone; refused if the site says so.
+ *
+ * `before` is the page text from just before the submit. Only wording that
+ * appears after it counts: SuccessFactors heads its sign-in form "Already
+ * have an account?", which read as "already exists" before the site had
+ * answered at all.
+ */
+async function awaitOutcome(page: Page, success: string, before: string): Promise<AccountAttempt> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     await page.waitForTimeout(750);
@@ -206,9 +217,11 @@ async function awaitOutcome(page: Page, success: string): Promise<AccountAttempt
       return { ok: true, detail: `${success} with your saved email.` };
     }
     const text = await bodyText(page);
-    if (ALREADY_EXISTS.test(text)) return { ok: false, detail: 'An account with this email already exists.' };
-    const refused = text.match(REJECTED);
-    if (refused) return { ok: false, detail: `The site refused it: "${refused[0]}".` };
+    if (newly(text, before, ALREADY_EXISTS)) {
+      return { ok: false, exists: true, detail: 'An account with this email already exists.' };
+    }
+    const refused = newly(text, before, REJECTED);
+    if (refused) return { ok: false, detail: `The site refused it: "${refused}".` };
   }
   const said = await siteError(page);
   return {
@@ -236,6 +249,19 @@ async function tick(page: Page, box: Locator): Promise<boolean> {
   if (await checked()) return true;
   await box.dispatchEvent('click').catch(() => {});
   return checked();
+}
+
+/** The first match of `re` that `text` holds more often than `before` did. */
+function newly(text: string, before: string, re: RegExp): string | null {
+  const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+  const tally = (s: string) => {
+    const seen = new Map<string, number>();
+    for (const [m] of s.matchAll(global)) seen.set(m.toLowerCase(), (seen.get(m.toLowerCase()) ?? 0) + 1);
+    return seen;
+  };
+  const was = tally(before);
+  for (const [m, n] of tally(text)) if (n > (was.get(m) ?? 0)) return m;
+  return null;
 }
 
 async function siteError(page: Page): Promise<string | null> {
