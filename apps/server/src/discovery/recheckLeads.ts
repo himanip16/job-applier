@@ -44,7 +44,7 @@ const PAGE_CHECKS_AT_ONCE = 4;
 /** Only these list every open posting, so absence from them means closed. */
 const COMPLETE_BOARDS = new Set(API_SOURCES.map((s) => s.id));
 
-export async function recheckLeads(profileId: string, opts: { country?: Country } = {}): Promise<RecheckReport> {
+export async function recheckLeads(profileId: string, opts: { country?: Country; openToIndia?: boolean } = {}): Promise<RecheckReport> {
   const leads = await prisma.jobLead.findMany({
     where: { profileId, OR: [{ status: 'NEW' }, { status: 'SHORTLISTED', applicationId: null }] },
     select: {
@@ -76,7 +76,7 @@ export async function recheckLeads(profileId: string, opts: { country?: Country 
       descriptionText: lead.descriptionText ?? '',
       postedAt: lead.postedAt ?? undefined,
     };
-    const rejection = screen(job, { country: opts.country });
+    const rejection = screen(job, { country: opts.country, openToIndia: opts.openToIndia });
     if (rejection === 'tooOld' || rejection === 'wrongDomain' || rejection === 'tooSenior' || rejection === 'otherCountry') {
       report.removedBy[rejection]++;
       doomed.push(lead.id);

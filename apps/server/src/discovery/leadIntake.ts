@@ -2,7 +2,7 @@ import { locatedIn, type Country } from '@ja/shared';
 import { prisma } from '../lib/db.js';
 import type { DeepScoreEntry } from './deepScore.js';
 import { isSeniorLevel, isStale, requiresMoreThan5YearsExperience } from './jobFilters.js';
-import { wrongDomain } from './leadCleanup.js';
+import { openToIndia, wrongDomain } from './leadCleanup.js';
 import { canonicalUrl } from './jobSearchUtils.js';
 import { type ScoringContext, scoreLexically, serialiseReasons } from './scoring.js';
 import { jobMatchesPlan } from './searchQueries.js';
@@ -23,6 +23,11 @@ export type Rejection = 'tooOld' | 'wrongDomain' | 'tooSenior' | 'otherCountry' 
 export interface IntakeRules {
   /** Only postings in this country (or remote and open to it). */
   country?: Country;
+  /**
+   * With no country: only postings someone in India could take - in India,
+   * remote from anywhere, or abroad with sponsorship or relocation.
+   */
+  openToIndia?: boolean;
   /** Only postings whose title matches one of these. Omit to keep every title. */
   roleTitles?: string[];
 }
@@ -36,6 +41,7 @@ export function screen(job: DiscoveredJob, rules: IntakeRules): Exclude<Rejectio
   if (rules.roleTitles && !jobMatchesPlan(job, rules.roleTitles)) return 'offPlan';
   // A board lists every office. You asked for one country.
   if (rules.country && !locatedIn(job.location, job.remote, rules.country)) return 'otherCountry';
+  if (!rules.country && rules.openToIndia && !openToIndia(job.location, job.remote, job.descriptionText)) return 'otherCountry';
   return null;
 }
 

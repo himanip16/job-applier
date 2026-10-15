@@ -20,7 +20,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       .parse(req.body ?? {});
     const target = countryByCode(country);
     if (country && !target) return reply.code(400).send({ error: `Searching in "${country}" is not supported yet.` });
-    const report = await crawlAll(profile.id, { deepScoreTop, onlyCompanyId: companyId, country: target, force });
+    const report = await crawlAll(profile.id, { deepScoreTop, onlyCompanyId: companyId, country: target, openToIndia: !target, force });
     return { report };
   });
 
@@ -51,7 +51,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     }
 
     try {
-      return { report: await findJobs(profile.id, body) };
+      return { report: await findJobs(profile.id, { ...body, openToIndia: !body.country }) };
     } catch (err) {
       // Everything reachable from here is a message written for a person -
       // an empty profile, a rejected key, an exhausted balance.
@@ -76,7 +76,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     const { country } = z.object({ country: z.string().length(2).optional() }).parse(req.body ?? {});
     const target = countryByCode(country);
     if (country && !target) return reply.code(400).send({ error: `Searching in "${country}" is not supported yet.` });
-    return { report: await recheckLeads(profile.id, { country: target }) };
+    return { report: await recheckLeads(profile.id, { country: target, openToIndia: !target }) };
   });
 
   app.post('/api/discovery/rescore', async (req, reply) => {

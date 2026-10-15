@@ -6,7 +6,10 @@ import { COUNTRIES, countryByCode } from '@ja/shared/countries';
 /** Every action that works in one country, and how the dialog words it. */
 export type CountryAction = 'find' | 'crawl' | 'recheck';
 
-/** The dialog's "anywhere" choice: the request goes out with no country. */
+/**
+ * The dialog's "anywhere" choice: the request goes out with no country, and the
+ * server keeps only jobs someone in India can take.
+ */
 export const WORLDWIDE = 'WORLD';
 
 const COPY: Record<CountryAction, { sub: string; icon: IconName; verb: (country: string) => string }> = {
@@ -28,11 +31,11 @@ const COPY: Record<CountryAction, { sub: string; icon: IconName; verb: (country:
 };
 
 const WORLDWIDE_COPY: Record<CountryAction, { sub: string; icon: IconName; verb: (country: string) => string }> = {
-  find: { ...COPY.find, sub: 'Reads the best-paying companies for jobs in any country, remote or on-site.', verb: () => 'Search worldwide' },
-  crawl: { ...COPY.crawl, sub: 'Re-reads every company on your watch list and keeps jobs in any country.', verb: () => 'Search whole watch list' },
+  find: { ...COPY.find, sub: 'Reads the best-paying companies in every country and keeps jobs you can take from India: in India, remote from anywhere or APAC, or abroad with visa sponsorship or relocation.', verb: () => 'Search worldwide' },
+  crawl: { ...COPY.crawl, sub: 'Re-reads every company on your watch list in every country and keeps jobs you can take from India: in India, remote from anywhere, or abroad with sponsorship or relocation.', verb: () => 'Search whole watch list' },
   recheck: {
     ...COPY.recheck,
-    sub: 'Goes through the jobs waiting in "For you" and removes any older than 3 months, too senior, or no longer open, and keeps only the newest, best-matching few from each company. Location is not checked. Saved, applied and dismissed jobs are not touched.',
+    sub: 'Goes through the jobs waiting in "For you" and removes any you could not take from India (abroad with no remote, sponsorship or relocation), older than 3 months, too senior, or no longer open, and keeps only the newest, best-matching few from each company. Saved, applied and dismissed jobs are not touched.',
     verb: () => 'Remove stale jobs',
   },
 };
@@ -66,7 +69,7 @@ export function CountryDialog({
         <label className="field">
           <span className="cap">Country</span>
           <select value={value} onChange={(e) => onChange(e.target.value)} autoFocus>
-            <option value={WORLDWIDE}>Anywhere (worldwide)</option>
+            <option value={WORLDWIDE}>Anywhere (open to India)</option>
             {COUNTRIES.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
           </select>
         </label>

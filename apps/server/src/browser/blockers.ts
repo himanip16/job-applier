@@ -178,7 +178,10 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
       emailVerification:
         has(/verify your email/) ||
         has(/we sent (you )?a (verification )?(code|link)/) ||
-        has(/enter the (6|four|six)[- ]digit code/),
+        has(/enter the (6|four|six)[- ]digit code/) ||
+        has(/confirm your identity/) ||
+        has(/(enter|type) the (verification |security |one[- ]time )?(code|pin) (we|that we) (just )?(sent|emailed)/) ||
+        has(/we('ve| have)? (just )?(sent|emailed) (a |an |the )?(verification |security |one[- ]time )?(code|pin) to/),
       assessment:
         has(/coding (challenge|assessment)/) ||
         has(/complete (a|the) assessment/) ||

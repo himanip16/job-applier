@@ -42,6 +42,12 @@ export interface AtsAdapter {
    * Home, and must be steered back to the form. Optional; must be bounded.
    */
   afterWall?(page: Page, formUrl: string): Promise<void>;
+  /**
+   * Is this the application's last step? Asked only when the step's button
+   * reads like a final submit. For sites whose earlier steps say "Submit" too,
+   * such as Apple's "Add Resume". Optional; without it, "Submit" ends the walk.
+   */
+  isFinalStep?(page: Page): Promise<boolean>;
   /** Click the real submit control. */
   submit(page: Page): Promise<void>;
   /** Human-readable notes shown in the UI: known quirks, captcha, etc. */

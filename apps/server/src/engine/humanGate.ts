@@ -202,6 +202,11 @@ async function watchForAnswers(
  * Anything it cannot do - no password saved, a Google sign-in, a refused
  * password - falls through to the ordinary pause.
  */
+const MAX_AUTO_SIGN_INS = 2;
+const AUTO_SIGN_IN_WINDOW_MS = 15 * 60_000;
+/** Recent automatic sign-ins per application, to stop a sign-in loop. */
+const autoSignIns = new Map<string, { tries: number; at: number }>();
+
 async function signInWithSavedAccount(
   applicationId: string,
   page: Page,
@@ -216,6 +221,20 @@ async function signInWithSavedAccount(
   });
   const email = app?.profile.email;
   if (!email) return false;
+  // Signed in, and the account screen came straight back: Target's Workday
+  // went Create Account, Sign In, Sign In... until the run ran out of steps.
+  // Another go would do the same, so after a couple it is yours.
+  const last = autoSignIns.get(applicationId);
+  const tries = last && Date.now() - last.at < AUTO_SIGN_IN_WINDOW_MS ? last.tries + 1 : 1;
+  if (tries > MAX_AUTO_SIGN_INS) {
+    await bus.emitEvent(
+      applicationId,
+      'LOG',
+      `Signed in ${MAX_AUTO_SIGN_INS} times already and the account screen keeps coming back, so leaving this one to you.`,
+    );
+    return false;
+  }
+  autoSignIns.set(applicationId, { tries, at: Date.now() });
 
   await bus.emitEvent(applicationId, 'LOG', 'Account wall: using your saved email and password.');
   const { firstName, lastName } = app.profile;

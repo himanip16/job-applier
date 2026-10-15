@@ -418,6 +418,14 @@ async function optionText(opt: Locator): Promise<string> {
     .catch(() => '');
 }
 
+/**
+ * Oracle's `cx-select` lists its options as `[role=gridcell]` rows of a
+ * `role=grid` it controls. Only counted inside the control's own list, so no
+ * other grid on the page is mistaken for options.
+ */
+const OPTION = '[role="option"]:visible, .select__option:visible';
+const OWNED_OPTION = `${OPTION}, [role="gridcell"]:visible`;
+
 async function waitForOption(page: Page, field: FormField, want: string): Promise<Locator | null> {
   // This dropdown's own menu, and only what is visible in it. Greenhouse keeps
   // the phone field's 240-country list in the DOM, hidden, at all times; a
@@ -434,7 +442,7 @@ async function waitForOption(page: Page, field: FormField, want: string): Promis
     : controls
       ? page.locator(`[id="${controls}"]`)
       : page;
-  const options = container.locator('[role="option"]:visible, .select__option:visible');
+  const options = container.locator(controls ? OWNED_OPTION : OPTION);
   try {
     await options.first().waitFor({ state: 'visible', timeout: OPTION_TIMEOUT_MS });
   } catch {
@@ -628,22 +636,34 @@ async function fillRadioGroup(page: Page, field: FormField, want: string): Promi
   for (let i = 0; i < count; i++) {
     const radio = radios.nth(i);
     if (normalizeLabel(await labelTextFor(page, radio)) === target) {
-      await radio.check({ force: true });
+      // Oracle's radios are 0x0 under a drawn label, where a forced check can
+      // miss; fall back to the label and then a native click.
+      await radio.check({ force: true, timeout: 2_500 }).catch(() => {});
+      if (!(await radio.isChecked().catch(() => false))) await setCheckedCovered(page, radio, true);
+      if (!(await radio.isChecked().catch(() => false))) {
+        throw new FillError(`Could not select "${want}" under ${field.label}`, field);
+      }
       return;
     }
   }
   throw new FillError(`No radio option "${want}" under ${field.label}`, field);
 }
 
+/** A toggle group's buttons: Ashby's `aria-pressed` ones, or Oracle's radio pills. */
+const GROUP_BUTTONS = ':scope > button[aria-pressed], :scope > li > button[role="radio"]';
+const GROUP_PRESSED =
+  ':scope > button[aria-pressed="true"], :scope > li > button[role="radio"][aria-checked="true"]';
+
 /** Yes/no toggles: press the button whose text is the answer. */
 async function fillButtonGroup(page: Page, field: FormField, want: string): Promise<void> {
   const target = normalizeLabel(want);
-  const buttons = page.locator(field.selector).first().locator(':scope > button[aria-pressed]');
+  const buttons = page.locator(field.selector).first().locator(GROUP_BUTTONS);
   const count = await buttons.count();
   for (let i = 0; i < count; i++) {
     const button = buttons.nth(i);
     if (normalizeLabel(await button.innerText()) === target) {
-      if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click();
+      const on = (await button.getAttribute('aria-pressed')) === 'true' || (await button.getAttribute('aria-checked')) === 'true';
+      if (!on) await button.click();
       return;
     }
   }
@@ -910,7 +930,7 @@ export async function verifyFilled(
       return { ok: wants.every((w) => shown === w || showsChosenOption(field, w, shown)), actual: shown };
     }
     if (field.widget === 'button-group') {
-      const pressed = page.locator(field.selector).first().locator(':scope > button[aria-pressed="true"]');
+      const pressed = page.locator(field.selector).first().locator(GROUP_PRESSED);
       const labels: string[] = [];
       for (let i = 0; i < (await pressed.count()); i++) labels.push(normalizeLabel(await pressed.nth(i).innerText()));
       return { ok: wants.every((w) => labels.includes(w)), actual: labels.join(', ') };
@@ -995,7 +1015,7 @@ export async function readShown(page: Page, field: FormField): Promise<string[] 
     if (!(await el.count()) && field.name) el = await byNameInRow(page, field);
     if (!(await el.count())) return null;
     if (field.widget === 'button-group') {
-      const pressed = el.locator(':scope > button[aria-pressed="true"]');
+      const pressed = el.locator(GROUP_PRESSED);
       const labels: string[] = [];
       for (let i = 0; i < (await pressed.count()); i++) labels.push(await pressed.nth(i).innerText());
       return asOptions(labels);
@@ -1061,6 +1081,9 @@ async function shownAroundControl(page: Page, field: FormField): Promise<string>
     .first()
     .evaluate((input) => {
       const own = (input as HTMLInputElement).value?.trim();
+      // Oracle's single-choice cx-select: the box around the input holds its
+      // caption ("Country code"), the choice is the input's own value.
+      if (input.closest('.cx-select-container')) return own ?? '';
       let node = input.parentElement;
       for (let depth = 0; node && depth < 5; depth++, node = node.parentElement) {
         // Stop before the box grows to take in another question.

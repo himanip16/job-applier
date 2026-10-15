@@ -90,7 +90,7 @@ export interface JobSearchReport {
 
 /** Seams, so the whole flow is testable without a network. */
 export interface FindJobsDeps {
-  plan: (profileId: string, opts: { maxQueries: number; country?: Country }) => Promise<SearchPlan>;
+  plan: (profileId: string, opts: { maxQueries: number; country?: Country; openToIndia?: boolean }) => Promise<SearchPlan>;
   companies: (limit: number) => TargetCompany[];
   fetchCompany: (company: TargetCompany, hints: FetchHints) => Promise<DiscoveredJob[]>;
   /** Sites read within RECRAWL_AFTER_MS, keyed by crawlKey(source, handle). */
@@ -134,6 +134,8 @@ export interface FindJobsOptions {
   deepScoreTop?: number;
   /** Where to look, as an ISO code. Asked for before every search. */
   country?: string;
+  /** With no country: keep only jobs someone in India could take. */
+  openToIndia?: boolean;
   /** Read every site, even ones read within the last RECRAWL_AFTER_MS. */
   force?: boolean;
   deps?: Partial<FindJobsDeps>;
@@ -219,7 +221,7 @@ async function runSearch(
   };
 
   const target = countryByCode(opts.country);
-  const plan = await deps.plan(profileId, { maxQueries, country: target });
+  const plan = await deps.plan(profileId, { maxQueries, country: target, openToIndia: !target && opts.openToIndia });
   report.planSource = plan.source;
   report.roleTitles = plan.roleTitles;
   report.notes.push(...plan.notes);
@@ -268,7 +270,7 @@ async function runSearch(
   // answers and show up in the queue while the rest are still being read.
   const intake = await openIntake(
     profileId,
-    { country: target, roleTitles: plan.roleTitles },
+    { country: target, openToIndia: !target && opts.openToIndia, roleTitles: plan.roleTitles },
     await loadScoringContext(profileId),
   );
   const tally = emptyTally();

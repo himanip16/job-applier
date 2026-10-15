@@ -46,6 +46,21 @@ async function declineCookies(page: Page): Promise<void> {
   if (await decline.isVisible().catch(() => false)) await decline.click().catch(() => {});
 }
 
+/** Reloads tried on Workday's "Something went wrong" screen before giving up. */
+const ERROR_RELOADS = 2;
+
+/**
+ * Workday's own error screen: an `<h1>` "Something went wrong" and "Please
+ * refresh the page and then try again." in place of the step (Expedia,
+ * October 2026). The step underneath is fine; a reload brings it back.
+ */
+function errorScreenShown(): boolean {
+  const heading = Array.from(document.querySelectorAll('h1'));
+  return heading.some(
+    (h) => (h as HTMLElement).checkVisibility() && /^something went wrong\b/i.test((h.textContent ?? '').trim()),
+  ) && /refresh the page/i.test(document.body?.innerText ?? '');
+}
+
 /**
  * Wait until the step has drawn and is not busy.
  *
@@ -53,11 +68,28 @@ async function declineCookies(page: Page): Promise<void> {
  * reports what it finds, rather than hanging the run.
  */
 async function settle(page: Page): Promise<void> {
+  for (let reloads = 0; ; reloads++) {
+    await settleOnce(page);
+    if (reloads >= ERROR_RELOADS) return;
+    if (!(await page.evaluate(errorScreenShown).catch(() => false))) return;
+    // Read as a step, the error screen has no controls and no button, and the
+    // run ended there as a form with nothing on it.
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => {});
+  }
+}
+
+async function settleOnce(page: Page): Promise<void> {
   await declineCookies(page);
   await page
     .waitForFunction(
       (next) => {
         const shown = (el: Element | null) => !!el && (el as HTMLElement).checkVisibility();
+        // Workday's error screen (see errorScreenShown): nothing more will
+        // draw, so stop waiting and let `settle` reload.
+        const failed = Array.from(document.querySelectorAll('h1')).some(
+          (h) => shown(h) && /^something went wrong\b/i.test((h.textContent ?? '').trim()),
+        );
+        if (failed) return true;
         const button = document.querySelector<HTMLButtonElement>(next);
         // Saving, loading or uploading.
         if (button?.disabled) return false;

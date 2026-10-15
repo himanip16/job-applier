@@ -206,7 +206,7 @@ export default function DiscoverPage() {
     try { window.localStorage.setItem('ja.searchCountry', country); } catch { /* still used */ }
     const worldwide = country === WORLDWIDE;
     const name = worldwide ? 'worldwide' : countryByCode(country)?.name ?? country;
-    // No country means no location filter on the server.
+    // No country: the server searches everywhere and keeps jobs open to India.
     const target = worldwide ? undefined : country;
     setBusy(action);
     setError(null);
@@ -226,7 +226,7 @@ export default function DiscoverPage() {
         );
         setFlash(
           `Searched ${r.companiesCrawled} watch-list companies${worldwide ? '' : ` for ${name}`}: ${r.newLeads} new job${r.newLeads === 1 ? '' : 's'}. ` +
-            (worldwide ? 'Skipped ' : `Skipped ${r.skippedOtherCountry ?? 0} outside ${name} and `) +
+            `Skipped ${r.skippedOtherCountry ?? 0} ${worldwide ? 'not open to India' : `outside ${name}`} and ` +
             `${r.skippedTooOld ?? 0} older than 3 months.` +
             (r.errors.length ? ` ${r.errors.length} board(s) failed.` : ''),
         );
@@ -238,9 +238,9 @@ export default function DiscoverPage() {
         const unknown = r.unknown ?? 0;
         setFlash(
           (r.removed === 0
-            ? `Checked ${r.checked} jobs — none were closed, too old, off-target${worldwide ? '' : ` for ${name}`} or over the per-company limit.`
+            ? `Checked ${r.checked} jobs — none were closed, too old, off-target ${worldwide ? 'or not open to India' : `for ${name}`} or over the per-company limit.`
             : `Checked ${r.checked} jobs and removed ${r.removed}: ${b.wrongDomain} not engineering roles, ` +
-                (worldwide ? '' : `${b.otherCountry} outside ${name}, `) +
+                `${b.otherCountry} ${worldwide ? 'not open to India' : `outside ${name}`}, ` +
                 `${b.closed} closed, ${b.tooOld} older than 3 months, ${b.tooSenior} too senior` +
                 (b.tooJunior ? `, ${b.tooJunior} internship or new-grad` : '') +
                 (b.overCap ? `, ${b.overCap} beyond the best ${r.maxPerCompany ?? 3} per company` : '') +

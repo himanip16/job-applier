@@ -13,6 +13,7 @@
  * wrongly-cut one costs an opening you never saw.
  */
 
+import { countryByCode, locatedIn } from '@ja/shared';
 import { parseRequiredYears } from './hardRules.js';
 
 /** Matches the coarse buckets offered in the UI, so the two agree. */
@@ -242,6 +243,37 @@ export function cleanupVerdict(
   }
 
   return null;
+}
+
+/** A location line naming a region that takes India, or none at all. */
+const OPEN_REGION = /\b(apac|asia|asia[- ]pacific|worldwide|global|anywhere)\b/i;
+
+/**
+ * A body that says the role is remote from anywhere. Specific phrases only:
+ * "customers worldwide" in a company blurb says nothing about who can apply.
+ */
+const REMOTE_ANYWHERE =
+  /\b(work from anywhere|anywhere in the world|remote[- ](worldwide|globally|anywhere)|(worldwide|global(ly)?|fully)[- ]remote,? (from )?(any|all) (countr|time ?zone)|(worldwide|global)[- ]remote|location:? (anywhere|worldwide|global))/i;
+
+const INDIA_COUNTRY = countryByCode('IN')!;
+
+/**
+ * Could someone living in India take this job?
+ *
+ * Yes when it is in India, open to remote work from India or from anywhere,
+ * or abroad with sponsorship or relocation on offer. A worldwide search keeps
+ * only these. Bare "Remote" and no location at all are kept, as they are
+ * everywhere else: they cannot be ruled out from the location line.
+ */
+export function openToIndia(location: string | null | undefined, remote: boolean, body: string): boolean {
+  const where = location ?? '';
+  const head = body.slice(0, 4000);
+  if (INDIA.test(where) || INDIA.test(head)) return true;
+  if (OFFERS_RELOCATION.test(where) || OFFERS_RELOCATION.test(body)) return true;
+  if (OPEN_REGION.test(where) && (remote || /\bremote\b/i.test(where) || !FOREIGN_PLACE.test(where.replace(OPEN_REGION, '')))) return true;
+  if (REMOTE_ANYWHERE.test(head)) return true;
+  if (FOREIGN_PLACE.test(where) || US_STATE.test(where)) return false;
+  return locatedIn(where, remote, INDIA_COUNTRY);
 }
 
 function locationIsWrong(where: string, body: string): boolean {

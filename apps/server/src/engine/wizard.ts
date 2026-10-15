@@ -612,7 +612,11 @@ async function advanceStep(
   const { applicationId, page, adapter, edits } = context;
   // An upload or save can hold the continue button disabled for a moment.
   await adapter.settle?.(page);
-  const advance = await findAdvanceControl(page);
+  let advance = await findAdvanceControl(page);
+  // "Submit" on a step that is not the last one only moves the form along.
+  if (advance?.kind === 'SUBMIT' && adapter.isFinalStep && !(await adapter.isFinalStep(page).catch(() => true))) {
+    advance = { ...advance, kind: 'NEXT' };
+  }
   if (!advance && (await detectAutofillPrompt(page))) {
     // Never the end of a form: it is the screen before the first step.
     throw new Error(

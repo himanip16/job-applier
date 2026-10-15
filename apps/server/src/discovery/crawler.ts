@@ -39,7 +39,7 @@ export interface CrawlReport {
  */
 export async function crawlAll(
   profileId: string,
-  opts: { deepScoreTop?: number; onlyCompanyId?: string; country?: Country; force?: boolean } = {},
+  opts: { deepScoreTop?: number; onlyCompanyId?: string; country?: Country; openToIndia?: boolean; force?: boolean } = {},
 ): Promise<CrawlReport> {
   const deepScoreTop = opts.deepScoreTop ?? 15;
 
@@ -62,7 +62,7 @@ export async function crawlAll(
     errors: [],
   };
 
-  const intake = await openIntake(profileId, { country: opts.country }, await loadScoringContext(profileId));
+  const intake = await openIntake(profileId, { country: opts.country, openToIndia: opts.openToIndia }, await loadScoringContext(profileId));
   const tally = emptyTally();
 
   // A page is only created if a careers-page crawl actually needs one; the API

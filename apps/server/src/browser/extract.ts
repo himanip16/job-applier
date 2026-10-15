@@ -69,6 +69,13 @@ const EXTRACTOR = () => {
     // resume field inside a not-yet-revealed "Apply" section could be read as
     // present before it actually is.
     if (r.width === 0 && r.height === 0) {
+      // Oracle's yes/no questions are 0x0 radios (`input-row__hidden-control`)
+      // under a drawn <label for>; the label is what a person sees and clicks.
+      if ((el as HTMLInputElement).type === 'radio' && el.id) {
+        const label = (el.getRootNode() as Document | ShadowRoot).querySelector(`label[for="${CSS.escape(el.id)}"]`);
+        const lr = label?.getBoundingClientRect();
+        return !!lr && lr.width > 0 && lr.height > 0 && getComputedStyle(label!).visibility !== 'hidden';
+      }
       if ((el as HTMLInputElement).type !== 'file') return false;
       const he = el as HTMLElement;
       return typeof he.checkVisibility === 'function' ? he.checkVisibility() : he.offsetParent !== null;
@@ -312,11 +319,18 @@ const EXTRACTOR = () => {
     // the text at all - its consent radios and yes/no buttons were read as
     // optional and left blank.
     const wrapper = el.closest(
-      '.field-wrapper, fieldset, .field, .form-group, [class*="fieldEntry"], [class*="field-entry"]',
+      '.field-wrapper, fieldset, .field, .form-group, [class*="fieldEntry"], [class*="field-entry"], .input-row',
     );
     const caption = wrapper?.querySelector('label, legend');
     if (/[*\u2731\uFF0A\u2020\u271A]/.test(caption?.textContent ?? '')) return true;
-    return /(^|[\s_-])required([\s_-]|$)/i.test(caption?.getAttribute('class') ?? '');
+    // RippleHire (7-Eleven) has no glyph or attribute either: the flag is
+    // `data-required="Y"` and a `required` class on the control and on its
+    // `.form-group`. Read as optional, Salutation was left on "Select..." and
+    // Continue came back with "Please select title".
+    if (/^(y|yes|true)$/i.test(el.dataset.required ?? '')) return true;
+    const flagged = (node: Element | null | undefined) =>
+      /(^|[\s_-])required([\s_-]|$)/i.test(node?.getAttribute('class') ?? '');
+    return flagged(caption) || flagged(el) || (!!wrapper?.matches('.form-group') && flagged(wrapper));
   };
 
   const mark = (el: Element): string => {
@@ -325,7 +339,7 @@ const EXTRACTOR = () => {
     return h;
   };
 
-  const CAPTCHA_NAMES = /recaptcha|captcha|hcaptcha|cf-turnstile|honeypot/i;
+  const CAPTCHA_NAMES = /recaptcha|captcha|hcaptcha|cf-turnstile|honey-?pot/i;
 
   const forms = Array.from(document.querySelectorAll('form'));
   // One form, or none at all (Ashby renders bare React with no <form>
@@ -417,6 +431,29 @@ const EXTRACTOR = () => {
         groupHandle: handle,
       });
     }
+
+    // Oracle Recruiting Cloud draws its yes/no questions (and "Title") as pill
+    // buttons: `ul[role=radiogroup] > li > button[role=radio][aria-checked]`.
+    // They are not inputs either, so the required work-authorisation and
+    // sponsorship questions were never read and Next failed validation.
+    root.querySelectorAll<HTMLElement>('[role="radiogroup"]').forEach((group) => {
+      const buttons = Array.from(group.querySelectorAll<HTMLElement>(':scope > li > button[role="radio"]'));
+      if (buttons.length < 2 || !buttons.some(visible)) return;
+      const handle = mark(group);
+      group.setAttribute('data-ja-group', handle);
+      results.push({
+        handle,
+        name: group.closest('[data-qa]')?.getAttribute('data-qa') ?? '',
+        tag: 'ul', type: 'button-group',
+        kind: 'RADIO',
+        widget: 'button-group',
+        label: group.getAttribute('aria-label')?.trim() || captionAbove(group),
+        helpText: '',
+        required: isRequired(group),
+        options: buttons.map((b) => ({ label: textOf(b) })).filter((o) => o.label),
+        groupHandle: handle,
+      });
+    });
 
     // ---- SuccessFactors attachments -----------------------------------------
     // "Resume / CV" and "Cover Letter" are a "+" icon that opens an upload
@@ -665,7 +702,9 @@ const EXTRACTOR = () => {
       // value the form submits stayed empty.
       const sfPicklist = !!el.closest('.sfCascadingPicklist');
       if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox' || sfPicklist) {
-        const multi = !!el.closest('.select__value-container--is-multi, [class*="is-multi"]');
+        const multi = !!el.closest(
+          '.select__value-container--is-multi, [class*="is-multi"], .cx-multi-select-container',
+        );
         results.push({
           handle: mark(el),
           name: el.getAttribute('name') || el.getAttribute('id') || '',
@@ -777,7 +816,7 @@ async function harvestOptions(page: Page, selector: string, max: number): Promis
     // SuccessFactors links its listbox with aria-owns instead.
     const controls = (await input.getAttribute('aria-controls')) ?? (await input.getAttribute('aria-owns'));
     const scoped = controls
-      ? page.locator(`[id="${controls}"] [role="option"]`)
+      ? page.locator(`[id="${controls}"] :is([role="option"], [role="gridcell"])`)
       : input
           .locator('xpath=ancestor::*[contains(@class,"select-shell") or contains(@class,"select__container")][1]')
           .locator('[role="option"], .select__option');

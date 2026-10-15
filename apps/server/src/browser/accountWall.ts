@@ -28,6 +28,8 @@ export interface AccountAttempt {
   exists?: boolean;
   /** The site turned the email and password down. */
   refused?: boolean;
+  /** The account was made and the site moved on to its Sign In screen. */
+  signInNext?: boolean;
 }
 
 const VISIBLE_PASSWORD = 'input[type="password"]:visible';
@@ -60,8 +62,8 @@ const CREATE_LINK = '[data-automation-id="createAccountLink"]';
 const EMAIL_SIGN_IN_BUTTON = '[data-automation-id="SignInWithEmailButton"]';
 
 const ALREADY_EXISTS = /already (exists|registered|in use|have an account)|account with this email/i;
-const REJECTED =
-  /(invalid|incorrect|wrong) (email|password|credentials|username)|password (is )?(incorrect|invalid)|does not meet|must contain|locked/i;
+const BAD_LOGIN = /(invalid|incorrect|wrong) (email|password|credentials|username)|password (is )?(incorrect|invalid)|locked/i;
+const REJECTED = new RegExp(`${BAD_LOGIN.source}|does not meet|must contain`, 'i');
 
 const IDENTITY_HOST =
   /(^|\.)(accounts\.google\.com|idmsa\.apple\.com|login\.microsoftonline\.com|login\.live\.com|signin\.aws\.amazon\.com|okta\.com|oktapreview\.com|auth0\.com|onelogin\.com|pingidentity\.com)$/i;
@@ -124,6 +126,10 @@ export async function signInOrRegister(page: Page, account: SiteAccount): Promis
   if ((await visibleCount(page, VISIBLE_PASSWORD)) >= 2) {
     const created = await submitCreate(page, account, emailEntered);
     if (created.ok) return created;
+    if (created.signInNext) {
+      const signedIn = await submitSignIn(page, account);
+      return { ...signedIn, detail: `${created.detail} ${signedIn.detail}` };
+    }
     // Made on an earlier application: switch to signing in.
     if (!created.exists) return created;
     const switched =
@@ -159,7 +165,12 @@ export async function signInOrRegister(page: Page, account: SiteAccount): Promis
     : (await visibleCount(page, VISIBLE_PASSWORD)) >= 2
       ? await submitCreate(page, account)
       : { ok: false, detail: 'Opened Create Account, but no password boxes appeared.' };
-  return { ...created, detail: `Sign In refused the saved email and password, so made an account instead. ${created.detail}` };
+  const after = created.signInNext ? await submitSignIn(page, account) : null;
+  return {
+    ...created,
+    ...after,
+    detail: `Sign In refused the saved email and password, so made an account instead. ${created.detail}${after ? ` ${after.detail}` : ''}`,
+  };
 }
 
 /** SuccessFactors quick apply: the account boxes are part of the application. */
@@ -219,14 +230,21 @@ async function submitCreate(page: Page, account: SiteAccount, emailEntered = fal
   }
   const passwords = page.locator(VISIBLE_PASSWORD);
   const n = await passwords.count();
-  for (let i = 0; i < n; i++) await passwords.nth(i).fill(account.password);
+  // Left with a blur, so rule hints the site draws on blur ("Password must
+  // contain...") are up before the page text is read for what is new.
+  for (let i = 0; i < n; i++) {
+    await passwords.nth(i).fill(account.password);
+    await passwords.nth(i).dispatchEvent('blur').catch(() => {});
+  }
 
   // SuccessFactors' form also wants the email typed again and a name, and
   // refuses the whole form ("The following fields require a valid input:
   // Retype Email Address, First Name, Last Name") without them.
-  await fillByLabel(page, /^(retype|confirm|re-?enter|verify|repeat)\b.*e-?mail/i, account.email);
-  if (account.firstName) await fillByLabel(page, /^(first|given) name/i, account.firstName);
-  if (account.lastName) await fillByLabel(page, /^(last|family) name|^surname/i, account.lastName);
+  // Its labels start with a newline and indent, and a regex label is tested
+  // against that raw text - hence `^\s*`, and the SuccessFactors ids first.
+  await fillBox(page, 'input[name="fbclc_emailConf"]', /^\s*(retype|confirm|re-?enter|verify|repeat)\b.*e-?mail/i, account.email);
+  if (account.firstName) await fillBox(page, 'input[name="fbclc_fName"]', /^\s*(first|given) name/i, account.firstName);
+  if (account.lastName) await fillBox(page, 'input[name="fbclc_lName"]', /^\s*((last|family) name|surname)/i, account.lastName);
 
   // The consent tick ("I agree", "By creating an account…") is required to
   // submit. Job alerts and marketing opt-ins on the same screen are not, and
@@ -288,19 +306,29 @@ async function awaitOutcome(page: Page, success: string, before: string): Promis
     await page.waitForTimeout(750);
     if (!(await visibleCount(page, VISIBLE_PASSWORD))) {
       // A form that posts back reloads the page: the password box is gone for
-      // a moment and then the same sign-in screen returns with an error. Only
-      // a box still gone once the page has loaded counts.
+      // a moment and then the same sign-in screen returns with an error. And
+      // Workday blanks the whole step for several seconds while it decides,
+      // then often draws Sign In again. Only a next screen that has actually
+      // drawn, with no password box on it, counts.
       await page.waitForLoadState('domcontentloaded').catch(() => {});
-      await page.waitForTimeout(1500);
-      if (!(await visibleCount(page, VISIBLE_PASSWORD))) {
-        return { ok: true, detail: `${success} with your saved email.` };
+      const next = await nextScreen(page);
+      if (next === 'drawn') return { ok: true, detail: `${success} with your saved email.` };
+      if (next === 'blank') {
+        return { ok: false, detail: 'Submitted, but the page stayed blank afterwards.' };
       }
+    }
+    // Workday answers a new account with its one-password Sign In screen.
+    if (success === 'Created an account' && (await isSignInScreen(page))) {
+      return { ok: false, signInNext: true, detail: 'Created an account; the site asked to sign in with it.' };
     }
     const text = await bodyText(page);
     if (newly(text, before, ALREADY_EXISTS)) {
       return { ok: false, exists: true, detail: 'An account with this email already exists.' };
     }
-    const refused = newly(text, before, REJECTED);
+    // Not the policy wording here: "Password must contain..." is a rules
+    // list on SuccessFactors' Create Account, drawn whenever a box is left.
+    // An actual policy failure shows up as a site error, read below.
+    const refused = newly(text, before, BAD_LOGIN);
     if (refused) return { ok: false, refused: true, detail: `The site refused it: "${refused}".` };
   }
   const said = await siteError(page);
@@ -311,6 +339,54 @@ async function awaitOutcome(page: Page, success: string, before: string): Promis
       ? `Submitted, but the site said: "${said}".`
       : 'Submitted, but the sign-in screen did not go away.',
   };
+}
+
+/**
+ * What the page settles on once the password boxes have gone: a password box
+ * again, a screen with something to act on, or nothing at all within 25s (a Workday
+ * step was seen blank for over 10s while loading).
+ * The header, the honeypot and Workday's "Back to Job Posting" stay up
+ * through the blank gap, so they do not count. Something drawn has to still
+ * be there a second later.
+ */
+async function nextScreen(page: Page): Promise<'password' | 'drawn' | 'blank'> {
+  let drawnSince = 0;
+  const deadline = Date.now() + 25_000;
+  while (Date.now() < deadline) {
+    if (await visibleCount(page, VISIBLE_PASSWORD)) return 'password';
+    const drawn = await page
+      .evaluate(() =>
+        Array.from(
+          document.querySelectorAll<HTMLElement>(
+            'input:not([type="hidden"]):not([type="password"]), select, textarea, button, [role="combobox"], [role="button"]',
+          ),
+        ).some(
+          (el) =>
+            el.checkVisibility() &&
+            !el.closest('header, nav, [role="banner"], [role="navigation"], [data-automation-id="header"]') &&
+            !/beecatcher|honey-?pot|backToJobPosting/i.test(
+              `${el.dataset.automationId ?? ''} ${el.getAttribute('name') ?? ''}`,
+            ),
+        ),
+      )
+      .catch(() => false);
+    if (!drawn) drawnSince = 0;
+    else if (!drawnSince) drawnSince = Date.now();
+    else if (Date.now() - drawnSince >= 1000) return 'drawn';
+    await page.waitForTimeout(250);
+  }
+  return 'blank';
+}
+
+/** One password box and a Sign In button: the site's sign-in form. */
+async function isSignInScreen(page: Page): Promise<boolean> {
+  if ((await visibleCount(page, VISIBLE_PASSWORD)) !== 1) return false;
+  if (await page.locator(SIGN_IN_BUTTON).first().isVisible().catch(() => false)) return true;
+  return page
+    .getByRole('button', { name: /^(sign in|log ?in)$/i })
+    .first()
+    .isVisible()
+    .catch(() => false);
 }
 
 /**
@@ -345,9 +421,13 @@ function newly(text: string, before: string, re: RegExp): string | null {
   return null;
 }
 
-/** Fill an empty, editable text box by its label, then leave it (sites validate on blur). */
-async function fillByLabel(page: Page, label: RegExp, value: string): Promise<void> {
-  const box = page.getByLabel(label).first();
+/**
+ * Fill an empty, editable text box - found by `selector`, else by its label -
+ * then leave it (sites validate on blur).
+ */
+async function fillBox(page: Page, selector: string, label: RegExp, value: string): Promise<void> {
+  const byId = page.locator(selector).first();
+  const box = (await byId.isVisible().catch(() => false)) ? byId : page.getByLabel(label).first();
   if (!(await box.isVisible().catch(() => false))) return;
   if (!(await box.isEditable().catch(() => false))) return;
   if (await box.inputValue().catch(() => '')) return;

@@ -65,7 +65,7 @@ Rules:
 
 export async function buildSearchPlan(
   profileId: string,
-  opts: { maxQueries?: number; country?: Country } = {},
+  opts: { maxQueries?: number; country?: Country; openToIndia?: boolean } = {},
 ): Promise<SearchPlan> {
   const maxQueries = opts.maxQueries ?? 6;
 
@@ -112,7 +112,7 @@ export async function buildSearchPlan(
       const plan = await generate({
         task: 'searchPlanning',
         system: PLAN_SYSTEM,
-        prompt: renderPlanPrompt({ profile, summary, resume, accepted, rejected, searchCountry: opts.country?.name }),
+        prompt: renderPlanPrompt({ profile, summary, resume, accepted, rejected, searchCountry: opts.country?.name, openToIndia: !opts.country && opts.openToIndia }),
         schema: PlanSchema,
         maxTokens: 1200,
       });
@@ -147,6 +147,7 @@ function renderPlanPrompt(args: {
   accepted: { title: string; companyName: string; location: string | null }[];
   rejected: { title: string; rejectReason: string | null; rejectCategory: string | null }[];
   searchCountry?: string;
+  openToIndia?: boolean;
 }): string {
   const where = [args.profile.city, args.profile.region, args.profile.country]
     .filter(Boolean)
@@ -160,7 +161,9 @@ function renderPlanPrompt(args: {
     `<candidate_location>${where || 'not stated'}</candidate_location>`,
     args.searchCountry
       ? `<search_country>${args.searchCountry}</search_country>\nThe candidate chose to search only in ${args.searchCountry}. Every query must target ${args.searchCountry} (name the country or one of its cities), or be for remote roles open there.`
-      : '',
+      : args.openToIndia
+        ? `<search_scope>worldwide, for someone based in India</search_scope>\nThe candidate chose to search anywhere in the world, but only for jobs they can take from India: roles in India, remote roles open worldwide or to India/APAC, or roles abroad that offer visa sponsorship or relocation. Spread the queries across those three kinds.`
+        : '',
     relevantFacts.length
       ? `<stated_facts>\n${relevantFacts.map((f) => `- ${f.label}: ${f.value}`).join('\n')}\n</stated_facts>`
       : '',

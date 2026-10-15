@@ -98,7 +98,10 @@ function listFallbacks(field: FormField, wanted: string | string[]): { values: s
     const level = degreeLevel(wanted);
     if (level) {
       const word = level.replace(/'s\b.*$/, '');
-      out.push({ values: [level, `${word}s`, word], why: `listed as the degree level` });
+      // The bare word only when the list has it on its own: otherwise
+      // "Bachelor" matches "Bachelor of Arts" by prefix, a different degree.
+      const bare = field.options?.some((o) => normalizeLabel(o.label) === normalizeLabel(word));
+      out.push({ values: [level, `${word}s`, ...(bare ? [word] : [])], why: `listed as the degree level` });
     }
   }
   if (/school|university|college|institution/i.test(field.label)) {
