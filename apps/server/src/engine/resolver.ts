@@ -62,8 +62,52 @@ export async function resolveFields(
       out.set(field.id, fromInference(field, inferences.get(field.id)!, pending.get(field.id)!));
     }
   }
+  splitCountryCode(fields, out, ctx.profile.countryCode);
   // Callers read the plan in form order.
   return new Map(fields.map((f) => [f.id, out.get(f.id)!]));
+}
+
+/** "Country Phone Code" (Workday), "Dialing code", "Phone country". */
+const COUNTRY_CODE_LABEL = /country\s*(phone\s*)?code|(dial(l)?ing|calling)\s*code|phone\s*country/i;
+
+/** Calling codes for numbers saved without a separator ("+917029294010"). */
+const CALLING_CODES: Record<string, string> = {
+  IN: '91', US: '1', CA: '1', GB: '44', SG: '65', AE: '971', DE: '49', AU: '61', IE: '353', NL: '31',
+};
+
+/**
+ * A form that asks for the country code in its own field wants only the
+ * national number in the phone box. Workday rejected "+91-7029294010" next to
+ * "India (+91)" as "The number isn't recognized" (Deutsche Bank, October 2026).
+ */
+function splitCountryCode(fields: FormField[], out: Map<string, Resolution>, countryCode?: string | null): void {
+  if (!fields.some((f) => COUNTRY_CODE_LABEL.test(f.label))) return;
+  for (const field of fields) {
+    const res = out.get(field.id);
+    if (res?.kind !== 'answer' || res.answer.canonicalKey !== 'contact.phone') continue;
+    if (COUNTRY_CODE_LABEL.test(field.label) || typeof res.answer.value !== 'string') continue;
+    const national = nationalNumber(res.answer.value, countryCode);
+    if (national === res.answer.value) continue;
+    res.answer = {
+      ...res.answer,
+      value: national,
+      displayValue: national,
+      rationale: `${res.answer.rationale} Country code left to the form's own country code field.`,
+    };
+  }
+}
+
+/** "+91-7029294010", "(+91) 70292 94010", "0091 7029294010" → the number after the code. */
+export function nationalNumber(phone: string, countryCode?: string | null): string {
+  const t = phone.trim();
+  const separated = t.match(/^\(?(?:\+|00)\d{1,3}\)?[\s.\-]+(\d.*)$/);
+  if (separated) return separated[1]!.trim();
+  const code = countryCode ? CALLING_CODES[countryCode.toUpperCase()] : undefined;
+  if (code) {
+    const joined = t.match(new RegExp(`^(?:\\+|00)${code}(\\d{6,})$`));
+    if (joined) return joined[1]!;
+  }
+  return t;
 }
 
 export async function resolveField(field: FormField, ctx: ResolveContext): Promise<Resolution> {
@@ -204,6 +248,24 @@ async function resolveWithoutModel(field: FormField, ctx: ResolveContext): Promi
         };
       }
     }
+  }
+
+  // 3b. A phone extension nobody saved. Blank, not the "NA" the model or the
+  //     answer bank would offer.
+  if (key === 'contact.phone_extension' && !field.required) {
+    return {
+      kind: 'answer',
+      answer: {
+        fieldId: field.id,
+        value: null,
+        displayValue: '',
+        source: 'SKIPPED',
+        confidence: 1,
+        rationale: 'No phone extension saved; left blank.',
+        remember: false,
+        canonicalKey: key,
+      },
+    };
   }
 
   // 4. Company-specific free text. Generated fresh every time, never recycled

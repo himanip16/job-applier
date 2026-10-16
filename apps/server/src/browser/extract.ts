@@ -55,9 +55,19 @@ const EXTRACTOR = () => {
   deepAll(document, `[${ATTR}]`).forEach((n) => n.removeAttribute(ATTR));
   deepAll(document, '[data-ja-group]').forEach((n) => n.removeAttribute('data-ja-group'));
 
+  /** A radio's drawn `<label for>`, which is what a person sees and clicks. */
+  const radioLabelShows = (el: Element): boolean => {
+    if ((el as HTMLInputElement).type !== 'radio' || !el.id) return false;
+    const label = (el.getRootNode() as Document | ShadowRoot).querySelector(`label[for="${CSS.escape(el.id)}"]`);
+    const lr = label?.getBoundingClientRect();
+    return !!lr && lr.width > 0 && lr.height > 0 && getComputedStyle(label!).visibility !== 'hidden';
+  };
+
   const visible = (el: Element): boolean => {
     const s = getComputedStyle(el as HTMLElement);
-    if (s.display === 'none' || s.visibility === 'hidden') return false;
+    if (s.display === 'none') return false;
+    // Jobvite's radios are `visibility: hidden` inside a drawn label.
+    if (s.visibility === 'hidden') return radioLabelShows(el);
     const r = (el as HTMLElement).getBoundingClientRect();
     // File inputs are routinely 0x0 behind a styled button; they still count
     // - but only when something has deliberately styled them that way, not
@@ -71,11 +81,7 @@ const EXTRACTOR = () => {
     if (r.width === 0 && r.height === 0) {
       // Oracle's yes/no questions are 0x0 radios (`input-row__hidden-control`)
       // under a drawn <label for>; the label is what a person sees and clicks.
-      if ((el as HTMLInputElement).type === 'radio' && el.id) {
-        const label = (el.getRootNode() as Document | ShadowRoot).querySelector(`label[for="${CSS.escape(el.id)}"]`);
-        const lr = label?.getBoundingClientRect();
-        return !!lr && lr.width > 0 && lr.height > 0 && getComputedStyle(label!).visibility !== 'hidden';
-      }
+      if ((el as HTMLInputElement).type === 'radio' && el.id) return radioLabelShows(el);
       if ((el as HTMLInputElement).type !== 'file') return false;
       const he = el as HTMLElement;
       return typeof he.checkVisibility === 'function' ? he.checkVisibility() : he.offsetParent !== null;
@@ -679,14 +685,23 @@ const EXTRACTOR = () => {
       // harvested: many are trees ("Job Board" > "LinkedIn"), and the top
       // level would limit the answer to a category, which is not selectable.
       if (el.getAttribute('data-uxi-widget-type') === 'selectinput') {
+        // "Type to Add Skills" (Cisco, October 2026) is the same box but takes
+        // many picks. Read as a single choice it was given one skill and left
+        // there. Every prompt sits in a `multiSelectContainer`, so the
+        // container proves nothing; the Skills field is told by its name.
+        const label = labelFor(el);
+        const skills =
+          !!el.closest('[data-automation-id="formField-skills"]') || /\bskills\b/i.test(label);
         results.push({
           handle: mark(el),
           name: el.getAttribute('name') || el.getAttribute('id') || '',
           tag, type,
-          kind: 'SELECT',
+          kind: skills ? 'MULTISELECT' : 'SELECT',
           widget: 'workday-prompt',
-          label: labelFor(el),
-          helpText: helpFor(el),
+          label,
+          helpText: skills
+            ? [helpFor(el), 'A search box: list each skill from the resume as its own item.'].filter(Boolean).join(' ')
+            : helpFor(el),
           required: isRequired(el),
           options: [],
         });

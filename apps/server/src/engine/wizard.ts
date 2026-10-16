@@ -112,6 +112,8 @@ interface WalkState {
   handledPrompts: Set<string>;
   // The screen whose "Add another" rows were held back until its files went on.
   rowsDeferredOn: string | null;
+  // The screen read again for dependent picklists' choices.
+  cascadeRereadOn: string | null;
 }
 
 type StepOutcome = 'CONTINUE' | 'ABANDONED' | 'REACHED_END';
@@ -123,6 +125,7 @@ export async function walkApplication(args: WalkArgs): Promise<WalkOutcome> {
     resumeAttached: false, coverAttached: false, submitControl: null,
     step: 0, stuckSignature: null, afterHumanPause: false,
     navigationRetries: 0, handledPrompts: new Set(), rowsDeferredOn: null,
+    cascadeRereadOn: null,
   };
 
   context.edits.attach({ answers: state.answers, sessionAnswers: context.ctx.sessionAnswers, plan: state.plan });
@@ -260,6 +263,16 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
     fillable.filter((f) => !unanswered.has(f.id)),
     fillContext,
   );
+  // SuccessFactors lists a dependent picklist's choices only once its parent
+  // is picked: PayU's required "Details" under "How did you hear" had none
+  // when the step was read, could not be answered, and stayed empty. Read the
+  // step once more now the parents are set; boxes already filled are kept.
+  if (state.cascadeRereadOn !== signature && (await awaitingParentPick(page, fillable))) {
+    state.cascadeRereadOn = signature;
+    await bus.emitEvent(applicationId, 'LOG', 'Some dropdowns depend on earlier answers; reading the page again for their choices.');
+    state.step--;
+    return 'CONTINUE';
+  }
   if (gaps.length) {
     const asked = await askAboutGaps(context, state, fillable, gaps);
     unfilledRequired.push(...(await fillApplicationFields(asked, fillContext)));
@@ -280,6 +293,25 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
     return advanceStep(context, state, await pageSignature(page));
   }
   return advanceStep(context, state, signature);
+}
+
+/**
+ * A required SuccessFactors picklist that was read with no choices and can be
+ * opened now - its parent was picked by this pass.
+ */
+async function awaitingParentPick(page: Page, fields: FormField[]): Promise<boolean> {
+  for (const f of fields) {
+    if (!f.required || f.widget !== 'react-select' || f.options?.length) continue;
+    const ready = await page
+      .locator(f.selector)
+      .first()
+      .evaluate((el) => !!el.closest('.sfCascadingPicklist') && !(el as HTMLInputElement).disabled, undefined, {
+        timeout: 2_000,
+      })
+      .catch(() => false);
+    if (ready) return true;
+  }
+  return false;
 }
 
 /** True only when answering the prompt moved to another screen. */

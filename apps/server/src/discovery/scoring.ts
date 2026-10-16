@@ -426,13 +426,19 @@ export async function assessFit(args: {
   candidateContext: string;
   preferences: string;
   rejectionHistory: string;
+  /** From candidateConstraints. Stated so the model stops estimating it from resume dates. */
+  candidateYears?: number | null;
   job: Pick<DiscoveredJob, 'title' | 'companyName' | 'location' | 'descriptionText' | 'remote'>;
 }): Promise<FitAssessment | null> {
+  const years =
+    args.candidateYears != null
+      ? `\n\n<total_experience>\n${args.candidateYears} years of professional experience. This is the candidate's own figure: use it as given, do not re-estimate it from resume dates.\n</total_experience>`
+      : '';
   try {
     return await generate({
       task: 'fitScoring',
       system: FIT_SYSTEM,
-      prompt: `${args.candidateContext}
+      prompt: `${args.candidateContext}${years}
 
 <stated_preferences>
 ${args.preferences || 'None recorded.'}

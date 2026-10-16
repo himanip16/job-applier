@@ -1,5 +1,5 @@
 import type { Locator, Page } from 'playwright';
-import { normalizeLabel, type FormField } from '@ja/shared';
+import { countryFromText, normalizeLabel, type FormField } from '@ja/shared';
 
 const FIELD_TIMEOUT_MS = 10_000;
 const OPTION_TIMEOUT_MS = 5_000;
@@ -57,7 +57,8 @@ export async function fillField(page: Page, field: FormField, value: string | st
       await fillButtonGroup(page, field, asOne(value, field));
       break;
     case 'workday-prompt':
-      await fillWorkdayPrompt(page, field, asOne(value, field));
+      if (field.kind === 'MULTISELECT') await fillWorkdayPromptMany(page, field, Array.isArray(value) ? value : [value]);
+      else await fillWorkdayPrompt(page, field, asOne(value, field));
       break;
     case 'workday-dropdown':
       await fillWorkdayDropdown(page, field, asOne(value, field));
@@ -221,6 +222,7 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
  */
 function showsChosenOption(field: FormField, want: string, shown: string): boolean {
   if (!shown) return false;
+  if (showsDialCodeFor(want, shown)) return true;
   const chosen = bestOption(field.options, want);
   if (!chosen) return false;
 
@@ -232,6 +234,19 @@ function showsChosenOption(field: FormField, want: string, shown: string): boole
   // The decoration on its own: "+91" out of "India +91".
   const dial = label.match(/\+\d{1,4}/)?.[0];
   return Boolean(dial && normalizeLabel(dial) === shown);
+}
+
+/**
+ * A phone country picker that shows "+91 IN" for India, with no options to
+ * check it against. Rippling's list is virtualised, so its options are not
+ * harvested, and the correct pick read back as "did not hold the value".
+ * The ISO code alone is not enough ("in" is a word); it has to sit beside a
+ * dial code.
+ */
+function showsDialCodeFor(want: string, shown: string): boolean {
+  const country = countryFromText(want);
+  if (!country || !/\+\d{1,4}/.test(shown)) return false;
+  return new RegExp(`(^|[^a-z])${country.code.toLowerCase()}([^a-z]|$)`).test(shown);
 }
 
 /**
@@ -449,27 +464,35 @@ async function waitForOption(page: Page, field: FormField, want: string): Promis
     return null;
   }
 
-  const count = await options.count();
-  const optionData: { label: string; locator: Locator }[] = [];
-  
-  for (let i = 0; i < count; i++) {
-    const opt = options.nth(i);
-    const text = normalizeLabel((await optionText(opt)) ?? '');
-    if (text) {
-      optionData.push({ label: text, locator: opt });
+  // The first list shown is not always the answer to what was typed. Search-
+  // as-you-type lists (Rippling's Location, a places lookup) are still showing
+  // the results for "Pat" when the last key lands, and judging that list said
+  // "Patna, Bihar, India" was not an option a moment before it appeared. So
+  // keep reading until there is a match, or the list has stopped changing.
+  const deadline = Date.now() + OPTION_TIMEOUT_MS;
+  let last = '';
+  let stableReads = 0;
+  for (;;) {
+    const optionData: { label: string; locator: Locator }[] = [];
+    const count = await options.count();
+    for (let i = 0; i < count; i++) {
+      const opt = options.nth(i);
+      const text = normalizeLabel((await optionText(opt)) ?? '');
+      if (text) optionData.push({ label: text, locator: opt });
     }
+
+    const matched = bestOption(optionData.map((o) => ({ label: o.label })), want);
+    if (matched) {
+      return optionData.find((o) => normalizeLabel(o.label) === normalizeLabel(matched.label))?.locator ?? null;
+    }
+
+    const seen = optionData.map((o) => o.label).join('|');
+    stableReads = seen === last ? stableReads + 1 : 0;
+    last = seen;
+    // About a second unchanged: this is the list, and the answer is not in it.
+    if (stableReads >= 3 || Date.now() > deadline) return null;
+    await page.waitForTimeout(300);
   }
-
-  // Use the same sophisticated matching logic as bestOption()
-  const matched = bestOption(optionData.map(o => ({ label: o.label })), want);
-  if (!matched) return null;
-
-  // Find the locator corresponding to the matched option
-  const matchedLocator = optionData.find(o => 
-    normalizeLabel(o.label) === normalizeLabel(matched.label)
-  )?.locator;
-  
-  return matchedLocator || null;
 }
 
 /**
@@ -481,11 +504,22 @@ async function waitForOption(page: Page, field: FormField, want: string): Promis
  * instead of choosing, look for the answer one level down; past that it is a
  * question for a person, not a guess.
  */
-async function fillWorkdayPrompt(page: Page, field: FormField, saved: string): Promise<void> {
+async function fillWorkdayPrompt(page: Page, field: FormField, saved: string, adding = false): Promise<void> {
   const want = workdayPlain(saved) || saved;
   const input = page.locator(field.selector).first();
   await input.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
-  if (workdayShows(want, await workdaySelection(page, field))) return;
+  // Adding to a box that already holds picks, the joined selection text says
+  // nothing about this one; only the pills that appear after a click do.
+  const before = adding ? await workdayChosen(page, field) : [];
+  const took = async (option?: string): Promise<boolean> => {
+    if (!adding) {
+      const shown = await workdaySelection(page, field);
+      return workdayShows(want, shown) || (!!option && workdayShows(option, shown));
+    }
+    const now = await workdayChosen(page, field);
+    return workdayHolds(want, now) || (!!option && workdayHolds(option, now) && now.length > before.length);
+  };
+  if (!adding && (await took())) return;
   await input.scrollIntoViewIfNeeded().catch(() => {});
 
   const searches = [want, want.split(/[\s,(]/)[0] ?? want].filter((s, i, all) => s && all.indexOf(s) === i);
@@ -497,7 +531,7 @@ async function fillWorkdayPrompt(page: Page, field: FormField, saved: string): P
     await input.press('Enter');
     await page.waitForTimeout(400);
     // Some tenants pick a sole exact hit on Enter.
-    if (workdayShows(want, await workdaySelection(page, field))) {
+    if (await took()) {
       await page.keyboard.press('Escape').catch(() => {});
       return;
     }
@@ -509,8 +543,7 @@ async function fillWorkdayPrompt(page: Page, field: FormField, saved: string): P
       if (!found.option) break;
       await page.locator(`[data-ja-opt="${seen.indexOf(found.option)}"]`).click({ timeout: FIELD_TIMEOUT_MS });
       await page.waitForTimeout(400);
-      const shown = await workdaySelection(page, field);
-      if (workdayShows(want, shown) || workdayShows(found.option, shown)) {
+      if (await took(found.option)) {
         await page.keyboard.press('Escape').catch(() => {});
         return;
       }
@@ -521,6 +554,41 @@ async function fillWorkdayPrompt(page: Page, field: FormField, saved: string): P
     `Could not find option "${want}" for ${field.label}${seen.length ? ` (saw: ${seen.slice(0, 8).join(', ')})` : ''}`,
     field,
   );
+}
+
+/**
+ * A Workday search box that takes many picks ("Type to Add Skills"). Each
+ * item is searched and picked in turn, beside what is already there. Items
+ * Workday's list does not offer are reported after the rest are added, so one
+ * unknown skill does not leave the box with none.
+ */
+async function fillWorkdayPromptMany(page: Page, field: FormField, saved: string[]): Promise<void> {
+  const missed: string[] = [];
+  for (const item of saved) {
+    const want = workdayPlain(item) || item;
+    if (!want.trim()) continue;
+    // Compared against the pills one by one: the joined selection text holds
+    // "javascript", which would pass for "java".
+    if (workdayHolds(want, await workdayChosen(page, field))) continue;
+    try {
+      await fillWorkdayPrompt(page, field, want, true);
+    } catch (err) {
+      if (!(err instanceof FillError)) throw err;
+      missed.push(want);
+    }
+  }
+  if (missed.length) {
+    throw new FillError(`Workday does not offer ${missed.map((m) => `"${m}"`).join(', ')} for ${field.label}`, field);
+  }
+}
+
+/** Is `want` one of the picked items? "Java" holds as "Java (Programming Language)". */
+function workdayHolds(want: string, chosen: string[]): boolean {
+  const w = normalizeLabel(want);
+  return chosen.some((c) => {
+    const n = normalizeLabel(c);
+    return n === w || normalizeLabel(c.replace(/\s*\([^)]*\)\s*$/, '')) === w;
+  });
 }
 
 /** Workday's button dropdown: the button shows the choice; the list opens below. */

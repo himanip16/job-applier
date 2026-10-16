@@ -76,6 +76,14 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     patterns: [/^phone(?!\s*(ext|extension|type|device))/i, /mobile\s*(number|phone)/i, /telephone(?!\s*ext)/i, /contact number/i],
   },
   {
+    // Workday's optional "Phone Extension". Left blank unless you saved one;
+    // the model and answer bank put "NA" in it.
+    key: 'contact.phone_extension',
+    prompt: 'Phone extension',
+    kind: 'TEXT',
+    patterns: [/^(phone|telephone)\s*ext(ension|\.)?\b/i, /^ext(ension|\.)?$/i],
+  },
+  {
     key: 'contact.sms_opt_in',
     prompt: 'Do you want recruiting updates by text message (opt in or out)?',
     kind: 'BOOLEAN',
@@ -182,7 +190,8 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     patterns: [
       /salary\s*(expectation|requirement|range)/i,
       /compensation\s*(expectation|requirement)/i,
-      /expected\s*(salary|compensation|ctc)/i,
+      // "Expected CTC Currency" asks which currency, not how much.
+      /expected\s*(salary|compensation|ctc)(?!\s*currency)/i,
       /desired\s*(salary|compensation)/i,
     ],
   },
@@ -190,7 +199,9 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     key: 'compensation.current',
     prompt: 'What is your current salary?',
     kind: 'TEXT',
-    patterns: [/current\s*(salary|compensation|ctc)/i],
+    // PayU's "Current Salary Currency" is a currency list; read as the salary
+    // question it was offered the amount, which no currency matches.
+    patterns: [/current\s*(salary|compensation|ctc)(?!\s*currency)/i],
   },
   {
     key: 'availability.start_date',

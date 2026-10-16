@@ -1843,8 +1843,8 @@
     "company": "WEX",
     "domain": "",
     "job_links": [],
-    "source": "linkedin-company",
-    "handle": "11637",
+    "source": "workday",
+    "handle": "wexinc.wd5/WEXInc",
     "tier": "shortlist",
     "sde2_ctc_lpa": "",
     "india_locations": "Bengaluru"
@@ -1853,8 +1853,8 @@
     "company": "Amagi",
     "domain": "",
     "job_links": [],
-    "source": "linkedin-company",
-    "handle": "1125387",
+    "source": "careers-page",
+    "handle": "https://www.amagi.com/careers/open-roles",
     "tier": "shortlist",
     "sde2_ctc_lpa": "",
     "india_locations": "Bengaluru"
@@ -2513,8 +2513,8 @@
     "company": "Just Eat Takeaway.com",
     "domain": "",
     "job_links": [],
-    "source": "linkedin-company",
-    "handle": "103531",
+    "source": "careers-page",
+    "handle": "https://careers.justeattakeaway.com/global/en/search-results",
     "tier": "shortlist",
     "sde2_ctc_lpa": "",
     "india_locations": ""
@@ -3252,5 +3252,205 @@
       "checked": "2026-10-06",
       "listed_by": "The Global Move company list (public part)"
     }
+  },
+  {
+    "company": "Cvent",
+    "domain": "",
+    "job_links": [],
+    "source": "jibe",
+    "handle": "careers.cvent.com",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Thought Machine",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "thought-machine",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Broccoli AI",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "broccoli",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Nike",
+    "domain": "",
+    "job_links": [],
+    "source": "workday",
+    "handle": "nike.wd1/nke",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Wheely",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "wheely",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "CertifyOS",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "certifyos",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru, Pune"
+  },
+  {
+    "company": "PUMA",
+    "domain": "",
+    "job_links": [],
+    "source": "workday",
+    "handle": "puma.wd502/Jobs_at_Puma",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Pune"
+  },
+  {
+    "company": "Checkout.com",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "checkout.com",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Porter",
+    "domain": "",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://porter.darwinbox.in/ms/candidatev2/main/careers/allJobs",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "NCR Voyix",
+    "domain": "",
+    "job_links": [],
+    "source": "workday",
+    "handle": "ncr.wd1/ext_apac",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Hyderabad"
+  },
+  {
+    "company": "Priceline",
+    "domain": "",
+    "job_links": [],
+    "source": "workday",
+    "handle": "priceline.wd1/Priceline",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Mumbai"
+  },
+  {
+    "company": "JioStar",
+    "domain": "",
+    "job_links": [],
+    "source": "workday",
+    "handle": "jiostar.wd102/JioStar",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Kong",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "kong",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Klaviyo",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "klaviyo",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Olo",
+    "domain": "",
+    "job_links": [],
+    "source": "lever",
+    "handle": "olo",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Kaluza",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "kaluza",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Conviva",
+    "domain": "",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "conviva",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Cyberhaven",
+    "domain": "",
+    "job_links": [],
+    "source": "ashby",
+    "handle": "cyberhaven",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Tesco",
+    "domain": "",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://careers.tesco.com/en_GB/careers/SearchJobs",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "LoadShare Networks",
+    "domain": "",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://careers.loadshare.net/loadshare/jobslist",
+    "tier": "shortlist",
+    "sde2_ctc_lpa": "",
+    "india_locations": "Bengaluru"
   }
 ]

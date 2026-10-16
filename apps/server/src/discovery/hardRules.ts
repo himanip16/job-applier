@@ -242,8 +242,22 @@ export function experienceVerdict(candidateYears: number | null, jobText: string
 
 // ------------------------------------------------------------------ visas ---
 
+/**
+ * US places by name. Case-insensitive, so it must never contain a bare "us":
+ * that is the pronoun in "join us" and "about us", and it made every posting
+ * with a friendly first paragraph - a Grab role in Bangalore, say - a US role.
+ */
 const US_LOCATION =
-  /\b(united states|u\.?s\.?a?\b|usa|new york|san francisco|bay area|seattle|austin|boston|chicago|denver|atlanta|los angeles|washington,? d\.?c|remote[ -]*(?:us|usa|united states)|us[ -]*remote)\b/i;
+  /\b(united states|new york|san francisco|bay area|seattle|austin|boston|chicago|denver|atlanta|los angeles|washington,? d\.?c)\b/i;
+
+/** The abbreviation, matched case-sensitively so "us" the pronoun never counts. */
+const US_ABBREVIATION = /(?:^|[^A-Za-z])(?:U\.S\.A?\.?|USA|US)(?![A-Za-z])/;
+
+/** Where the posting names India, the candidate can take it without a visa. */
+const INDIA_LOCATION =
+  /\b(india|bengaluru|bangalore|mumbai|pune|hyderabad|chennai|gurgaon|gurugram|noida|delhi|ncr|kolkata|ahmedabad|kochi|jaipur|indore|chandigarh|coimbatore|thiruvananthapuram|trivandrum|mysore|mysuru|vadodara|nagpur)\b/i;
+
+const mentionsUS = (text: string) => US_LOCATION.test(text) || US_ABBREVIATION.test(text);
 
 /** Two-letter state codes, only where a city or comma makes them a location. */
 const US_STATE = /,\s*(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy|dc)\b/i;
@@ -271,9 +285,21 @@ export function sponsorshipVerdict(
 ): HardRuleVerdict | null {
   if (!needsSponsorship) return null;
 
-  const where = `${job.location ?? ''} ${job.title}`;
+  const location = (job.location ?? '').trim();
+  const where = `${location} ${job.title}`;
   const body = (job.descriptionText ?? '').slice(0, 12000);
-  const inUS = US_LOCATION.test(where) || US_STATE.test(where) || US_LOCATION.test(body.slice(0, 600));
+
+  // A role listed in India is not a US role, whatever the description says
+  // about head offices or US teams.
+  if (INDIA_LOCATION.test(where)) return null;
+
+  // The stated location decides. The description is read only when the
+  // location names no country ("Remote", or blank), and then only its
+  // opening, where a location line usually sits.
+  const placeless = !location || /^(remote|anywhere|hybrid|flexible|multiple locations?|various locations?)$/i.test(location);
+  const inUS = !placeless
+    ? mentionsUS(where) || US_STATE.test(where)
+    : mentionsUS(job.title) || mentionsUS(body.slice(0, 600));
   if (!inUS) return null;
 
   if (WELCOMES_INDIA.test(body) || WELCOMES_INDIA.test(where)) return null;

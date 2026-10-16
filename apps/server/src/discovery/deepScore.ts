@@ -72,6 +72,7 @@ export async function deepScoreLeads(
         candidateContext,
         preferences,
         rejectionHistory,
+        candidateYears: constraints.candidateYears,
         job: entry.job,
       });
       
