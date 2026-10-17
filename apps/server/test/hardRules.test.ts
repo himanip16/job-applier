@@ -157,7 +157,7 @@ describe('what the rules do to a score', () => {
     dealbreaker: '',
   });
   const noOpinion: LexicalScore = {
-    score: 50, positives: [], negatives: [], affinity: 0.35, shared: [], missing: [], confidence: 0,
+    score: 50, positives: [], negatives: [], affinity: 0.35, shared: [], missing: [], confidence: 0, unreadScore: 50,
   };
 
   it('turns an enthusiastic 90 into a no, not into a 33', () => {

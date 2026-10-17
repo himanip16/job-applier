@@ -139,7 +139,7 @@ export default function DiscoverPage() {
   // than showing nothing until every company has been read.
   const [progress, setProgress] = useState<SearchProgress | null>(null);
   useEffect(() => {
-    if (busy !== 'find') {
+    if (busy !== 'find' && busy !== 'company') {
       setProgress(null);
       return;
     }
@@ -192,6 +192,9 @@ export default function DiscoverPage() {
   // asked for each time and remembered.
   const [asking, setAsking] = useState<CountryAction | null>(null);
   const [country, setCountry] = useState('');
+  const [companyName, setCompanyName] = useState('');
+  // Which way "Find new jobs" opens: every company, or the one company last asked for.
+  const [findScope, setFindScope] = useState<'find' | 'company'>('find');
   useEffect(() => {
     let saved = '';
     try { saved = window.localStorage.getItem('ja.searchCountry') ?? ''; } catch { /* default below */ }
@@ -211,18 +214,34 @@ export default function DiscoverPage() {
     setBusy(action);
     setError(null);
     setFlash(null);
-    if (action === 'find') setReport(null);
+    if (action === 'find' || action === 'company') setReport(null);
     try {
+      if (action === 'company') {
+        const r = await api<{ report: SearchReport; company: { company: string; source: string; via: string } }>(
+          '/api/discovery/company',
+          { method: 'POST', body: JSON.stringify({ company: companyName.trim(), country: target }) },
+        );
+        setReport(r.report);
+        const board = r.report.boards[0];
+        const found = board?.error
+          ? `Found ${r.company.company} (${r.company.source}) but could not read its openings: ${board.error}`
+          : `Read ${board?.openings ?? 0} opening${board?.openings === 1 ? '' : 's'} at ${r.company.company} (${r.company.source}${r.company.via === 'linkedin' ? ', via LinkedIn' : ''}): ` +
+            `${r.report.jobsSeen} relevant to your roles${worldwide ? '' : ` in ${name}`}, ${r.report.newLeads} new. Showing every job from ${r.company.company} below.`;
+        setFlash(found);
+        // Everything at that company, including ones already found, saved or applied to.
+        change({ company: r.company.company, status: 'ALL' });
+        return;
+      }
       if (action === 'find') {
         const r = await api<{ report: SearchReport }>('/api/discovery/find', {
           method: 'POST',
-          body: JSON.stringify({ deepScoreTop: 15, country: target }),
+          body: JSON.stringify({ country: target }),
         });
         setReport(r.report);
       } else if (action === 'crawl') {
         const { report: r } = await api<{ report: Record<string, number> & { errors: { company: string }[] } }>(
           '/api/discovery/crawl',
-          { method: 'POST', body: JSON.stringify({ deepScoreTop: 15, country: target }) },
+          { method: 'POST', body: JSON.stringify({ country: target }) },
         );
         setFlash(
           `Searched ${r.companiesCrawled} watch-list companies${worldwide ? '' : ` for ${name}`}: ${r.newLeads} new job${r.newLeads === 1 ? '' : 's'}. ` +
@@ -444,15 +463,22 @@ export default function DiscoverPage() {
             </p>
           </div>
           <div className={styles.actions}>
-            <button className="primary" disabled={busy !== null} onClick={() => setAsking('find')}>
-              <Icon name="sparkles" className={busy === 'find' ? 'spin' : undefined} />
-              {busy === 'find'
-                ? progress?.phase === 'reading'
-                  ? `Searching… ${progress.companiesDone}/${progress.companiesTotal}`
-                  : progress?.phase === 'scoring'
-                    ? 'Ranking…'
-                    : 'Searching…'
-                : 'Search top companies'}
+            <button
+              className="primary"
+              disabled={busy !== null}
+              onClick={() => setAsking(findScope)}
+              title="Search every top-paying company in a country, or just one company you name."
+            >
+              <Icon name="sparkles" className={busy === 'find' || busy === 'company' ? 'spin' : undefined} />
+              {busy === 'company'
+                ? `Searching ${companyName.trim()}…`
+                : busy === 'find'
+                  ? progress?.phase === 'reading'
+                    ? `Searching… ${progress.companiesDone}/${progress.companiesTotal}`
+                    : progress?.phase === 'scoring'
+                      ? 'Ranking…'
+                      : 'Searching…'
+                  : 'Find new jobs'}
             </button>
             <button
               disabled={busy !== null || applying !== null}
@@ -482,6 +508,15 @@ export default function DiscoverPage() {
           </div>
         </div>
 
+        {busy === 'company' && (
+          <div className="notice" role="status" aria-live="polite" style={{ marginTop: '.9rem' }}>
+            {!progress
+              ? `Finding where ${companyName.trim()} posts its jobs…`
+              : progress.phase === 'reading'
+                ? `Reading ${companyName.trim()}'s openings…`
+                : `${progress.newLeads} new job${progress.newLeads === 1 ? '' : 's'} added · ranking the best matches`}
+          </div>
+        )}
         {busy === 'find' && progress && (
           <div className="notice" role="status" aria-live="polite" style={{ marginTop: '.9rem' }}>
             {progress.phase === 'reading'
@@ -492,7 +527,7 @@ export default function DiscoverPage() {
         )}
         {flash && <div className="notice good" style={{ marginTop: '.9rem' }}>{flash}</div>}
         {error && <div className="notice bad" style={{ marginTop: '.9rem' }}>{error}</div>}
-        {report && <SearchReportPanel report={report} />}
+        {report && <SearchReportPanel report={report} onClose={() => setReport(null)} />}
       </div>
 
       <div className={styles.tabsRow}>
@@ -542,7 +577,7 @@ export default function DiscoverPage() {
                     ? 'Save a job to keep it here for later.'
                     : view.status === 'PROCESSING'
                       ? 'Jobs you hit Apply on wait here until they are submitted.'
-                    : 'No jobs here yet. Search top companies to get started.'}
+                    : 'No jobs here yet. Use Find new jobs to get started.'}
             </p>
             {error ? (
               <button onClick={() => { setError(null); load().catch((e) => setError(e.message)); }}>Try again</button>
@@ -582,7 +617,16 @@ export default function DiscoverPage() {
       </div>
 
       {asking && (
-        <CountryDialog value={country} action={asking} onChange={setCountry} onCancel={() => setAsking(null)} onConfirm={() => run(asking)} />
+        <CountryDialog
+          value={country}
+          action={asking}
+          onChange={setCountry}
+          company={companyName}
+          onCompanyChange={setCompanyName}
+          onActionChange={(a) => { setAsking(a); if (a === 'find' || a === 'company') setFindScope(a); }}
+          onCancel={() => setAsking(null)}
+          onConfirm={() => run(asking)}
+        />
       )}
       {confirmAuto && (
         <div className="modal-backdrop" onClick={() => setConfirmAuto(null)}>

@@ -2,6 +2,7 @@ import { countryByCode } from '@ja/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { crawlAll, rescore } from '../discovery/crawler.js';
+import { DEFAULT_DEEP_SCORE_TOP } from '../discovery/deepScore.js';
 import { findJobs, searchProgress } from '../discovery/findJobs.js';
 import { recheckLeads } from '../discovery/recheckLeads.js';
 import type { RequireProfile } from './types.js';
@@ -12,7 +13,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     if (!profile) return;
     const { deepScoreTop, companyId, country, force } = z
       .object({
-        deepScoreTop: z.number().min(0).max(60).default(15),
+        deepScoreTop: z.number().min(0).max(60).default(DEFAULT_DEEP_SCORE_TOP),
         companyId: z.string().optional(),
         country: z.string().length(2).optional(),
         force: z.boolean().default(false),
@@ -40,7 +41,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
         dryRun: z.boolean().default(false),
         maxQueries: z.number().min(1).max(12).optional(),
         maxBoards: z.number().min(1).max(500).optional(),
-        deepScoreTop: z.number().min(0).max(60).default(15),
+        deepScoreTop: z.number().min(0).max(60).default(DEFAULT_DEEP_SCORE_TOP),
         country: z.string().length(2).optional(),
         force: z.boolean().default(false),
       })

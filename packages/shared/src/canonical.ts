@@ -241,7 +241,11 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
                // Okta: "Have you been employed by Okta, Inc. or any of its subsidiaries in the past?"
                /(worked|been employed|employed) (by|for|at) .{1,80}\b(in the past|before|previously)/i,
                // Walmart: "Please select your Walmart Associate Status/Affiliation"
-               /associate status/i, /(current|former|previous) associate/i],
+               /associate status/i, /(current|former|previous) associate/i,
+               // F5: "Have you ever worked for or provided services to F5, Inc. ..."
+               /\bhave you ever (worked|been employed) (for|by|at)\b/i, /provided services to/i,
+               // Northern Trust: "Have you ever been an employee of either Northern Trust or any affiliates ..."
+               /\bhave you (ever )?been an? (employee|contractor|intern) (of|at|with|for)\b/i],
   },
   {
     key: 'history.family_employed',
@@ -249,13 +253,18 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     kind: 'BOOLEAN',
     patterns: [/(family member|relative)s?\b.*(work|employ)/i, /related to (anyone|any|an?)\b.{0,20}employee/i,
                // Okta: "do you have any family members / relatives or personal relationships at Okta ..."
-               /(family members?|relatives?)\b.{0,60}\bat [A-Z]/],
+               /(family members?|relatives?)\b.{0,60}\bat [A-Z]/,
+               // Northern Trust: "Do you currently have a personal relationship (...) with any current
+               // Northern Trust employee, contractor, or vendor?"
+               /\b(personal|familial|close|romantic) relationship\b.*\b(employee|contractor)s?\b/i],
   },
   {
     key: 'history.referral',
     prompt: 'Were you referred by anyone at this company?',
     kind: 'TEXT',
-    patterns: [/referr?(ed|al)/i, /who referred you/i, /know anyone (who works|at)/i],
+    // Not "referred to as": F5's "Have you ever worked for F5 (... collectively
+    // referred to as the "F5 Networks Group")?" was answered with your referral.
+    patterns: [/referr?(ed|al)\b(?!\s+to\s+as\b)/i, /who referred you/i, /know anyone (who works|at)/i],
   },
   {
     key: 'history.source',

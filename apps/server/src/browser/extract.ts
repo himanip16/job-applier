@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import { matchCanonical, type FieldOption, type FormField } from '@ja/shared';
 import { evaluatePage } from './evaluate.js';
-import { optionText } from './fill.js';
+import { controlledListId, optionText, slottedOptionRoot } from './fill.js';
 
 /**
  * Raw, DOM-level description of one control, produced inside the page.
@@ -761,11 +761,17 @@ const EXTRACTOR = () => {
       // text box it was typed into: the box showed the words and the hidden
       // value the form submits stayed empty.
       const sfPicklist = !!el.closest('.sfCascadingPicklist');
-      if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox' || sfPicklist) {
+      // Juspay's "sdd" dropdowns put role="combobox" on a wrapper div and leave
+      // the input inside it bare, so they read as text boxes and the typed
+      // words never picked anything. The choices sit in a display:none
+      // <select> beside the wrapper, which is what the form submits.
+      const comboWrapper = tag === 'input' ? el.parentElement?.closest('[role="combobox"]') : null;
+      if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox' || sfPicklist || comboWrapper) {
         const multi = !!el.closest(
           // SmartRecruiters' "select all that apply" is spl-multiselect-autocomplete.
           '.select__value-container--is-multi, [class*="is-multi"], .cx-multi-select-container, .c-spl-multiselect-autocomplete-input',
         );
+        const shadowSelect = el.closest('.sdd-root')?.parentElement?.querySelector<HTMLSelectElement>(':scope > select');
         results.push({
           handle: mark(el),
           name: el.getAttribute('name') || el.getAttribute('id') || '',
@@ -776,8 +782,12 @@ const EXTRACTOR = () => {
           helpText: helpFor(el),
           required: isRequired(el),
           // Filled in from Node by opening the menu; the options do not exist
-          // in the DOM until then.
-          options: [],
+          // in the DOM until then - unless a hidden <select> already lists them.
+          options: shadowSelect
+            ? Array.from(shadowSelect.options)
+                .map((o) => ({ label: (o.textContent ?? '').trim(), value: o.value }))
+                .filter((o) => o.value !== '' && o.label)
+            : [],
         });
         continue;
       }
@@ -835,6 +845,7 @@ export async function extractFields(
     let options = r.options;
     if (
       (r.widget === 'react-select' || r.widget === 'workday-dropdown') &&
+      !options.length &&
       (opts.harvestComboboxOptions ?? true)
     ) {
       options = await harvestOptions(page, `[data-ja-field="${r.handle}"]`, opts.maxOptions ?? 400);
@@ -875,8 +886,11 @@ async function harvestOptions(page: Page, selector: string, max: number): Promis
     // waited for it to become visible, timed out - and the question reached
     // you as a text box with no choices.
     // SuccessFactors links its listbox with aria-owns instead.
-    const controls = (await input.getAttribute('aria-controls')) ?? (await input.getAttribute('aria-owns'));
-    const scoped = controls
+    const controls = await controlledListId(input);
+    const projected = controls ? await slottedOptionRoot(input) : null;
+    const scoped = projected
+      ? page.locator(`${projected} [role="option"]`)
+      : controls
       ? page.locator(`[id="${controls}"] :is([role="option"], [role="gridcell"])`)
       : input
           .locator('xpath=ancestor::*[contains(@class,"select-shell") or contains(@class,"select__container")][1]')

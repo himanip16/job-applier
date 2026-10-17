@@ -28,7 +28,9 @@ export const linkedinCompanySource: Source = {
       25,
       async (query, offset) => {
         const params = new URLSearchParams({ keywords: query, f_C: handle, start: String(offset) });
-        if (hints?.country) params.set('location', hints.country.name);
+        // With no location LinkedIn searches wherever the request comes from,
+        // which hid all but one of Chargebee's Indian roles; ask for everywhere.
+        params.set('location', hints?.country?.name ?? 'Worldwide');
         return { items: parseCards(await getText(`${GUEST}/seeMoreJobPostings/search?${params}`)) };
       },
       400,

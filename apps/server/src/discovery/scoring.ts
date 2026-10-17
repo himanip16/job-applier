@@ -249,7 +249,26 @@ export interface LexicalScore {
   confidence: number;
   /** Why the score was held down regardless of the words, when it was. */
   capped?: { tag: string; reason: string };
+  /**
+   * The score a lead carries while no model has read it: `score` pulled toward
+   * the middle, then capped. See UNREAD_SHRINK.
+   */
+  unreadScore: number;
 }
+
+/**
+ * How much of its distance from 50 a keyword score keeps when it stands alone
+ * in the list.
+ *
+ * Model reads and keyword guesses sort on one column. The model is told not to
+ * inflate, so a real fit it read in full lands around 70-80, while word overlap
+ * alone reached 92 - and an unread posting outranked the read one above it.
+ * At 0.45 an unread lead tops out near 69: under the 70 that marks a strong
+ * match, which only a read can award, and still above a model's mismatch.
+ * Order among unread leads is unchanged. `score` keeps its full range, because
+ * the model blend and the pick of which leads to read both want it.
+ */
+const UNREAD_SHRINK = 0.45;
 
 /**
  * Where an average posting lands, and how hard affinity pushes away from it.
@@ -380,7 +399,9 @@ export function scoreLexically(job: ScorableJob, ctx: ScoringContext): LexicalSc
         : entryLevel
           ? { tag: 'entry level', reason: entryLevel.against! }
           : levelMismatch(job.title, years);
-  const score = capped ? Math.min(raw, 'cap' in capped ? capped.cap : OFF_ROLE_CAP) : raw;
+  const cap = capped ? ('cap' in capped ? capped.cap : OFF_ROLE_CAP) : 100;
+  const score = Math.min(raw, cap);
+  const unreadScore = Math.min(50 + (raw - 50) * UNREAD_SHRINK, cap);
 
   const hits = positives.length + negatives.length;
   const confidence = Math.min(1, (known ? 0.7 : 0) + Math.min(0.3, hits * 0.075));
@@ -394,6 +415,7 @@ export function scoreLexically(job: ScorableJob, ctx: ScoringContext): LexicalSc
     missing: missing.slice(0, 8),
     confidence,
     ...(capped ? { capped: { tag: capped.tag, reason: capped.reason } } : {}),
+    unreadScore,
   };
 }
 

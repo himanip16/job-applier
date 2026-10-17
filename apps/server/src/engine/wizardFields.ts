@@ -116,6 +116,26 @@ function listFallbacks(
   if (/school|university|college|institution/i.test(field.label)) {
     out.push({ values: ['Other'], why: 'not in this form\'s school list, so "Other" was chosen' });
   }
+  // How did you hear about us: the saved "Job Board / Job Portal" is not on
+  // PUMA's Workday list, which names each site ("Job Site - Google Jobs",
+  // "Job Site - Dice"); a required source stopped the run. Which site is not
+  // known, so no site is picked for you: the same source as this list words
+  // it, its one generic job-board option, or "Other".
+  if (/hear about|how did you (find|learn)|referral source|^source$/i.test(field.label)) {
+    const pool = [...new Set([...seen, ...(field.options ?? []).map((o) => o.label)])];
+    const w = normalizeLabel(wanted);
+    if (w.length >= 4) {
+      const named = pool.filter((o) => normalizeLabel(o).includes(w));
+      if (named.length === 1) out.push({ values: named, why: 'the same source as this list words it' });
+    }
+    if (/job\s*(board|portal|site)|online/i.test(wanted)) {
+      const generic = pool.filter((o) =>
+        /^((online|internet)\s+)?(job\s*(board|portal|site|search)s?|internet|online)(\s*\/\s*job\s*(board|portal|site)s?)?$/i.test(o.trim()),
+      );
+      if (generic.length === 1) out.push({ values: generic, why: "this list's job board option" });
+    }
+    out.push({ values: ['Other'], why: 'not in this form\'s list of sources, so "Other" was chosen' });
+  }
   return out;
 }
 

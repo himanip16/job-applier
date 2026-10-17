@@ -11,7 +11,7 @@ import { findAnswer, noteAnswerUsed } from './answerBank.js';
 import { matchOption, findDeclineOption } from './optionMatch.js';
 import { inferAnswers, type Inference } from '../llm/inferAnswer.js';
 import { generateEssayAnswer } from '../llm/coverLetter.js';
-import { answerFromHistory, degreeLevel } from './repeatableSections.js';
+import { answerFromHistory, answerFromSavedHistory, degreeLevel } from './repeatableSections.js';
 import { convertSalaries } from './salaryCurrency.js';
 
 export type Resolution =
@@ -272,6 +272,26 @@ async function resolveWithoutModel(field: FormField, ctx: ResolveContext): Promi
     }
   }
 
+  // 3a'. The current CTC saved on the profile page, likewise.
+  if (key === 'compensation.current' && ctx.profile.currentCTC?.trim()) {
+    const shaped = shapeForField(ctx.profile.currentCTC, field);
+    if (shaped) {
+      return {
+        kind: 'answer',
+        answer: {
+          fieldId: field.id,
+          value: shaped.value,
+          displayValue: shaped.display,
+          source: 'PROFILE',
+          confidence: 1,
+          rationale: `From your profile (current CTC: ${ctx.profile.currentCTC}).`,
+          remember: false,
+          canonicalKey: key,
+        },
+      };
+    }
+  }
+
   // 3b. A phone extension nobody saved. Blank, not the "NA" the model or the
   //     answer bank would offer.
   if (key === 'contact.phone_extension' && !field.required) {
@@ -523,6 +543,26 @@ function shapeForField(
  * own saved work history. Null sends the field down the ordinary path.
  */
 function fromHistory(field: FormField, ctx: ResolveContext): Resolution | null {
+  const saved = answerFromSavedHistory(field, ctx.profile.facts);
+  if (saved !== null) {
+    const shaped =
+      shapeForField(saved, field) ??
+      (/degree|qualification/i.test(field.label) && degreeLevel(saved) ? shapeForField(degreeLevel(saved), field) : null);
+    if (shaped) {
+      return {
+        kind: 'answer',
+        answer: {
+          fieldId: field.id,
+          value: shaped.value,
+          displayValue: shaped.display,
+          source: 'PROFILE',
+          confidence: 1,
+          rationale: 'From your saved work and education history.',
+          remember: false,
+        },
+      };
+    }
+  }
   const raw = answerFromHistory(field, ctx.profile.facts);
   if (raw === null) return null;
   const answer = (value: string | string[] | null, display: string, rationale: string): Resolution => ({
@@ -551,7 +591,9 @@ function fromHistory(field: FormField, ctx: ResolveContext): Resolution | null {
   const shaped =
     shapeForField(raw, field) ??
     (/degree/i.test(field.label) && degreeLevel(raw) ? shapeForField(degreeLevel(raw), field) : null);
-  if (shaped) return answer(shaped.value, shaped.display, `From your saved ${row}.`);
+  // A day-month-year box gets the 1st when only the month is on record.
+  const day = /^01[/-]\d{2}[/-]\d{4}$/.test(raw) ? ' The day is not on record, so it is the 1st of the month.' : '';
+  if (shaped) return answer(shaped.value, shaped.display, `From your saved ${row}.${day}`);
   // A searchable dropdown (Greenhouse's School) only shows a slice of its
   // options until you type, so a miss in the harvested list is not a miss.
   // Typing the name either finds it or fails the fill, which then asks you.

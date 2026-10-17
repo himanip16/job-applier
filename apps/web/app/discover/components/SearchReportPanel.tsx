@@ -1,6 +1,14 @@
 'use client';
 
+import { useState } from 'react';
+import { Icon } from '../../../components/Icon';
 import type { SearchReport } from '../types';
+import styles from './report.module.css';
+
+/** Company rows shown before "Show all". */
+const FIRST_ROWS = 6;
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /**
  * What the run actually did.
@@ -9,171 +17,229 @@ import type { SearchReport } from '../types';
  * searched for on your behalf, and which companies it turned up. Both are
  * shown, because the searches are the part you will want to correct — and the
  * way to correct them is to reject a few leads, which the queue below makes
- * one click.
+ * one click. The rest of the detail is one click away, not on top.
  */
-export function SearchReportPanel({ report }: { report: SearchReport }) {
-  const boards = report.boards.filter((b) => b.kept > 0);
-  const nothing = report.newLeads === 0;
+export function SearchReportPanel({ report, onClose }: { report: SearchReport; onClose?: () => void }) {
+  const [allRows, setAllRows] = useState(false);
   const dryRun = report.notes.some((n) => n.startsWith('Dry run:'));
   // Older servers did not send these; treat them as nothing dropped.
-  const offPlan = report.skippedOffPlan ?? 0;
-  const wrongDomain = report.skippedWrongDomain ?? 0;
   const fetched = report.jobsFetched ?? report.boards.reduce((sum, b) => sum + b.openings, 0);
-  const failed = report.boards.filter((b) => b.error).length;
-  const partial = report.boards.filter((b) => !b.error && b.warnings?.length).length;
   const noSource = report.noSource ?? [];
   const recentlyCrawled = report.recentlyCrawled ?? [];
   const unknownLocation = report.keptUnknownLocation ?? 0;
   const search = report.openSearch;
-  const fromSearch = report.boards.filter((b) => b.via === 'search').length;
   const dropped = [
-    { label: 'not in plan', count: offPlan, examples: report.droppedExamples?.offPlan ?? [] },
-    { label: 'not engineering', count: wrongDomain, examples: report.droppedExamples?.wrongDomain ?? [] },
-    { label: 'above the experience or seniority limit', count: report.skippedTooSenior ?? 0, examples: report.droppedExamples?.tooSenior ?? [] },
-    { label: 'internship or new-grad', count: report.skippedTooJunior ?? 0, examples: report.droppedExamples?.tooJunior ?? [] },
-    { label: 'outside the chosen country, or not open to India', count: report.skippedOtherCountry ?? 0, examples: report.droppedExamples?.otherCountry ?? [] },
-    { label: 'older than 90 days', count: report.skippedTooOld ?? 0, examples: report.droppedExamples?.tooOld ?? [] },
+    { label: 'Not in your roles', count: report.skippedOffPlan ?? 0, examples: report.droppedExamples?.offPlan ?? [] },
+    { label: 'Not engineering', count: report.skippedWrongDomain ?? 0, examples: report.droppedExamples?.wrongDomain ?? [] },
+    { label: 'Too senior', count: report.skippedTooSenior ?? 0, examples: report.droppedExamples?.tooSenior ?? [] },
+    { label: 'Internship or new-grad', count: report.skippedTooJunior ?? 0, examples: report.droppedExamples?.tooJunior ?? [] },
+    { label: 'Outside the chosen country', count: report.skippedOtherCountry ?? 0, examples: report.droppedExamples?.otherCountry ?? [] },
+    { label: 'Older than 90 days', count: report.skippedTooOld ?? 0, examples: report.droppedExamples?.tooOld ?? [] },
   ].filter((d) => d.count > 0);
 
+  const single = report.boards.length === 1 ? report.boards[0]!.company : null;
+  const withJobs = report.boards.filter((b) => b.kept > 0).length;
+  const title = dryRun
+    ? `Would read ${plural(report.boards.length, 'company', 'companies')} for ${plural(report.queries.length, 'role')}`
+    : report.newLeads === 0
+      ? single ? `No new jobs at ${single}` : 'No new jobs this time'
+      : single
+        ? `${plural(report.newLeads, 'new job')} at ${single}`
+        : `${plural(report.newLeads, 'new job')} from ${plural(withJobs, 'company', 'companies')}`;
+  const subtitle = dryRun
+    ? 'Nothing was read yet.'
+    : `Read ${plural(fetched, 'opening')} ${single ? '' : `across ${plural(report.boards.length, 'company', 'companies')} `}· ${report.jobsSeen} matched your roles`;
+
+  const rows = allRows ? report.boards : report.boards.slice(0, FIRST_ROWS);
+  const hasMore =
+    dropped.length > 0 || search?.ran || noSource.length > 0 || recentlyCrawled.length > 0 ||
+    report.rerankedExisting > 0 || report.companiesRegistered > 0 || unknownLocation > 0 || report.creditsUsed > 0;
+
   return (
-    <div className="notice" style={{ marginTop: '.9rem' }}>
-      <strong>
-        {dryRun
-          ? `Would read ${report.boards.length} listed compan${report.boards.length === 1 ? 'y' : 'ies'} for ${report.queries.length} role${report.queries.length === 1 ? '' : 's'}.`
-          : nothing
-            ? 'No new jobs this time.'
-            : `${report.newLeads} new job${report.newLeads === 1 ? '' : 's'} from ${boards.length} compan${
-                boards.length === 1 ? 'y' : 'ies'
-              }.`}
-      </strong>{' '}
-      {!dryRun && (
-        <span className="muted small">
-          {report.boards.length} companies checked
-          {fromSearch > 0 && ` (${fromSearch} found by open search)`} · {failed} failed · {partial} with limited coverage ·{' '}
-          {fetched} postings fetched · {report.jobsSeen} passed filters ·{' '}
-          {report.skippedAlreadySeen} already seen · {report.deepScored} assessed by the model
-          {noSource.length > 0 && ` · ${noSource.length} with no careers source set up`}
-          {recentlyCrawled.length > 0 && ` · ${recentlyCrawled.length} skipped, read in the last 4 hours`}
-          {unknownLocation > 0 && ` · ${unknownLocation} kept with location unknown`}
-          {report.companiesRegistered > 0 &&
-            ` · ${report.companiesRegistered} new board${
-              report.companiesRegistered === 1 ? '' : 's'
-            } added to the watch list`}
-          {report.rerankedExisting > 0 &&
-            ` · ${report.rerankedExisting} lead${
-              report.rerankedExisting === 1 ? '' : 's'
-            } already in the queue re-ranked`}
-          {report.creditsUsed > 0 && ` · ${report.creditsUsed} search credits`}
+    <section className={styles.card} aria-label="Search results">
+      <div className={styles.head}>
+        <span className={`${styles.headIcon} ${report.newLeads ? '' : styles.headIconQuiet}`} aria-hidden="true">
+          <Icon name={report.newLeads ? 'sparkles' : 'search'} size={18} />
         </span>
+        <div className={styles.headText}>
+          <h2 className={styles.title}>{title}</h2>
+          <p className={styles.subtitle}>{subtitle}</p>
+        </div>
+        {onClose && (
+          <button type="button" className={styles.close} onClick={onClose} aria-label="Hide search results">
+            <Icon name="x" size={16} />
+          </button>
+        )}
+      </div>
+
+      {!dryRun && (
+        <div className={styles.stats}>
+          <Stat value={fetched} label="Openings read" />
+          <Stat value={report.jobsSeen} label="Matched your roles" />
+          <Stat value={report.newLeads} label="New in your list" good={report.newLeads > 0} />
+          <Stat value={report.skippedAlreadySeen} label="Already in your list" />
+        </div>
       )}
 
-      <details className="disclosure inline" open={dryRun} style={{ marginTop: '.6rem' }}>
-        <summary className="small">
-          {dryRun ? 'The roles it would search for' : 'Roles it searched for'}
-          {report.planSource === 'profile' && ' (derived from your profile, no model used)'}
-        </summary>
-        <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
-          {report.queries.map((q) => (
-            <li key={q.query}>
-              &ldquo;{q.query}&rdquo;
-              {!dryRun && ` — ${q.hits} matching opening${q.hits === 1 ? '' : 's'}`}
+      {report.boards.length > 0 && (
+        <div className={styles.section}>
+          <h3 className={styles.sectionTitle}>{single ? 'Where it looked' : 'Companies'}</h3>
+          <div className={styles.rows}>
+            {rows.map((b) => {
+              const tone = b.error ? 'Bad' : b.kept > 0 ? 'Good' : b.warnings?.length ? 'Warn' : '';
+              const status = dryRun
+                ? 'Not read'
+                : b.error
+                  ? 'Couldn’t read'
+                  : b.kept > 0
+                    ? `${b.kept} new`
+                    : b.openings === 0
+                      ? 'No openings'
+                      : 'Nothing new';
+              const detail = b.error ?? (dryRun ? '' : [plural(b.openings, 'opening') + ' read', ...(b.warnings ?? [])].join(' · '));
+              return (
+                <div key={`${b.ats}:${b.slug}`} className={styles.row}>
+                  <span className={`${styles.dot} ${tone ? styles[`dot${tone}`] : ''}`} aria-hidden="true" />
+                  <div className={styles.rowMain}>
+                    <div className={styles.rowName}>
+                      {b.company}
+                      <span className={styles.source}>{b.ats === 'linkedin-company' ? 'LinkedIn' : b.ats}</span>
+                      {b.via === 'search' && <span className={styles.source}>open search</span>}
+                    </div>
+                    {detail && <div className={styles.rowDetail}>{detail}</div>}
+                  </div>
+                  <span className={`${styles.rowStatus} ${tone ? styles[`rowStatus${tone}`] : ''}`}>{status}</span>
+                </div>
+              );
+            })}
+          </div>
+          {report.boards.length > FIRST_ROWS && (
+            <button type="button" className={styles.showAll} onClick={() => setAllRows((v) => !v)}>
+              {allRows ? 'Show fewer' : `Show all ${report.boards.length}`}
+            </button>
+          )}
+        </div>
+      )}
+
+      {report.queries.length > 0 && (
+        <div className={styles.section}>
+          <h3 className={styles.sectionTitle}>
+            Roles it looked for{report.planSource === 'profile' ? ' · from your profile' : ''}
+          </h3>
+          <div className={styles.chips}>
+            {report.queries.map((q) => (
+              <span key={q.query} className={`${styles.chip} ${q.hits > 0 ? styles.chipHit : ''}`}>
+                {q.query}
+                {!dryRun && <span className={styles.chipCount}>{q.hits}</span>}
+              </span>
+            ))}
+          </div>
+          <p className={styles.hint}>Dismiss a few jobs below and the next search narrows.</p>
+        </div>
+      )}
+
+      {(report.notes.length > 0 || report.errors.length > 0) && (
+        <ul className={styles.notes}>
+          {report.errors.map((e) => (
+            <li key={`${e.where}:${e.error}`} className={`${styles.note} ${styles.noteBad}`}>
+              <Icon name="alert" size={14} />
+              <span><strong>{e.where}:</strong> {e.error}</span>
+            </li>
+          ))}
+          {report.notes.map((n) => (
+            <li key={n} className={styles.note}>
+              <Icon name="alert" size={14} />
+              <span>{n}</span>
             </li>
           ))}
         </ul>
-        {report.roleTitles.length > 0 && (
-          <p className="small muted" style={{ margin: '.5rem 0 0' }}>
-            Reject a few leads below and the next search narrows.
-            {dryRun && ` Companies: ${report.boards.map((b) => b.company).join(', ')}.`}
-          </p>
-        )}
-      </details>
+      )}
 
-      {!dryRun && search?.ran && (
-        <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
-          <summary className="small">
-            Open search: {search.companiesFound} compan{search.companiesFound === 1 ? 'y' : 'ies'} beyond the list
+      {!dryRun && hasMore && (
+        <details className={styles.more}>
+          <summary>
+            More detail <Icon name="chevron" size={14} />
           </summary>
-          <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
-            {search.queries.map((q) => (
-              <li key={q.query}>
-                &ldquo;{q.query}&rdquo; — {q.hits} result{q.hits === 1 ? '' : 's'} on a job board
-              </li>
-            ))}
-          </ul>
+          <div className={styles.moreBody}>
+            {/* A filter that is too strict hides jobs silently; the titles it dropped are how you notice. */}
+            {dropped.length > 0 && (
+              <div className={styles.section}>
+                <h3 className={styles.sectionTitle}>What the filters left out</h3>
+                <div className={styles.rows}>
+                  {dropped.map((d) => (
+                    <div key={d.label} className={styles.row}>
+                      <span className={styles.dot} aria-hidden="true" />
+                      <div className={styles.rowMain}>
+                        <div className={styles.rowName}>{d.label}</div>
+                        {d.examples.length > 0 && (
+                          <div className={styles.rowDetail}>e.g. {d.examples.map((t) => `“${t}”`).join(', ')}</div>
+                        )}
+                      </div>
+                      <span className={styles.rowStatus}>{d.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {search?.ran && (
+              <div className={styles.section}>
+                <h3 className={styles.sectionTitle}>
+                  Open search · {plural(search.companiesFound, 'company', 'companies')} beyond the list
+                </h3>
+                <div className={styles.chips}>
+                  {search.queries.map((q) => (
+                    <span key={q.query} className={styles.chip}>
+                      {q.query} <span className={styles.chipCount}>{q.hits}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Not an error: listed, but nobody has pointed them at a careers API or page yet. */}
+            {noSource.length > 0 && (
+              <div className={styles.section}>
+                <h3 className={styles.sectionTitle}>No careers source set up</h3>
+                <p className={styles.hint}>{noSource.join(', ')}</p>
+              </div>
+            )}
+
+            {/* Read in the last 4 hours; their postings are already in the list from that read. */}
+            {recentlyCrawled.length > 0 && (
+              <div className={styles.section}>
+                <h3 className={styles.sectionTitle}>Skipped, read in the last 4 hours</h3>
+                <p className={styles.hint}>
+                  {recentlyCrawled
+                    .map((r) => `${r.company} (${new Date(r.crawledAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`)
+                    .join(', ')}
+                </p>
+              </div>
+            )}
+
+            <p className={styles.hint}>
+              {[
+                report.deepScored > 0 && `${plural(report.deepScored, 'job')} read in full by the model`,
+                unknownLocation > 0 && `${unknownLocation} kept with location unknown`,
+                report.companiesRegistered > 0 && `${plural(report.companiesRegistered, 'company', 'companies')} added to your watch list`,
+                report.rerankedExisting > 0 && `${plural(report.rerankedExisting, 'job')} already in your list re-ranked`,
+                report.creditsUsed > 0 && `${report.creditsUsed} search credits used`,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </p>
+          </div>
         </details>
       )}
+    </section>
+  );
+}
 
-      {!dryRun && report.boards.length > 0 && (
-        <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
-          <summary className="small">
-            Source coverage
-          </summary>
-          <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
-            {report.boards.map((b) => (
-              <li key={`${b.ats}:${b.slug}`}>
-                {b.company} <span className="src">{b.ats}</span>
-                {b.via === 'search' && <span className="src">open search</span>} — {b.error
-                  ? `failed: ${b.error}`
-                  : `${b.openings} postings fetched, ${b.kept} new jobs saved`}
-                {b.warnings?.map((warning) => <p key={warning} style={{ margin: '.2rem 0' }}>{warning}</p>)}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-
-      {/* A filter that is too strict hides jobs silently; the titles it dropped are how you notice. */}
-      {!dryRun && dropped.length > 0 && (
-        <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
-          <summary className="small">What the filters dropped</summary>
-          <ul className="small muted" style={{ margin: '.4rem 0 0', paddingLeft: '1.1rem' }}>
-            {dropped.map((d) => (
-              <li key={d.label}>
-                {d.count} {d.label}
-                {d.examples.length > 0 && `, e.g. ${d.examples.map((t) => `“${t}”`).join(', ')}`}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-
-      {/* Not an error: these companies are listed but nobody has pointed them at a careers API or page yet. */}
-      {noSource.length > 0 && (
-        <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
-          <summary className="small">
-            {noSource.length} compan{noSource.length === 1 ? 'y' : 'ies'} with no careers source set up
-          </summary>
-          <p className="small muted" style={{ margin: '.4rem 0 0' }}>
-            {noSource.join(', ')}.
-          </p>
-        </details>
-      )}
-
-      {/* Read in the last 4 hours; their postings are already in the queue from that read. */}
-      {recentlyCrawled.length > 0 && (
-        <details className="disclosure inline" style={{ marginTop: '.35rem' }}>
-          <summary className="small">
-            {recentlyCrawled.length} compan{recentlyCrawled.length === 1 ? 'y' : 'ies'} skipped, read in the last 4 hours
-          </summary>
-          <p className="small muted" style={{ margin: '.4rem 0 0' }}>
-            {recentlyCrawled
-              .map((r) => `${r.company} (${new Date(r.crawledAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`)
-              .join(', ')}
-            .
-          </p>
-        </details>
-      )}
-
-      {report.notes.map((n) => (
-        <p key={n} className="small muted" style={{ margin: '.4rem 0 0' }}>
-          {n}
-        </p>
-      ))}
-      {report.errors.map((e) => (
-        <p key={e.where} className="small" style={{ margin: '.4rem 0 0', color: 'var(--bad)' }}>
-          {e.where}: {e.error}
-        </p>
-      ))}
+function Stat({ value, label, good }: { value: number; label: string; good?: boolean }) {
+  return (
+    <div className={`${styles.stat} ${good ? styles.statGood : ''}`}>
+      <div className={styles.statValue}>{value}</div>
+      <div className={styles.statLabel}>{label}</div>
     </div>
   );
 }

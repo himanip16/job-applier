@@ -151,9 +151,19 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
   if (disabled) return;
 
   const wants = (Array.isArray(value) ? value : [value]).map(normalizeLabel).filter(Boolean);
-  if (wants.length) {
+  // A checkbox's value is fixed by the site, ticked or not: Eightfold's
+  // privacy box (Millennium) is value="Yes", which read as already answered
+  // "yes", so it was never clicked. CHECKBOX checks its tick itself below.
+  if (wants.length && field.kind !== 'CHECKBOX') {
     const current = normalizeLabel((await el.inputValue().catch(() => '')) ?? '');
-    if (current && wants.every((want) => current.includes(want))) return;
+    // A phone number counts as there only when the digits are the same.
+    // Workday's resume parse leaves "+91-7029294010" in Phone Number beside
+    // its own Country Phone Code; that holds "7029294010", so it was kept, and
+    // Broadridge refused the step twice: "The number isn't recognized".
+    const phone = field.kind === 'PHONE' || wants.every((w) => /^[\d\s()+.-]{6,}$/.test(w));
+    const digits = (v: string) => v.replace(/\D/g, '');
+    const holds = (want: string) => (phone ? digits(current) === digits(want) : current.includes(want));
+    if (current && wants.every(holds)) return;
   }
 
   switch (field.kind) {
@@ -194,6 +204,16 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
     default: {
       const text = asOne(value, field);
       await el.scrollIntoViewIfNeeded().catch(() => {});
+      // A native date picker takes keystrokes per segment in the browser's
+      // locale order; typing "1998-08-15" into Juspay's DD/MM/YYYY box left it
+      // empty. fill() with the ISO form sets it directly.
+      if ((await el.getAttribute('type').catch(() => null)) === 'date') {
+        const iso = isoDate(text);
+        if (!iso) throw new FillError(`"${text}" is not a date for ${field.label}`, field);
+        await el.fill(iso);
+        await el.dispatchEvent('change').catch(() => {});
+        break;
+      }
       await el.fill('');
       // type() rather than fill() so React's onChange fires per keystroke;
       // some forms only validate on keyup and stay in an error state otherwise.
@@ -202,6 +222,29 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
       await el.press('Tab').catch(() => {});
     }
   }
+}
+
+/**
+ * YYYY-MM-DD for a native date input. Slashed or dashed numbers are read day
+ * first, the order the forms that ask for them print in their placeholder.
+ */
+export function isoDate(text: string): string | null {
+  const t = text.trim();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const ok = (y: number, m: number, d: number) => {
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
+      ? `${y}-${pad(m)}-${pad(d)}`
+      : null;
+  };
+  let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return ok(+m[1]!, +m[2]!, +m[3]!);
+  m = t.match(/^(\d{1,2})\s*[/.-]\s*(\d{1,2})\s*[/.-]\s*(\d{4})$/);
+  if (m) return ok(+m[3]!, +m[2]!, +m[1]!);
+  const parsed = Date.parse(`${t} UTC`);
+  if (Number.isNaN(parsed)) return null;
+  const d = new Date(parsed);
+  return ok(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
 }
 
 /**
@@ -446,6 +489,47 @@ export async function optionText(opt: Locator): Promise<string> {
 const OPTION = '[role="option"]:visible, .select__option:visible, .dropdown-location:visible';
 const OWNED_OPTION = `${OPTION}, [role="gridcell"]:visible`;
 
+/**
+ * Where a control's options live when the list it names holds none of them.
+ *
+ * SmartRecruiters' `spl-select` (the phone country code) points aria-controls
+ * at a listbox that holds only a `<slot>`; its 240 `spl-select-option`
+ * elements are the host's own light children, projected into that slot. A
+ * locator under the listbox never reaches them, so every country "could not
+ * be found" and the run stopped on the first field of the form. The host is
+ * marked and its selector returned; null when the named list is an ordinary one.
+ */
+export async function controlledListId(input: Locator): Promise<string | null> {
+  return input
+    .evaluate((el) => {
+      // SuccessFactors links its listbox with aria-owns instead of aria-controls.
+      // Juspay's sdd dropdowns name it on the role="combobox" wrapper, not the input.
+      const own = el.getAttribute('aria-controls') ?? el.getAttribute('aria-owns');
+      if (own) return own;
+      const wrap = el.parentElement?.closest('[role="combobox"]');
+      return wrap?.getAttribute('aria-controls') ?? wrap?.getAttribute('aria-owns') ?? null;
+    })
+    .catch(() => null);
+}
+
+export async function slottedOptionRoot(input: Locator): Promise<string | null> {
+  const mark = await input
+    .evaluate((el) => {
+      const id = el.getAttribute('aria-controls') ?? el.getAttribute('aria-owns');
+      if (!id) return null;
+      const root = el.getRootNode() as Document | ShadowRoot;
+      const list = root.querySelector(`[id="${CSS.escape(id)}"]`) ?? document.getElementById(id);
+      if (!list || list.querySelector('[role="option"]') || !list.querySelector('slot')) return null;
+      const host = (list.getRootNode() as ShadowRoot).host;
+      if (!host) return null;
+      const tag = host.getAttribute('data-ja-optroot') ?? `o${Math.random().toString(36).slice(2, 8)}`;
+      host.setAttribute('data-ja-optroot', tag);
+      return tag;
+    })
+    .catch(() => null);
+  return mark ? `[data-ja-optroot="${mark}"]` : null;
+}
+
 async function waitForOption(page: Page, field: FormField, want: string, offered?: string[]): Promise<Locator | null> {
   // This dropdown's own menu, and only what is visible in it. Greenhouse keeps
   // the phone field's 240-country list in the DOM, hidden, at all times; a
@@ -453,15 +537,15 @@ async function waitForOption(page: Page, field: FormField, want: string, offered
   // every dropdown on the form as "could not find option".
   const input = page.locator(field.selector).first();
   // SuccessFactors links its listbox with aria-owns instead of aria-controls.
-  const controls = field.optionContainerSelector
-    ? null
-    : ((await input.getAttribute('aria-controls').catch(() => null)) ??
-      (await input.getAttribute('aria-owns').catch(() => null)));
+  const controls = field.optionContainerSelector ? null : await controlledListId(input);
+  const projected = controls ? await slottedOptionRoot(input) : null;
   const container = field.optionContainerSelector
     ? page.locator(field.optionContainerSelector)
-    : controls
-      ? page.locator(`[id="${controls}"]`)
-      : page;
+    : projected
+      ? page.locator(projected)
+      : controls
+        ? page.locator(`[id="${controls}"]`)
+        : page;
   const options = container.locator(controls ? OWNED_OPTION : OPTION);
   try {
     await options.first().waitFor({ state: 'visible', timeout: OPTION_TIMEOUT_MS });
@@ -934,6 +1018,28 @@ export async function attachFile(page: Page, selector: string, filePath: string)
 }
 
 /**
+ * Whether the upload box around this file input already shows a file: its
+ * name, or a "Successfully Uploaded" card. Workday swaps its drop zone for a
+ * file card once a file is in; an empty drop zone means nothing is there.
+ */
+export async function fileBoxShowsFile(page: Page, selector: string, filename: string): Promise<boolean> {
+  return page
+    .locator(selector)
+    .first()
+    .evaluate((el, name) => {
+      const box =
+        el.closest('[data-automation-id^="formField"], fieldset, .field, .form-group') ??
+        el.parentElement?.parentElement?.parentElement ??
+        null;
+      const text = (box as HTMLElement | null)?.innerText ?? '';
+      if (/successfully uploaded/i.test(text)) return true;
+      if (box?.querySelector('[data-automation-id="file-upload-successful"], [data-automation-id="file-upload-item"]')) return true;
+      return !!name && text.toLowerCase().includes(name.toLowerCase());
+    }, filename)
+    .catch(() => false);
+}
+
+/**
  * Press a control that opens an upload and give it the file: the browser's
  * own file picker if it raises one, otherwise the file box in whatever
  * dialog appeared. Then confirm the dialog and wait out "Uploading...".
@@ -969,6 +1075,18 @@ async function uploadThroughOpener(page: Page, opener: Locator, filePath: string
     .first()
     .waitFor({ state: 'hidden', timeout: 30_000 })
     .catch(() => {});
+  // SuccessFactors then asks whether to keep the profile or overwrite it from
+  // the new CV. Unanswered, the dialog sat over PayU's form and every box
+  // stayed empty; overwriting would swap the profile for the CV's parse.
+  // Keep it - the run fills the form itself.
+  const keep = page
+    .locator('button, [role="button"], a')
+    .filter({ hasText: /^\s*keep current profile\s*$/i })
+    .first();
+  if (await keep.waitFor({ state: 'visible', timeout: 8000 }).then(() => true, () => false)) {
+    await keep.click().catch(() => keep.dispatchEvent('click'));
+    await keep.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => {});
+  }
 }
 
 /** Controls that mean "upload a file from this computer". */
@@ -1271,6 +1389,16 @@ async function shownAroundControl(page: Page, field: FormField): Promise<string>
           .map((t) => t.getAttribute('label')?.trim() ?? '')
           .filter(Boolean)
           .join(', ');
+      }
+      // SmartRecruiters' spl-select draws its choice through slots the box's
+      // innerText cannot see; the chosen option is the one named by its value.
+      const splSelect = (input.getRootNode() as ShadowRoot).host;
+      if (splSelect?.tagName === 'SPL-SELECT') {
+        const value = splSelect.getAttribute('value') ?? '';
+        const chosen = Array.from(splSelect.querySelectorAll('spl-select-option')).find(
+          (o) => o.getAttribute('value') === value,
+        );
+        return ((chosen as HTMLElement | undefined)?.innerText ?? '').replace(/\s+/g, ' ').trim();
       }
       // Oracle's single-choice cx-select: the box around the input holds its
       // caption ("Country code"), the choice is the input's own value.

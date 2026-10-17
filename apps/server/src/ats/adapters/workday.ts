@@ -41,6 +41,14 @@ const NEXT = '[data-automation-id="pageFooterNextButton"]';
 const DECLINE_COOKIES = '[data-automation-id="legalNoticeDeclineButton"]';
 const SETTLE_MS = 30_000;
 
+/**
+ * `<posting>/apply` and its steps: "apply" after the `/job/` part. A bare
+ * `/apply/` is not enough, because eBay's career site is itself named "apply"
+ * (`ebay.wd5.myworkdayjobs.com/apply/job/...`, October 2026): its postings
+ * passed for the start page, so the run never went past the posting.
+ */
+const APPLY_PATH = /\/job\/.+\/apply(\/|$)/;
+
 async function declineCookies(page: Page): Promise<void> {
   const decline = page.locator(DECLINE_COOKIES).first();
   if (await decline.isVisible().catch(() => false)) await decline.click().catch(() => {});
@@ -121,15 +129,15 @@ async function settleOnce(page: Page): Promise<void> {
 /** On the start page or a step of the apply wizard, not elsewhere on the site. */
 async function inApplyFlow(page: Page): Promise<boolean> {
   return page
-    .evaluate(() => {
+    .evaluate((applyPath) => {
       const shown = (sel: string) => !!(document.querySelector(sel) as HTMLElement | null)?.checkVisibility();
       if (shown('[data-automation-id="CandidateHomePage"]')) return false;
       return (
-        /\/apply(\/|$)/.test(location.pathname) ||
+        new RegExp(applyPath).test(location.pathname) ||
         shown('[data-automation-id="applyFlowPage"]') ||
         shown('[data-automation-id="autofillWithResume"], [data-automation-id="applyManually"]')
       );
-    })
+    }, APPLY_PATH.source)
     .catch(() => false);
 }
 
@@ -138,7 +146,7 @@ function applyUrl(url: string): string {
   const u = new URL(url);
   u.search = '';
   u.hash = '';
-  if (/\/job\//.test(u.pathname) && !/\/apply(\/|$)/.test(u.pathname)) {
+  if (/\/job\//.test(u.pathname) && !APPLY_PATH.test(u.pathname)) {
     u.pathname = `${u.pathname.replace(/\/$/, '')}/apply`;
   }
   return u.toString();

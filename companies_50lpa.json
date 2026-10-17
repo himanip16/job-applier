@@ -3452,5 +3452,135 @@
     "tier": "shortlist",
     "sde2_ctc_lpa": "",
     "india_locations": "Bengaluru"
+  },
+  {
+    "company": "Abacus.AI",
+    "domain": "abacus.ai",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "19205405",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Coveo",
+    "domain": "coveo.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "coveoen",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Estee Advisors",
+    "domain": "esteeadvisors.com",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://esteeadvisors.com/careers",
+    "tier": "quant",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Ebullient Securities",
+    "domain": "ebullientsecurities.com",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "83526438",
+    "tier": "quant",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Obsidian Capital",
+    "domain": "obsidiancapital.in",
+    "job_links": [],
+    "source": "careers-page",
+    "handle": "https://obsidiancapital.in/careers/",
+    "tier": "quant",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Point72",
+    "domain": "point72.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "point72",
+    "tier": "quant",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Caxton Associates",
+    "domain": "caxton.com",
+    "job_links": [],
+    "source": "workable",
+    "handle": "caxton",
+    "tier": "quant",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Optiver",
+    "domain": "optiver.com",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "13216",
+    "tier": "quant",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Citadel Securities",
+    "domain": "citadelsecurities.com",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "15259345",
+    "tier": "quant",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Hudson River Trading",
+    "domain": "hudsonrivertrading.com",
+    "job_links": [],
+    "source": "greenhouse",
+    "handle": "wehrtyou",
+    "tier": "quant",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Worldline",
+    "domain": "worldline.com",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2611817",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Whatfix",
+    "domain": "whatfix.com",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "2058906",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
+  },
+  {
+    "company": "Browserling",
+    "domain": "browserling.com",
+    "job_links": [],
+    "source": "linkedin-company",
+    "handle": "15739980",
+    "tier": "infra-saas",
+    "sde2_ctc_lpa": "",
+    "india_locations": ""
   }
 ]

@@ -2,7 +2,7 @@ import type { Country } from '@ja/shared';
 import { prisma } from '../lib/db.js';
 import { capPerCompany, MAX_LEADS_PER_COMPANY } from './capPerCompany.js';
 import { canonicalUrl } from './jobSearchUtils.js';
-import { screen } from './leadIntake.js';
+import { screen } from './screening.js';
 import { eachLimited, postingStatus } from './postingStatus.js';
 import { API_SOURCES, sourceById, type DiscoveredJob } from './sources/index.js';
 

@@ -2,7 +2,7 @@ import { citiesIn, countryByCode, locatedIn } from '@ja/shared';
 import { prisma, type Prisma } from '../lib/db.js';
 import { decidedPostings, isDecided } from './alreadyDecided.js';
 import { isSeniorLevel, requiredExperience, requiresMoreThan5YearsExperience } from './jobFilters.js';
-import { screen } from './leadIntake.js';
+import { screen } from './screening.js';
 import { API_SOURCES } from './sources/index.js';
 import { companyDirectory } from './topCompanies.js';
 import { leetcodeReports, type CompanyReport } from './leetcode/store.js';

@@ -181,7 +181,10 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
         has(/enter the (6|four|six)[- ]digit code/) ||
         has(/confirm your identity/) ||
         has(/(enter|type) the (verification |security |one[- ]time )?(code|pin) (we|that we) (just )?(sent|emailed)/) ||
-        has(/we('ve| have)? (just )?(sent|emailed) (a |an |the )?(verification |security |one[- ]time )?(code|pin) to/),
+        has(/we('ve| have)? (just )?(sent|emailed) (a |an |the )?(verification |security |one[- ]time )?(code|pin) to/) ||
+        // SuccessFactors after Create Account: "We’ve sent a one-time password
+        // to your email address" over a Passcode box.
+        has(/we(['’]ve| have)? (just )?(sent|emailed) (you )?(a |an )?(one[- ]time (password|passcode)|passcode) to/),
       assessment:
         has(/coding (challenge|assessment)/) ||
         has(/complete (a|the) assessment/) ||

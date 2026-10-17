@@ -11,6 +11,7 @@ import { setStatus, artifact } from './runLog.js';
 import { whileWaitingOnHuman } from './slots.js';
 import { secret } from '../lib/secrets.js';
 import { signInOrRegister } from '../browser/accountWall.js';
+import { nationalNumber } from './resolver.js';
 import { onAppleSignIn, signInWithAppleId } from '../browser/appleId.js';
 import { onMicrosoftSignIn, signInWithMicrosoftAccount } from '../browser/microsoftAccount.js';
 import { clearEmailVerification } from '../browser/emailCode.js';
@@ -218,7 +219,7 @@ async function signInWithSavedAccount(
   if (!password) return false;
   const app = await prisma.application.findUnique({
     where: { id: applicationId },
-    select: { profile: { select: { email: true, firstName: true, lastName: true } } },
+    select: { profile: { select: { email: true, firstName: true, lastName: true, phone: true, countryCode: true } } },
   });
   const email = app?.profile.email;
   if (!email) return false;
@@ -238,12 +239,14 @@ async function signInWithSavedAccount(
   autoSignIns.set(applicationId, { tries, at: Date.now() });
 
   await bus.emitEvent(applicationId, 'LOG', 'Account wall: using your saved email and password.');
-  const { firstName, lastName } = app.profile;
+  const { firstName, lastName, phone, countryCode } = app.profile;
   const attempt = await signInOrRegister(page, {
     email,
     password,
     firstName: firstName ?? undefined,
     lastName: lastName ?? undefined,
+    phone: phone ? nationalNumber(phone, countryCode) : undefined,
+    countryCode: countryCode ?? undefined,
   }).catch((err: unknown) => ({
     ok: false,
     detail: `Sign-in failed: ${(err as Error).message}`,

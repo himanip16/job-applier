@@ -5,7 +5,7 @@ import { prisma, type Prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
 import { PageClosedError, screenshot } from '../browser/session.js';
-import { attachFile, inspectControl, readShown } from '../browser/fill.js';
+import { attachFile, fileBoxShowsFile, inspectControl, readShown } from '../browser/fill.js';
 import { detectBlockers, inlineAccountPending } from '../browser/blockers.js';
 import {
   detectAutofillPrompt,
@@ -102,6 +102,10 @@ interface WalkState {
   allFields: FormField[];
   answers: Map<string, ResolvedAnswer>;
   resumeAttached: boolean;
+  // The step the resume last went on. Workday's "Autofill with Resume" takes
+  // it on step 1, and some tenants (F5) ask again on My Experience with an
+  // empty, required box of their own.
+  resumeStep: number | null;
   coverAttached: boolean;
   submitControl: AdvanceControl | null;
   step: number;
@@ -122,7 +126,7 @@ export async function walkApplication(args: WalkArgs): Promise<WalkOutcome> {
   const context = await createWalkContext(args);
   const state: WalkState = {
     plan: [], allFields: [], answers: new Map(),
-    resumeAttached: false, coverAttached: false, submitControl: null,
+    resumeAttached: false, resumeStep: null, coverAttached: false, submitControl: null,
     step: 0, stuckSignature: null, afterHumanPause: false,
     navigationRetries: 0, handledPrompts: new Set(), rowsDeferredOn: null,
     cascadeRereadOn: null,
@@ -615,10 +619,18 @@ async function attachStepFiles(
 ): Promise<boolean> {
   const { coverLetter } = ctx;
   let attached = false;
-  if (resumeInput && !state.resumeAttached) {
+  // Once per step, and on a later step only if its box does not already show
+  // the file - Workday carries it over on some tenants and not on others.
+  const resumeWanted =
+    resumeInput &&
+    (!state.resumeAttached ||
+      (state.resumeStep !== state.step &&
+        !(await fileBoxShowsFile(page, resumeInput.selector, resume?.filename ?? ''))));
+  if (resumeInput && resumeWanted) {
     if (!resume) throw new Error('This form wants a resume and none is uploaded to your profile.');
     await attachFile(page, resumeInput.selector, path.resolve(resume.path));
     state.resumeAttached = true;
+    state.resumeStep = state.step;
     attached = true;
     await bus.emitEvent(applicationId, 'FILE_ATTACHED', `Attached ${resume.filename}.`);
     state.plan.push({

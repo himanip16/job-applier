@@ -4,6 +4,7 @@ import type { AtsAdapter, JobMeta } from '../types.js';
 import { extractFields } from '../../browser/extract.js';
 import { NeedsHumanError, clearInterstitial, openApplicationForm } from '../../browser/openForm.js';
 import { settle } from '../../browser/steps.js';
+import { dayMonthYearHint } from '../../engine/repeatableSections.js';
 
 /**
  * TurboHire (app.turbohire.co/job/publicjobs/<token>).
@@ -19,9 +20,15 @@ import { settle } from '../../browser/steps.js';
  * open that modal so the sign-in box is what the person sees, and park at the
  * wall. The browser profile keeps the session for later TurboHire jobs.
  *
- * Signed in, the form behind the button has not been seen in a real run yet
- * (checked live 2026-10-06, signed out only), so this falls back to the
- * generic form reader and always stops for review.
+ * Signed in (IDfy, 2026-10-17), "Show additional fields" opens an
+ * "Additional Fields" drawer: addresses, date of birth, marital status,
+ * father's name, then Education ("Institute 01", ...) and Experience
+ * ("Company 01", ...) rows, each block with an "Add New Entry" button, and a
+ * Save button (`test-id="set-btn-save"`) the drawer needs before it keeps
+ * anything. TurboHire pre-fills the rows from the resume it parsed, a blank
+ * junk row among them. `tagDrawer` names those rows for the shared row
+ * handling, so each is filled from the matching saved entry. Everything else
+ * is read generically and every run stops for review.
  */
 export const turboHireAdapter: AtsAdapter = {
   id: 'turbohire',
@@ -65,6 +72,9 @@ export const turboHireAdapter: AtsAdapter = {
     // The button may open a dialog or a new route; wait for its fields in
     // place, since reloading would lose a dialog.
     await waitForForm(page);
+    // The wizard looks for Education/Experience rows before it reads the
+    // form, so the drawer has to be open and tagged by then.
+    await openAdditionalFields(page);
   },
 
   async readJobMeta(page): Promise<JobMeta> {
@@ -117,15 +127,23 @@ export const turboHireAdapter: AtsAdapter = {
   },
 
   async extractForm(page) {
-    // Optional questions sit behind a link-styled <span>; open them first so
-    // they are read with the rest.
-    const more = page.getByText(/^show additional fields$/i).first();
-    if (await more.isVisible().catch(() => false)) {
-      await more.click({ timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(800);
-    }
+    await openAdditionalFields(page);
     await page.evaluate(nameControls).catch(() => {});
-    return extractFields(page, { harvestComboboxOptions: true });
+    const fields = await extractFields(page, { harvestComboboxOptions: true });
+    // The row date boxes take a whole DD/MM/YYYY date (DD-MM-YYYY for
+    // "Passed on"); without saying so, a start date went in as "Oct 2025" or
+    // was left blank, and "Passed on" got a bare "2021".
+    const formats = await page
+      .evaluate(
+        (selectors) => selectors.map((sel) => document.querySelector(sel)?.getAttribute('data-ja-date') ?? null),
+        fields.map((f) => f.selector),
+      )
+      .catch(() => fields.map(() => null));
+    return fields.map((f, i) => {
+      const sep = formats[i];
+      if (sep !== '/' && sep !== '-') return f;
+      return { ...f, helpText: [f.helpText, dayMonthYearHint(sep)].filter(Boolean).join(' ') };
+    });
   },
 
   fileInputs(fields) {
@@ -137,6 +155,12 @@ export const turboHireAdapter: AtsAdapter = {
   },
 
   async submit(page) {
+    // The Additional Fields drawer keeps nothing until its own Save.
+    const save = page.locator('[test-id="set-btn-save"]').first();
+    if (await save.isVisible().catch(() => false)) {
+      await save.click({ timeout: 8000 });
+      await page.waitForTimeout(1000);
+    }
     const byRole = page.getByRole('button', { name: /^(submit|submit application|apply|apply now)$/i });
     if (await byRole.count()) {
       await byRole.last().click();
@@ -147,7 +171,7 @@ export const turboHireAdapter: AtsAdapter = {
 
   notes: [
     'Needs a TurboHire candidate sign-in (email only). The run pauses at it the first time; the browser profile keeps the session.',
-    'The signed-in application form has not been seen yet, so fields are read generically and every run stops for review.',
+    'The Additional Fields drawer is filled row by row from your saved education and employment; every run stops for review.',
   ],
   alwaysReview: true,
 };
@@ -204,6 +228,63 @@ function nameControls(): void {
     const required = /[*✱]\s*$/.test(caption) || /\*\s/.test(caption);
     el.setAttribute('aria-label', caption.replace(/\s*\*+\s*$/, '').replace(/\*/g, '').trim());
     if (required && !el.hasAttribute('disabled')) el.setAttribute('aria-required', 'true');
+  }
+}
+
+/** Open the optional questions (a link-styled <span>) and tag what is in them. */
+async function openAdditionalFields(page: Page): Promise<void> {
+  const more = page.getByText(/^show additional fields$/i).first();
+  if (await more.isVisible().catch(() => false)) {
+    await more.click({ timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(800);
+  }
+  await page.evaluate(tagDrawer).catch(() => {});
+}
+
+/**
+ * Mark the drawer's repeat rows and date boxes for the shared handling.
+ *
+ * - A row is headed by an <h6> "Company 01" / "Institute 01"; its container
+ *   gets `data-ja-rows`, as Oracle's do.
+ * - Each block's "Add New Entry" sits in `[test-id="create-candidate-
+ *   {experience,education}-entry"]`; Education's is outside the rows' own
+ *   container, so it is tagged `data-ja-add` instead.
+ * - Row date boxes get `data-ja-date` with their separator. Start/End Date
+ *   show no placeholder; the drawer's other date boxes use DD/MM/YYYY.
+ * - "University" beside "Institute Name" is the affiliating university, not
+ *   the school again.
+ *
+ * Runs in the page, so it must be self-contained.
+ */
+function tagDrawer(): void {
+  const clean = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
+  for (const h of Array.from(document.querySelectorAll('h6'))) {
+    const t = clean(h.textContent);
+    const kind = /^company \d+$/i.test(t) ? 'employment' : /^institute \d+$/i.test(t) ? 'education' : null;
+    if (!kind) continue;
+    let row: Element | null = h.parentElement;
+    while (row && !row.querySelector('input')) row = row.parentElement;
+    row?.parentElement?.setAttribute('data-ja-rows', kind);
+  }
+  for (const [kind, id] of [
+    ['employment', 'experience'],
+    ['education', 'education'],
+  ] as const) {
+    document.querySelector(`[test-id="create-candidate-${id}-entry"] button`)?.setAttribute('data-ja-add', kind);
+  }
+  for (const input of Array.from(
+    document.querySelectorAll<HTMLInputElement>(
+      '[test-id="create-candidate-startdate"] input, [test-id="create-candidate-enddate"] input, ' +
+        '[test-id="create-candidate-education-pass"] input',
+    ),
+  )) {
+    const sep = /^DD([/-])MM\1YYYY$/i.exec(input.placeholder.trim())?.[1] ?? '/';
+    input.setAttribute('data-ja-date', sep);
+  }
+  for (const input of Array.from(
+    document.querySelectorAll<HTMLInputElement>('[test-id="create-candidate-university"] input'),
+  )) {
+    input.setAttribute('aria-label', 'Affiliating university');
   }
 }
 

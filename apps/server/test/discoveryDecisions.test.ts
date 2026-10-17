@@ -47,9 +47,7 @@ const makeLead = (data: { title?: string; status?: 'NEW' | 'SHORTLISTED' | 'APPL
 describe('scores are not candidate decisions', () => {
   it('keeps low-scoring new leads and preserves their lexical explanations', async () => {
     const lead = await makeLead({});
-    const result = await deepScoreLeads(profileId, [{ id: lead.id, lexScore: 70, job: {
-      ...lead, descriptionText: lead.descriptionText!, location: lead.location!, postedAt: undefined,
-    } }], 15);
+    const result = await deepScoreLeads(profileId, 15, { only: [lead.id] });
     const saved = await prisma.jobLead.findUniqueOrThrow({ where: { id: lead.id } });
     expect(result.deepScored).toBe(1);
     expect(saved.score).toBeLessThan(55);

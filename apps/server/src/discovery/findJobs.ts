@@ -1,11 +1,12 @@
 import { countryByCode, type Country } from '@ja/shared';
 import { newPage } from '../browser/session.js';
 import { crawlCareersPage, sourceById, type DiscoveredJob, type FetchHints } from './sources/index.js';
-import { admit, emptyTally, openIntake, screen } from './leadIntake.js';
+import { admit, emptyTally, openIntake } from './leadIntake.js';
+import { screen } from './screening.js';
 import { buildSearchPlan, jobMatchesPlan, type SearchPlan } from './searchQueries.js';
 import { rescoreLexically } from './rescoreLeads.js';
 import { loadScoringContext } from './scoring.js';
-import { deepScoreLeads } from './deepScore.js';
+import { DEFAULT_DEEP_SCORE_TOP, deepScoreLeads } from './deepScore.js';
 import { registerCompany } from './companyRegistration.js';
 import { topCompanies, type TargetCompany } from './topCompanies.js';
 import { isFirecrawlConfigured } from './firecrawl.js';
@@ -193,7 +194,7 @@ async function runSearch(
   const maxQueries = opts.maxQueries ?? 6;
   // The whole list: the API sources answer in a second or two each.
   const maxCompanies = opts.maxBoards ?? Number.POSITIVE_INFINITY;
-  const deepScoreTop = opts.deepScoreTop ?? 15;
+  const deepScoreTop = opts.deepScoreTop ?? DEFAULT_DEEP_SCORE_TOP;
 
   const report: JobSearchReport = {
     planSource: 'profile',
@@ -385,8 +386,14 @@ async function runSearch(
 
   // ---- 4. read the most promising in full ----------------------------------
   progress.phase = 'scoring';
-  if (fresh.length && deepScoreTop > 0) {
-    const deepScoreResult = await deepScoreLeads(profileId, fresh, deepScoreTop);
+  if (deepScoreTop > 0) {
+    // A search of one company reads that company's new jobs; a full search
+    // reads the best of everything still waiting, old leads included.
+    const deepScoreResult = await deepScoreLeads(
+      profileId,
+      deepScoreTop,
+      listed.length === 1 ? { only: fresh.map((f) => f.id) } : {},
+    );
     report.deepScored = deepScoreResult.deepScored;
     report.errors.push(...deepScoreResult.errors.map(e => ({ where: `scoring ${e.company}`, error: e.error })));
   }

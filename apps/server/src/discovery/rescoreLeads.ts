@@ -198,7 +198,7 @@ export async function rescoreLexically(profileId: string): Promise<number> {
     await prisma.jobLead.update({
       where: { id: lead.id },
       data: {
-        score: lex.score,
+        score: lex.unreadScore,
         scoreReasons: serialiseReasons(lex, null),
         scoredAt: new Date(),
       },

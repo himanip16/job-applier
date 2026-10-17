@@ -20,6 +20,7 @@ import { requireProfile, requireUser, type RequireUser } from './auth/requirePro
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerCompanyRoutes } from './routes/companies.js';
 import { registerDiscoveryRoutes } from './routes/discovery.js';
+import { registerCompanySearchRoutes } from './routes/companySearch.js';
 import { registerLeadRoutes } from './routes/leads.js';
 import { registerPreferenceRoutes } from './routes/preferences.js';
 import { registerSettingsRoutes } from './routes/settings.js';
@@ -164,6 +165,7 @@ app.setErrorHandler((err, req, reply) => {
 registerAuthRoutes(app);
 registerCompanyRoutes(app, requireProfile);
 registerDiscoveryRoutes(app, requireProfile);
+registerCompanySearchRoutes(app, requireProfile);
 registerLeadRoutes(app, requireProfile);
 registerPreferenceRoutes(app, requireProfile);
 registerResumeRoutes(app, requireProfile);

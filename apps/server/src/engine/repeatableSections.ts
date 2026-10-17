@@ -183,7 +183,9 @@ export async function expandRepeatableSections(
     const before = await rows();
     let now = before;
     while (now < wanted) {
-      const add = container.locator(ADD_ANOTHER).first();
+      // An adapter tags a button that sits outside the rows' own container
+      // (TurboHire's Education "Add New Entry") with `data-ja-add`.
+      const add = container.locator(ADD_ANOTHER).or(page.locator(`[data-ja-add="${kind}"]`)).first();
       if (!(await add.count()) || !(await add.isVisible())) break;
       await add.scrollIntoViewIfNeeded().catch(() => {});
       await add.click();
@@ -261,7 +263,13 @@ export async function labelRepeatableFields(
             ? Array.from(container.querySelectorAll(rowSel))
             : Array.from(container.children).filter((c) => c.querySelector('input'));
           const index = rows.findIndex((row) => within(el, row));
-          if (index >= 0) return { kind, index, rows: rows.length };
+          if (index < 0) continue;
+          // What the site already shows in this row (TurboHire pre-fills
+          // the jobs it parsed from the resume), to tell which entry it is.
+          const values = Array.from(rows[index]!.querySelectorAll<HTMLInputElement>('input, textarea'))
+            .map((i) => i.value.trim())
+            .filter(Boolean);
+          return { kind, index, rows: rows.length, values };
         }
         return null;
       });
@@ -273,14 +281,30 @@ export async function labelRepeatableFields(
     },
   );
 
+  const entryOf = assignEntries(where, history);
+
   return fields.map((field, i) => {
     const at = where[i];
     if (!at) return field;
     const kind = at.kind as SectionKind;
-    const n = at.index + 1;
+    const slot = entryOf.get(`${kind}:${at.index}`) ?? at.index;
+    if (slot < 0) {
+      return {
+        ...field,
+        label: `${SECTIONS[kind].title} (extra row): ${field.label}`,
+        helpText: [
+          `This ${SECTIONS[kind].title} row matches none of the entries on record (they are all in other rows); leave it blank.`,
+          field.helpText,
+        ]
+          .filter(Boolean)
+          .join(' '),
+        canonicalKey: undefined,
+      };
+    }
+    const n = slot + 1;
     const label = `${SECTIONS[kind].title} ${n}: ${field.label}`;
 
-    const entry = history?.[kind][at.index];
+    const entry = history?.[kind][slot];
     const describe = entry
       ? kind === 'employment'
         ? `This row is for the resume's employment entry #${n}: ${[
@@ -310,6 +334,49 @@ export async function labelRepeatableFields(
   });
 }
 
+/**
+ * Which entry on record each row is for, as "kind:rowIndex" -> entry index
+ * (-1: none left). A row the site already filled belongs to the entry whose
+ * company or school it shows - TurboHire lists the jobs it parsed, a blank
+ * junk row among them, so going by position put the wrong job in every row
+ * after it. The other rows take the unclaimed entries in order. Without a
+ * history, row n is entry n.
+ */
+function assignEntries(
+  where: ({ kind: string; index: number; values: string[] } | null)[],
+  history: ResumeHistory | null,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  for (const kind of Object.keys(SECTIONS) as SectionKind[]) {
+    const names = (history?.[kind] ?? []).map((e) => norm('company' in e ? e.company : e.school));
+    if (!names.length) continue;
+    const rows = new Map<number, string[]>();
+    for (const at of where) {
+      if (at?.kind === kind) rows.set(at.index, [...(rows.get(at.index) ?? []), ...at.values.map(norm)]);
+    }
+    const order = [...rows.keys()].sort((a, b) => a - b);
+    const claimed = new Set<number>();
+    for (const r of order) {
+      const shown = rows.get(r)!.filter((v) => v.length >= 3);
+      const hit = names.findIndex(
+        (name, j) => !!name && !claimed.has(j) && shown.some((v) => v.includes(name) || name.includes(v)),
+      );
+      if (hit >= 0) {
+        out.set(`${kind}:${r}`, hit);
+        claimed.add(hit);
+      }
+    }
+    for (const r of order) {
+      if (out.has(`${kind}:${r}`)) continue;
+      const next = names.findIndex((_, j) => !claimed.has(j));
+      out.set(`${kind}:${r}`, next);
+      if (next >= 0) claimed.add(next);
+    }
+  }
+  return out;
+}
+
 // ----------------------------------------------------------------- answers
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -336,6 +403,21 @@ function slashMonthYear(date: string): string | null {
  * month-year picker reads "10/2023" correctly and "Mar 2025" as August 2027.
  */
 export const MONTH_YEAR_HINT = 'Type the date as MM/YYYY, e.g. 10/2023.';
+
+/**
+ * Set by an adapter whose date box takes a full day-month-year date, with the
+ * separator it uses (TurboHire: "DD/MM/YYYY", "DD-MM-YYYY").
+ */
+export const dayMonthYearHint = (sep: '/' | '-') => `Type the date as DD${sep}MM${sep}YYYY.`;
+
+/**
+ * "Oct 2025" -> "01/10/2025" for a box that wants a day. The saved record has
+ * no day, so it is the 1st; null unless the month and year are both stated.
+ */
+function dayMonthYear(date: string, sep: string): string | null {
+  const my = slashMonthYear(date);
+  return my ? `01${sep}${my.replace('/', sep)}` : null;
+}
 
 /**
  * Answer a row field ("Employment 2: Start date month") from the candidate's
@@ -377,14 +459,18 @@ export function answerFromHistory(
     return String(MONTHS.indexOf(name) + 1).padStart(2, '0');
   };
   const slashed = field.helpText?.includes(MONTH_YEAR_HINT) ?? false;
+  const dmy = /Type the date as DD([/-])MM\1YYYY\./.exec(field.helpText ?? '')?.[1];
   if (/\b(start|from)\b/.test(q)) {
+    if (dmy) return dayMonthYear(start, dmy);
     if (slashed) return slashMonthYear(start);
     if (/month/.test(q)) return month(start);
     if (/year/.test(q)) return yearOf(start);
     return start || null;
   }
-  if (/\b(end|to|until)\b/.test(q)) {
+  // TurboHire's education row asks "Passed on".
+  if (/\b(end|to|until)\b|passed|graduat|complet/.test(q)) {
     if (isOngoing(end)) return '';
+    if (dmy) return dayMonthYear(end, dmy);
     if (slashed) return slashMonthYear(end);
     if (/month/.test(q)) return month(end);
     if (/year/.test(q)) return yearOf(end);
@@ -392,7 +478,10 @@ export function answerFromHistory(
   }
   const pick = (v: string | undefined) => v || null;
   if (/company|employer|organi[sz]ation/.test(q)) return pick(entry.company);
-  if (/school|university|college|institution/.test(q)) return pick(entry.school);
+  // TurboHire asks for the Institute and, separately, the University it is
+  // affiliated to; the adapter names the second "Affiliating university".
+  if (/affiliat/.test(q)) return pick(entry.university);
+  if (/school|university|college|institut/.test(q)) return pick(entry.school);
   if (/discipline|major|field of study|specialization/.test(q)) return pick(entry.discipline);
   if (/degree|qualification/.test(q)) return pick(entry.degree);
   if (/gpa|grade/.test(q)) return pick(entry.cgpa ?? entry.gpa);
@@ -400,6 +489,62 @@ export function answerFromHistory(
   // Workday's "Role Description": a write-up, not the title the rule below would give.
   if (/description|responsibilit|summary|achievement/.test(q)) return null;
   if (/title|position|role/.test(q)) return pick(entry.title);
+  return null;
+}
+
+const DEGREE_RANK = ['High School', "Associate's Degree", "Bachelor's Degree", "Master's Degree",
+  'Master of Business Administration (M.B.A.)', 'Doctor of Philosophy (Ph.D.)'];
+
+/**
+ * One-off questions about the candidate's history, outside any Employment /
+ * Education row: "Highest Degree", "Graduation/Post-Graduation College",
+ * "Current company of the candidate" (Oolka, October 2026). Answered from the
+ * same employment.N / education.N facts; null when they do not say.
+ */
+export function answerFromSavedHistory(
+  field: Pick<FormField, 'label' | 'kind'>,
+  facts: { key: string; value: string }[],
+): string | null {
+  if (/^(Employment|Education) \d+: /.test(field.label)) return null;
+  const q = field.label.toLowerCase().trim();
+  // "Did you attend school in the US?" wants a yes or no, not the school.
+  if (/^(did|do|does|are|is|have|has|were|was|will|can|would)\b/.test(q)) return null;
+  const parse = (value: string) =>
+    Object.fromEntries(
+      value.split('|').flatMap((part) => {
+        const i = part.indexOf(':');
+        return i < 0 ? [] : [[part.slice(0, i).trim().toLowerCase(), part.slice(i + 1).trim()]];
+      }),
+    ) as Record<string, string | undefined>;
+  const numbered = (prefix: string) =>
+    facts
+      .map((f) => ({ n: Number(new RegExp(`^${prefix}\\.(\\d+)$`).exec(f.key)?.[1]), f }))
+      .filter((x) => Number.isFinite(x.n))
+      .sort((a, b) => a.n - b.n)
+      .map((x) => parse(x.f.value));
+
+  if (/\bcurrent(ly)?\b.*\b(company|employer|organi[sz]ation)\b|\b(company|employer)\b.*\bcurrent(ly)?\b/.test(q)) {
+    const latest = numbered('employment')[0];
+    if (!latest?.company) return null;
+    const current = latest.current ? /^(yes|true)$/i.test(latest.current) : isOngoing(latest.end);
+    return current ? latest.company : null;
+  }
+
+  const education = numbered('education');
+  if (!education.length) return null;
+  // The highest degree on record; ties go to the most recent (listed first).
+  const rank = (e: Record<string, string | undefined>) => DEGREE_RANK.indexOf(degreeLevel(e.degree ?? '') ?? '');
+  const top = education.reduce((best, e) => (rank(e) > rank(best) ? e : best), education[0]!);
+
+  if (/\b(year|date|when|grade|gpa|cgpa|percent|score|marks|branch|major|discipline|speciali[sz]ation|stream)\b/.test(q)) {
+    return null;
+  }
+  if (/\bhighest\b.*\b(degree|qualification|education)\b|^(degree|qualification|education(al)? qualification)\b/.test(q)) {
+    return top.degree || null;
+  }
+  if (/\b(college|university|institut(e|ion)|alma mater|school)\b/.test(q)) {
+    return top.school || null;
+  }
   return null;
 }
 

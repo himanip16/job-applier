@@ -1,0 +1,293 @@
+/*
+ * The search report, in the Interview Lab shape: one roomy rounded card, a row
+ * of big numbers, dense company rows with a status dot and a plain-language
+ * status on the right, and the detail tucked into quiet disclosures.
+ */
+
+.card {
+  margin-top: var(--space-4);
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: 26px;
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+  display: grid;
+  gap: var(--space-4);
+}
+
+.head {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.headIcon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.headIconQuiet {
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.headText {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.subtitle {
+  margin: 2px 0 0;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+.close {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px;
+  line-height: 0;
+}
+
+.close:hover {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+
+/* ---- numbers ------------------------------------------------------------- */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+@media (max-width: 640px) {
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.stat {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-subtle);
+}
+
+.statValue {
+  font-size: var(--fs-xl);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.statGood .statValue { color: var(--good); }
+
+.statLabel {
+  margin-top: 4px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* ---- sections ------------------------------------------------------------ */
+
+.section {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.rows {
+  display: grid;
+  gap: 6px;
+}
+
+.row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.rowMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.rowName {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.rowDetail {
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.rowStatus {
+  flex: none;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+  padding-top: 2px;
+}
+
+.rowStatusGood { color: var(--good); }
+.rowStatusWarn { color: var(--warn); }
+.rowStatusBad { color: var(--bad); }
+
+.source {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.dotGood { background: var(--good); box-shadow: 0 0 0 3px var(--good-soft); }
+.dotWarn { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+.dotBad { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+
+/* ---- roles --------------------------------------------------------------- */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+  background: var(--panel);
+}
+
+.chipCount {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.chipHit {
+  border-color: var(--good-border);
+  background: var(--good-soft);
+}
+
+.chipHit .chipCount { color: var(--good); }
+
+.hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* ---- notes and detail ------------------------------------------------------ */
+
+.notes {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--bg-subtle);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+
+.note svg { flex: none; margin-top: 2px; color: var(--muted); }
+
+.noteBad {
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+
+.noteBad svg { color: var(--bad); }
+
+.more {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.more > summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.more > summary::-webkit-details-marker { display: none; }
+.more > summary svg { transition: transform var(--fast) var(--ease); }
+.more[open] > summary svg { transform: rotate(180deg); }
+
+.moreBody {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+
+.showAll {
+  justify-self: start;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  padding: 2px 0;
+}

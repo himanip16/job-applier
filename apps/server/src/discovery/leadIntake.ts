@@ -1,12 +1,9 @@
-import { locatedIn, type Country } from '@ja/shared';
-import { prisma } from '../lib/db.js';
+import { prisma, type Prisma } from '../lib/db.js';
 import { decidedPostings, sameJobKey } from './alreadyDecided.js';
 import type { DeepScoreEntry } from './deepScore.js';
-import { isSeniorLevel, isStale, requiresMoreThan5YearsExperience } from './jobFilters.js';
-import { isJuniorRole, openToIndia, wrongDomain } from './leadCleanup.js';
 import { canonicalUrl } from './jobSearchUtils.js';
+import { type IntakeRules, noteExample, type Rejection, screen } from './screening.js';
 import { type ScoringContext, scoreLexically, serialiseReasons } from './scoring.js';
-import { jobMatchesPlan } from './searchQueries.js';
 import type { DiscoveredJob } from './sources/index.js';
 
 /**
@@ -17,36 +14,6 @@ import type { DiscoveredJob } from './sources/index.js';
  * you asked for, so it filled a Bangalore search with Toronto, Lagos and
  * "Remote - USA". Now both call this, and a rule added here applies to both.
  */
-
-/** Why a posting was turned away, for the run's report. */
-export type Rejection = 'tooOld' | 'wrongDomain' | 'tooSenior' | 'tooJunior' | 'otherCountry' | 'offPlan' | 'alreadySeen';
-
-export interface IntakeRules {
-  /** Only postings in this country (or remote and open to it). */
-  country?: Country;
-  /**
-   * With no country: only postings someone in India could take - in India,
-   * remote from anywhere, or abroad with sponsorship or relocation.
-   */
-  openToIndia?: boolean;
-  /** Only postings whose title matches one of these. Omit to keep every title. */
-  roleTitles?: string[];
-}
-
-/** The first rule a posting breaks, or null if it may be saved. */
-export function screen(job: DiscoveredJob, rules: IntakeRules): Exclude<Rejection, 'alreadySeen'> | null {
-  if (isStale(job.postedAt)) return 'tooOld';
-  // Sales engineers, recruiters, Workday configurators: not this job, whatever the keywords say.
-  if (wrongDomain(job.title)) return 'wrongDomain';
-  if (isSeniorLevel(job.title) || requiresMoreThan5YearsExperience(job.descriptionText)) return 'tooSenior';
-  // Internships and graduate schemes: years past them.
-  if (isJuniorRole(job.title)) return 'tooJunior';
-  if (rules.roleTitles && !jobMatchesPlan(job, rules.roleTitles)) return 'offPlan';
-  // A board lists every office. You asked for one country.
-  if (rules.country && !locatedIn(job.location, job.remote, rules.country)) return 'otherCountry';
-  if (!rules.country && rules.openToIndia && !openToIndia(job.location, job.remote, job.descriptionText)) return 'otherCountry';
-  return null;
-}
 
 export interface IntakeTally {
   saved: number;
@@ -71,15 +38,6 @@ export const emptyTally = (): IntakeTally => ({
   errors: [],
   fresh: [],
 });
-
-const EXAMPLES_PER_RULE = 5;
-
-function noteExample(examples: string[], title: string): void {
-  const t = title.trim();
-  if (examples.length >= EXAMPLES_PER_RULE || !t) return;
-  if (examples.some((e) => e.toLowerCase() === t.toLowerCase())) return;
-  examples.push(t);
-}
 
 /**
  * Everything a run needs to save leads: who for, what is already known, and
@@ -106,6 +64,15 @@ export async function openIntake(profileId: string, rules: IntakeRules, scoring:
   return { profileId, rules, scoring, known, decidedJobs: decided.jobs };
 }
 
+/** Rows per insert: 14 columns a row keeps this far under Postgres's 65,535 bind parameters. */
+const INSERT_BATCH = 500;
+
+interface PendingLead {
+  named: DiscoveredJob;
+  lexScore: number;
+  data: Prisma.JobLeadCreateManyInput;
+}
+
 /**
  * Screen one company's postings and save the survivors as leads.
  *
@@ -118,7 +85,7 @@ export async function admit(
   jobs: DiscoveredJob[],
   tally: IntakeTally,
 ): Promise<number> {
-  let saved = 0;
+  const pending: PendingLead[] = [];
   for (const job of jobs) {
     const rejection = screen(job, intake.rules);
     if (rejection) {
@@ -145,32 +112,74 @@ export async function admit(
       continue;
     }
     const lex = scoreLexically(named, intake.scoring);
-    try {
-      const lead = await prisma.jobLead.create({
-        data: {
-          profileId: intake.profileId,
-          companyId: company.id,
-          url: job.url,
-          ats: job.ats,
-          title: job.title,
-          companyName: named.companyName,
-          location: job.location ?? null,
-          remote: job.remote,
-          descriptionText: job.descriptionText,
-          // Only the date the source gave; never a guess.
-          postedAt: job.postedAt && !Number.isNaN(job.postedAt.getTime()) ? job.postedAt : null,
-          score: lex.score,
-          scoreReasons: serialiseReasons(lex, null),
-          scoredAt: new Date(),
-          deepScored: false,
-        },
-      });
-      saved++;
-      tally.saved++;
-      tally.fresh.push({ id: lead.id, job: named, lexScore: lex.score });
-    } catch (err) {
-      tally.errors.push({ where: `saving ${job.url}`, error: (err as Error).message });
+    pending.push({
+      named,
+      lexScore: lex.score,
+      data: {
+        profileId: intake.profileId,
+        companyId: company.id,
+        url: job.url,
+        ats: job.ats,
+        title: job.title,
+        companyName: named.companyName,
+        location: job.location ?? null,
+        remote: job.remote,
+        descriptionText: job.descriptionText,
+        // Only the date the source gave; never a guess.
+        postedAt: job.postedAt && !Number.isNaN(job.postedAt.getTime()) ? job.postedAt : null,
+        score: lex.unreadScore,
+        scoreReasons: serialiseReasons(lex, null),
+        scoredAt: new Date(),
+        deepScored: false,
+      },
+    });
+  }
+
+  let saved = 0;
+  for (let i = 0; i < pending.length; i += INSERT_BATCH) {
+    saved += await insertLeads(pending.slice(i, i + INSERT_BATCH), tally);
+  }
+  return saved;
+}
+
+/**
+ * One insert for the whole batch. Rows come back keyed by url, which is unique
+ * within a batch because admit() already dropped repeat canonical URLs.
+ */
+async function insertLeads(batch: PendingLead[], tally: IntakeTally): Promise<number> {
+  const failed = new Set<string>();
+  let created: { id: string; url: string }[];
+  try {
+    created = await prisma.jobLead.createManyAndReturn({
+      data: batch.map((p) => p.data),
+      // A lead saved since openIntake (another run, same URL) is skipped, not an error.
+      skipDuplicates: true,
+      select: { id: true, url: true },
+    });
+  } catch {
+    // One bad row fails the whole insert. Retry singly so only that row is lost and reported.
+    created = [];
+    for (const p of batch) {
+      try {
+        created.push(await prisma.jobLead.create({ data: p.data, select: { id: true, url: true } }));
+      } catch (err) {
+        failed.add(p.data.url);
+        tally.errors.push({ where: `saving ${p.data.url}`, error: (err as Error).message });
+      }
     }
+  }
+
+  const idByUrl = new Map(created.map((r) => [r.url, r.id]));
+  let saved = 0;
+  for (const p of batch) {
+    const id = idByUrl.get(p.data.url);
+    if (!id) {
+      if (!failed.has(p.data.url)) tally.rejected.alreadySeen++;
+      continue;
+    }
+    saved++;
+    tally.saved++;
+    tally.fresh.push({ id, job: p.named, lexScore: p.lexScore });
   }
   return saved;
 }

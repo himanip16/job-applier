@@ -14,9 +14,28 @@ export const SENIORITY_PATTERNS = [
   'cto',
   'lmts',
   'pmts',
+  // The same rungs in the languages some boards post in. Matched with accents
+  // stripped, so "vicepresidente" also covers the accented spelling.
+  'directora', 'directeur', 'directrice', 'diretor', 'diretora', 'direktor', 'direktorin',
+  'direttore', 'vicepresidente', 'jefe', 'jefa', 'ingeniero principal', 'ingenieur principal',
 ];
 
 const SENIOR_WORDS = new RegExp(`\\b(${SENIORITY_PATTERNS.join('|')})\\b`);
+
+/**
+ * Level codes some companies put in the title: Meta's E6 and up, and L7 and
+ * up, which is past senior at both Google and Amazon. L6 is left alone: it is
+ * staff at Google but senior at Amazon, and senior is kept. "L7" in a
+ * networking title is the protocol layer, not a level.
+ */
+const LEVEL_CODE = /\b(?:e(?:[6-9]|1\d)|l(?:[7-9]|1\d))\b(?!\s*(?:load|proxy|proxies|network|networking|routing|firewall|traffic|lb|gateway|switch))/;
+
+/**
+ * "Manager" in other languages. Like manager, counted only in the role part:
+ * "Teamleiter" and "Gerente de Ingeniería" lead a team, "Software Engineer -
+ * Gerente project" does not say so.
+ */
+const MANAGER_WORDS = /\bmanager\b|\bgerente\b|(?:\b|team|abteilungs|bereichs|gruppen)leiter(?:in)?\b|\bresponsable d/;
 
 /**
  * Where the role ends and the team begins: "Engineering Manager - Payments",
@@ -37,12 +56,14 @@ const ROLE_PART_END = /\s-\s|[,(–—]/;
  */
 export function isSeniorLevel(title: string): boolean {
   const titleLower = title
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/\blead member of technical staff\b/g, 'lmts')
     .replace(/\btechnical staff\b/g, ' ');
-  if (SENIOR_WORDS.test(titleLower)) return true;
+  if (SENIOR_WORDS.test(titleLower) || LEVEL_CODE.test(titleLower)) return true;
   const role = titleLower.split(ROLE_PART_END)[0] ?? titleLower;
-  return /\bmanager\b/.test(role);
+  return MANAGER_WORDS.test(role);
 }
 
 /** What a posting says about the experience it wants. */
@@ -55,14 +76,15 @@ export interface ExperienceAsk {
   quote: string;
 }
 
-// "5+ years", "3-5 years", "3 to 5 yrs", with the experience word nearby.
-const YEARS = String.raw`(\d{1,2}(?:\.\d)?)\s*(?:\+|plus)?\s*(?:(?:-|–|—|to)\s*(\d{1,2}(?:\.\d)?)\s*\+?\s*)?(?:years?|yrs?)`;
+// "5+ years", "3-5 years", "3 to 5 yrs.", with the experience word nearby.
+const YEARS = String.raw`(\d{1,2}(?:\.\d)?)\s*(?:\+|plus)?\s*(?:(?:-|–|—|to)\s*(\d{1,2}(?:\.\d)?)\s*\+?\s*)?(?:years?|yrs?\.?)`;
 const EXPERIENCE_ASKS = [
   // "5+ years of (professional / hands-on / relevant ...) experience", "3-5 yrs exp"
   // No other number in between: in "3+ years of Python and 7+ years of experience" the 7 is the ask.
   new RegExp(`${YEARS}(?:\\s+of)?[^.\\n\\d]{0,40}?\\b(?:experience|exp)\\b`, 'gi'),
-  // "experience: 5+ years", "minimum experience of 4 years", "experience required - 3 to 5 years"
-  new RegExp(`\\b(?:experience|exp)\\b[^.\\n\\d]{0,30}${YEARS}`, 'gi'),
+  // "experience: 5+ years", "minimum experience of 4 years", "experience required - 3 to 5 years",
+  // and a heading over its bullet: "Experience:\n- 7+ years". One line break only, so it can't reach into the next section.
+  new RegExp(`\\b(?:experience|exp)\\b[^.\\n\\d]{0,30}(?:\\n\\s*[-•*]?\\s*)?${YEARS}`, 'gi'),
   // "minimum (of) 4 years", "at least 6 years"
   new RegExp(`\\b(?:minimum|min\\.?|at least)\\s+(?:of\\s+)?${YEARS}`, 'gi'),
 ];

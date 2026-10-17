@@ -220,10 +220,16 @@ export async function convertSalaries(
     // A remembered "120000" carries no currency of its own; only the
     // candidate's own saved facts are read in their home currency.
     const home = TRUSTS_PLAIN_NUMBER.has(answer.source) ? currencyOfCountry(opts.profileCountry) : null;
-    const money = parseMoney(answer.value, home);
-    if (!money) continue;
+    const parsed = parseMoney(answer.value, home);
+    if (!parsed) continue;
 
     const target = targetFor(field, fields, out, opts.jobDescription);
+    // "50" saved for "Current CTC (LPA)" is already in lakhs. Read as rupees
+    // it became 0.0005 lakhs, typed as "0" (Oolka, October 2026). No annual
+    // salary is under a thousand units, so a bare figure that small is lakhs.
+    const bareLakhs =
+      target.scale === 1e5 && parsed.max < 1000 && !new RegExp(String.raw`\d\s*${UNIT}`, 'i').test(answer.value);
+    const money = bareLakhs ? { ...parsed, min: parsed.min * 1e5, max: parsed.max * 1e5 } : parsed;
     const to = target.currency ?? money.currency;
     const sameCurrency = !to || to === money.currency;
     const period = target.period ?? money.period;
@@ -257,6 +263,19 @@ export async function convertSalaries(
     const lo = conv(money.min);
     const hi = conv(money.max);
     const cur = to ?? money.currency ?? '';
+    // Never type a zero salary under the candidate's name.
+    if (lo <= 0) {
+      out.set(field.id, {
+        kind: 'gap',
+        gap: {
+          fieldId: field.id,
+          reason: 'NO_MATCH',
+          suggestion: answer.value,
+          suggestionRationale: `Your saved "${answer.value}" came out as 0 in the unit this question asks for; check the figure.`,
+        },
+      });
+      continue;
+    }
 
     let value: string;
     let note = '';
@@ -279,7 +298,7 @@ export async function convertSalaries(
       ...answer,
       value,
       displayValue: value,
-      rationale: `${how}.${note}${money.currency === home && home && !currenciesIn(answer.value).size ? ` Read as ${home}, your profile country's currency.` : ''}`,
+      rationale: `${how}.${note}${bareLakhs ? ' Read as lakhs, since the figure has no unit and the question asks in LPA.' : ''}${money.currency === home && home && !currenciesIn(answer.value).size ? ` Read as ${home}, your profile country's currency.` : ''}`,
     };
   }
 }
