@@ -240,6 +240,32 @@ export function experienceVerdict(candidateYears: number | null, jobText: string
   return { against: `Slightly under the experience bar — ${gap}.` };
 }
 
+/**
+ * A title written for people who have not started work yet.
+ *
+ * Read from the title alone: "graduate" turns up in the qualifications of
+ * nearly every posting ("a graduate degree is a plus"), and nothing about the
+ * description makes a role a campus hire if its title does not say so.
+ */
+const ENTRY_LEVEL_TITLE =
+  /\b(?:new|recent|university|college|campus|fresh)[- ]grad(?:uate)?s?\b|\bgrad(?:uate)?s?\b.*\b20\d\d\b|\b20\d\d\b.*\bgrad(?:uate)?s?\b|^\s*graduate\b|\bgraduate\s+(?:engineer|developer|trainee|program(?:me)?|hire|scheme)\b|\bclass of 20\d\d\b|\bintern(?:ship)?s?\b|\bfreshers?\b|\bentry[- ]level\b|\bearly[- ]career\b|\bcampus\b|\btrainee\b|\bapprentice(?:ship)?\b/i;
+
+/** At this much experience a new-grad or intern role is a step back, not a fit. */
+const ENTRY_LEVEL_MAX_YEARS = 1.5;
+
+/** Does the title say it is a campus, intern or new-grad role? */
+export const isEntryLevelTitle = (title: string) => ENTRY_LEVEL_TITLE.test(title);
+
+/** Is this a campus, intern or new-grad role for someone who already works? */
+export function entryLevelVerdict(candidateYears: number | null, title: string): HardRuleVerdict | null {
+  if (candidateYears === null || candidateYears <= ENTRY_LEVEL_MAX_YEARS) return null;
+  if (!ENTRY_LEVEL_TITLE.test(title)) return null;
+  return {
+    dealbreaker: `An entry-level role (new grad, intern or campus hire); you have ${candidateYears} years.`,
+    against: `Written for graduates or interns, not someone with ${candidateYears} years of experience.`,
+  };
+}
+
 // ------------------------------------------------------------------ visas ---
 
 /**
@@ -337,6 +363,7 @@ export function applyHardRules(
   const text = `${args.job.title}\n${args.job.descriptionText ?? ''}`;
   const verdicts = [
     experienceVerdict(args.candidateYears, text),
+    entryLevelVerdict(args.candidateYears, args.job.title),
     sponsorshipVerdict(args.needsSponsorship, args.job),
     salaryVerdict(args.salaryExpectations, args.currentCTC, args.job),
   ].filter(Boolean) as HardRuleVerdict[];

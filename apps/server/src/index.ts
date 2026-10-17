@@ -6,6 +6,7 @@ import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { config, artifactsDir, resumesDir } from './lib/config.js';
 import { prisma } from './lib/db.js';
+import { rescoreLexically } from './discovery/rescoreLeads.js';
 import { recoverInterruptedRuns, activeRuns } from './engine/queue.js';
 import { reconcileLeads } from './engine/leadSync.js';
 import { estimateActivityCosts, activeModels } from './llm/models.js';
@@ -31,6 +32,7 @@ import { registerProfileRoutes } from './routes/profile.js';
 import { registerFactsRoutes } from './routes/facts.js';
 import { registerApplicationRoutes } from './routes/applications.js';
 import { registerAnswerRoutes } from './routes/answers.js';
+import { registerQuestionDraftRoutes } from './routes/questionDrafts.js';
 import { registerStreamRoutes } from './routes/stream.js';
 import { registerResumeUploadRoutes } from './routes/resumeUpload.js';
 import { registerOverviewRoutes } from './routes/overview.js';
@@ -174,6 +176,7 @@ registerConnectionRoutes(app, requireProfile);
 registerFactsRoutes(app, requireProfile);
 registerApplicationRoutes(app, requireProfile);
 registerAnswerRoutes(app, requireProfile);
+registerQuestionDraftRoutes(app, requireProfile);
 registerStreamRoutes(app, requireProfile);
 registerResumeUploadRoutes(app, requireProfile);
 registerOverviewRoutes(app);
@@ -221,3 +224,14 @@ if (moved.length) process.stdout.write(`Re-sorted job cards: ${moved.map(([tab, 
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
 process.stdout.write(`API on http://localhost:${config.port}\n`);
+
+// Quick scores are stored, so a change to how they are worked out reached a
+// card only when something else happened to rescore it - a reject, a
+// shortlist, a crawl. Until then an intern role kept the 100% the old rules
+// gave it. Cheap (no model calls), so it runs on every start, after listening.
+void (async () => {
+  for (const { id } of await prisma.profile.findMany({ select: { id: true } })) {
+    const n = await rescoreLexically(id);
+    if (n) process.stdout.write(`Rescored ${n} quick-match lead(s) with the current rules.\n`);
+  }
+})().catch((err) => process.stderr.write(`Quick rescore on start failed: ${(err as Error).message}\n`));

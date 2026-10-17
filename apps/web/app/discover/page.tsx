@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { countryByCode, countryFromText } from '@ja/shared/countries';
-import { api, needsProfile } from '../../lib/api';
+import { api, ApiError, needsProfile } from '../../lib/api';
 import { Icon, type IconName } from '../../components/Icon';
 import { ApplyPreferences, useApplyPrefs } from './components/ApplyPreferences';
 import { CountryDialog, WORLDWIDE, type CountryAction } from './components/CountryDialog';
@@ -318,9 +318,8 @@ export default function DiscoverPage() {
   /**
    * Autopilot: apply to every ticked job and submit each without asking.
    *
-   * The server queues them and runs one at a time, so this only has to hand
-   * them over. A few at once, because each request can spend up to a minute
-   * tailoring the resume before it returns.
+   * The server queues the lot in one request and works through them a few at
+   * a time (five by default), so nothing here has to stay open once it returns.
    */
   async function autoApplyPicked() {
     await autoApply([...picked], (n) => `${n} ticked job${n === 1 ? '' : 's'}`);
@@ -372,21 +371,50 @@ export default function DiscoverPage() {
     setError(null);
     setFlash(null);
     setLeadErrors({});
+    const options = {
+      requiresReview: false,
+      writeCoverLetter: prefs.writeCoverLetter,
+      autoTailorResume: prefs.tailorResume,
+    };
+    let failed: Record<string, string> = {};
+    let atOnce: number | null = null;
+    setApplying(`Queuing ${ids.length} job${ids.length === 1 ? '' : 's'}…`);
+    try {
+      const r = await api<{ failed: Array<{ id: string; error: string }>; concurrency: number }>(
+        '/api/leads/apply-bulk',
+        { method: 'POST', body: JSON.stringify({ ...options, ids }) },
+      );
+      failed = Object.fromEntries(r.failed.map((f) => [f.id, f.error]));
+      atOnce = r.concurrency;
+    } catch (e) {
+      // A server without the bulk route: hand them over one by one instead.
+      if (!(e instanceof ApiError && e.status === 404)) {
+        setApplying(null);
+        setError((e as Error).message);
+        return;
+      }
+      failed = await queueOneByOne(ids, options);
+    }
+    setApplying(null);
+    const failedIds = Object.keys(failed);
+    setLeadErrors(failed);
+    setPicked(failedIds);
+    const ok = ids.length - failedIds.length;
+    setFlash(
+      `Queued ${ok} job${ok === 1 ? '' : 's'} for auto-apply. ${atOnce ? `${atOnce} run at a time` : 'They run a few at a time'} and submit by themselves; you can leave this page. Follow along on Runs.` +
+        (failedIds.length ? ` ${failedIds.length} could not be queued — see the rows below.` : ''),
+    );
+    await load();
+  }
+
+  async function queueOneByOne(ids: string[], options: object): Promise<Record<string, string>> {
     const failed: Record<string, string> = {};
     let done = 0;
-    setApplying(`Queuing 0 of ${ids.length}…`);
     const next = [...ids];
     const worker = async () => {
       for (let id = next.shift(); id; id = next.shift()) {
         try {
-          await api(`/api/leads/${id}/apply`, {
-            method: 'POST',
-            body: JSON.stringify({
-              requiresReview: false,
-              writeCoverLetter: prefs.writeCoverLetter,
-              autoTailorResume: prefs.tailorResume,
-            }),
-          });
+          await api(`/api/leads/${id}/apply`, { method: 'POST', body: JSON.stringify(options) });
         } catch (e) {
           failed[id] = (e as Error).message;
         }
@@ -395,16 +423,7 @@ export default function DiscoverPage() {
       }
     };
     await Promise.all(Array.from({ length: Math.min(3, ids.length) }, worker));
-    setApplying(null);
-    const failedIds = Object.keys(failed);
-    setLeadErrors(failed);
-    setPicked(failedIds);
-    const ok = ids.length - failedIds.length;
-    setFlash(
-      `Auto-applying to ${ok} job${ok === 1 ? '' : 's'}. They run one after another and submit by themselves; follow along on Runs.` +
-        (failedIds.length ? ` ${failedIds.length} could not be started — see the rows below.` : ''),
-    );
-    await load();
+    return failed;
   }
 
   const pageIds = leads.map((l) => l.id);
@@ -443,9 +462,9 @@ export default function DiscoverPage() {
               <Icon name="send" className={busy === 'collect' ? 'spin' : undefined} />
               {applying ?? (busy === 'collect' ? 'Finding matches…' : `Apply to all ${AUTO_APPLY_MIN_MATCH}%+ matches`)}
             </button>
-            <button disabled={busy !== null} onClick={() => setAsking('recheck')} title="Remove jobs in For you that are closed, too old, too senior, or in the wrong country, and keep only the best few per company. Never adds jobs.">
+            <button disabled={busy !== null} onClick={() => setAsking('recheck')} title="Re-check every job in For you and Saved: remove the ones no longer available, too old, too senior or junior, or in the wrong country, and keep only the best few per company. Never adds jobs.">
               <Icon name="checkCircle" className={busy === 'recheck' ? 'spin' : undefined} />
-              {busy === 'recheck' ? 'Removing…' : 'Remove stale jobs'}
+              {busy === 'recheck' ? 'Cleaning up…' : 'Clean up'}
             </button>
             <details className={styles.menu}>
               <summary>More <Icon name="chevron" size={14} /></summary>

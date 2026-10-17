@@ -24,9 +24,9 @@ const COPY: Record<CountryAction, { sub: string; icon: IconName; verb: (country:
     verb: (c) => `Search watch list in ${c}`,
   },
   recheck: {
-    sub: 'Goes through the jobs waiting in "For you" and removes any outside this country, older than 3 months, too senior, or no longer open, and keeps only the newest, best-matching few from each company. Saved, applied and dismissed jobs are not touched.',
+    sub: 'Goes through the jobs waiting in "For you" and removes any outside this country, older than 3 months, too senior or too junior, or no longer open, and keeps only the newest, best-matching few from each company. Saved jobs are removed only if the posting is no longer available; applied and dismissed jobs are not touched.',
     icon: 'checkCircle',
-    verb: (c) => `Remove stale jobs for ${c}`,
+    verb: (c) => `Clean up for ${c}`,
   },
 };
 
@@ -35,8 +35,8 @@ const WORLDWIDE_COPY: Record<CountryAction, { sub: string; icon: IconName; verb:
   crawl: { ...COPY.crawl, sub: 'Re-reads every company on your watch list in every country and keeps jobs you can take from India: in India, remote from anywhere, or abroad with sponsorship or relocation.', verb: () => 'Search whole watch list' },
   recheck: {
     ...COPY.recheck,
-    sub: 'Goes through the jobs waiting in "For you" and removes any you could not take from India (abroad with no remote, sponsorship or relocation), older than 3 months, too senior, or no longer open, and keeps only the newest, best-matching few from each company. Saved, applied and dismissed jobs are not touched.',
-    verb: () => 'Remove stale jobs',
+    sub: 'Goes through the jobs waiting in "For you" and removes any you could not take from India (abroad with no remote, sponsorship or relocation), older than 3 months, too senior or too junior, or no longer open, and keeps only the newest, best-matching few from each company. Saved jobs are removed only if the posting is no longer available; applied and dismissed jobs are not touched.',
+    verb: () => 'Clean up',
   },
 };
 

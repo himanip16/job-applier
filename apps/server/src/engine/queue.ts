@@ -3,6 +3,7 @@ import { bus } from '../lib/events.js';
 import { runApplication } from './runner.js';
 import { markLeadProcessing, syncLead } from './leadSync.js';
 import { give, tryTake, whenSlotFrees } from './slots.js';
+import { tailorForApplication, wantedTailoring } from './tailorForApplication.js';
 
 /**
  * A deliberately small in-process queue.
@@ -14,19 +15,31 @@ import { give, tryTake, whenSlotFrees } from './slots.js';
  * this holds the concurrency limit, and there is one less service to run.
  *
  * Several forms fill at once, each in its own tab (RUN_CONCURRENCY, default
- * 3). See slots.ts for why a run waiting on you does not count against that.
+ * 5). See slots.ts for why a run waiting on you does not count against that.
  */
 const queued: string[] = [];
 /** Every run in flight, including ones parked on you. */
 const active = new Set<string>();
+/**
+ * Runs that tailor the resume once they get a slot, not when they are queued.
+ * A bulk apply queues everything at once; tailoring all of it up front would
+ * spend minutes of model calls before the first form opened.
+ */
+const tailorFirst = new Set<string>();
 
 whenSlotFrees(() => pump());
 
-export function enqueue(applicationId: string): void {
+export function enqueue(applicationId: string, opts: { tailor?: boolean } = {}): void {
   if (active.has(applicationId) || queued.includes(applicationId)) return;
+  if (opts.tailor) tailorFirst.add(applicationId);
   queued.push(applicationId);
   void markLeadProcessing(applicationId).catch(() => {});
   pump();
+}
+
+/** Where each waiting run stands in line, 1 being next. */
+export function queuedRuns(): string[] {
+  return [...queued];
 }
 
 export function activeRuns(): string[] {
@@ -37,7 +50,11 @@ function pump(): void {
   while (queued.length && tryTake(queued[0]!)) {
     const id = queued.shift()!;
     active.add(id);
-    void runApplication(id)
+    const tailor = tailorFirst.delete(id);
+    void (async () => {
+      if (tailor) await tailorForApplication(id);
+      await runApplication(id);
+    })()
       .catch(async (err: unknown) => {
         await bus
           .emitEvent(id, 'ERROR', `Run crashed: ${(err as Error).message}`)
@@ -86,13 +103,23 @@ export async function recoverInterruptedRuns(): Promise<number> {
     // process died is as orphaned as one that was mid-fill.
     where: { status: { in: ['QUEUED', 'PREPARING', 'FILLING', 'NEEDS_INPUT', 'REVIEW', 'SUBMITTING'] } },
     select: { id: true, status: true, requiresReview: true },
+    // Back in line in the order they were queued.
+    orderBy: { updatedAt: 'asc' },
   });
   for (const app of stuck) {
     // Autopilot never parks on questions: it set this aside and ended the run,
     // so nothing died with the process. Answering still restarts it.
     if (app.status === 'NEEDS_INPUT' && !app.requiresReview) continue;
-    // Auto-apply submits without asking, so it never resumes unattended after
-    // a restart: review goes back on and it waits for you to start it again.
+    // Still waiting its turn: it never opened a page, so starting it now is
+    // the same as starting it late. This is what keeps a bulk apply going
+    // through a restart instead of failing the whole backlog.
+    if (app.status === 'QUEUED') {
+      enqueue(app.id, { tailor: await wantedTailoring(app.id) });
+      continue;
+    }
+    // Auto-apply submits without asking, so a run it was part-way through never
+    // resumes unattended after a restart: review goes back on and it waits for
+    // you to start it again.
     if (!app.requiresReview) {
       await prisma.application.update({
         where: { id: app.id },

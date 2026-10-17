@@ -140,9 +140,44 @@ export function wrongDomain(title: string): string | null {
 const TOO_SENIOR =
   /\b(staff|principal|distinguished|fellow|architect|director|vp|vice president|head of|chief|cto|cio|ciso|cpo|coo|ceo|president|partner|manager|management|lead|leader|senior manager|group manager|dept|department head|founding engineer)\b/i;
 
-/** Roles that are still an education. */
+/**
+ * Below this, a staff, lead, architect or manager title is a level up rather
+ * than the next step. Unknown years are treated as under it: the rule was
+ * written for a four-to-five-year search.
+ */
+const SENIOR_TITLE_YEARS = 7;
+
+/**
+ * A title pitched at a different level from the candidate, as a short tag for
+ * a card and a sentence for its tooltip.
+ *
+ * The quick score needs this as much as the cleanup script does. Without it a
+ * "Cloud Architect" shares "cloud" with a backend resume and ranks at the top,
+ * because word overlap cannot tell an architect role from an engineering one.
+ */
+export function levelMismatch(
+  title: string,
+  candidateYears: number | null,
+): { tag: string; reason: string } | null {
+  if ((candidateYears === null || candidateYears < SENIOR_TITLE_YEARS) && TOO_SENIOR.test(title)) {
+    const level = title.match(TOO_SENIOR)![0].toLowerCase();
+    return { tag: 'too senior', reason: `A ${level} title: a level above ${candidateYears ?? 'your'} years.` };
+  }
+  return null;
+}
+
+/**
+ * Roles that are still an education. "Placement", "student" and "campus" only
+ * with the word that makes them one, so Ads Placement or Campus Security
+ * engineering is not caught.
+ */
 const TOO_JUNIOR =
-  /\b(intern|internship|co[- ]?op|new grad|graduate (programme|program|scheme|engineer|analyst|developer|role)|grad\b|apprentice|trainee|placement|working student|student|campus|university (programme|program|hire)|entry[- ]level|fresher|20(2[6-9]|3\d)\s*(grad|graduate|start|cohort)?)\b/i;
+  /\b(intern|internship|co[- ]?op|new grad|graduate (programme|program|scheme|engineer|analyst|developer|role)|grad\b|apprentice|apprenticeship|trainee|placement (year|student|programme|program)|(year|industrial|summer) placement|working student|student (developer|engineer|programmer|assistant|worker)|campus (hire|hiring|recruit\w*|program\w*)|university (programme|program|hire|graduate)|entry[- ]level|fresher|20(2[6-9]|3\d)\s*(grad|graduate|start|cohort)?)\b/i;
+
+/** An internship, graduate scheme or entry-level title. */
+export function isJuniorRole(title: string): boolean {
+  return TOO_JUNIOR.test(title);
+}
 
 /**
  * Years the candidate has. Passed in rather than parsed here so one number

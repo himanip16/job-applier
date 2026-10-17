@@ -12,6 +12,7 @@ import { whileWaitingOnHuman } from './slots.js';
 import { secret } from '../lib/secrets.js';
 import { signInOrRegister } from '../browser/accountWall.js';
 import { onAppleSignIn, signInWithAppleId } from '../browser/appleId.js';
+import { onMicrosoftSignIn, signInWithMicrosoftAccount } from '../browser/microsoftAccount.js';
 import { clearEmailVerification } from '../browser/emailCode.js';
 import { recordManualSubmit, watchForManualSubmit } from './manualSubmit.js';
 import { PostingGoneError, postingGone } from './deadPosting.js';
@@ -288,6 +289,45 @@ async function signInWithSavedAppleId(applicationId: string, page: Page, blocker
 }
 
 /**
+ * Microsoft Careers' sign-in modal, cleared with the saved Microsoft account:
+ * "Sign in using Microsoft", then email and password on Microsoft's own page;
+ * see browser/microsoftAccount.ts. True only when it got back to Microsoft
+ * Careers signed in. A code or an Authenticator approval - like no password
+ * saved, or a refused one - falls through to the ordinary pause, which carries
+ * on by itself once the modal is gone.
+ */
+async function signInWithSavedMicrosoftAccount(applicationId: string, page: Page): Promise<boolean> {
+  const password = secret('MICROSOFT_ACCOUNT_PASSWORD');
+  if (!password) {
+    // Said out loud: a silent fall-through read as the sign-in being broken.
+    await bus.emitEvent(
+      applicationId,
+      'LOG',
+      'No Microsoft account password is saved, so the Microsoft sign-in cannot be done for you. ' +
+        'Save it under Settings > Microsoft account and this run signs in by itself.',
+    );
+    return false;
+  }
+  let email = secret('MICROSOFT_ACCOUNT');
+  if (!email) {
+    const app = await prisma.application.findUnique({
+      where: { id: applicationId },
+      select: { profile: { select: { email: true } } },
+    });
+    email = app?.profile.email ?? '';
+  }
+  if (!email) return false;
+
+  await bus.emitEvent(applicationId, 'LOG', 'Microsoft Careers sign-in: using your saved Microsoft account.');
+  const attempt = await signInWithMicrosoftAccount(page, { email, password }).catch((err: unknown) => ({
+    outcome: 'failed' as const,
+    detail: `Microsoft sign-in failed: ${(err as Error).message}`,
+  }));
+  await bus.emitEvent(applicationId, 'LOG', attempt.detail);
+  return attempt.outcome === 'signed-in';
+}
+
+/**
  * "We emailed you a code": with a Gmail app password saved, fetch it and put
  * it in. False hands over to the ordinary pause - no password, no matching
  * email in time, or a code the site would not take.
@@ -295,7 +335,16 @@ async function signInWithSavedAppleId(applicationId: string, page: Page, blocker
 async function enterEmailedCode(applicationId: string, page: Page, blocker: Blocker): Promise<boolean> {
   if (blocker.kind !== 'EMAIL_VERIFICATION') return false;
   const appPassword = secret('EMAIL_APP_PASSWORD');
-  if (!appPassword) return false;
+  if (!appPassword) {
+    // Said out loud: a silent fall-through read as the code reader failing.
+    await bus.emitEvent(
+      applicationId,
+      'LOG',
+      'No Gmail app password is saved, so the emailed code cannot be read for you. ' +
+        'Save one under Settings > Email verification codes and runs enter these codes themselves.',
+    );
+    return false;
+  }
   const app = await prisma.application.findUnique({
     where: { id: applicationId },
     select: { profile: { select: { email: true } }, job: { select: { company: true } } },
@@ -312,6 +361,29 @@ async function enterEmailedCode(applicationId: string, page: Page, blocker: Bloc
   }).catch((err: unknown) => ({ ok: false, detail: `Could not read your inbox: ${(err as Error).message}` }));
   await log(result.ok ? result.detail : `${result.detail} Waiting for you to enter it instead.`);
   return result.ok;
+}
+
+/**
+ * Parked on Microsoft Careers' sign-in with no Microsoft password saved: once
+ * one is, sign in with it and carry on. Never resolves if that sign-in does not
+ * get through - the person finishes it in the browser, and watchForClearance
+ * sees it.
+ */
+function signInToMicrosoftOnceSaved(
+  applicationId: string,
+  page: Page,
+  stopped: AbortSignal,
+): Promise<{ carryOn: boolean; note?: string }> {
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (stopped.aborted || !secret('MICROSOFT_ACCOUNT_PASSWORD')) return;
+      clearInterval(timer);
+      void signInWithSavedMicrosoftAccount(applicationId, page).then((ok) => {
+        if (ok && !stopped.aborted) resolve({ carryOn: true });
+      });
+    }, 1500);
+    stopped.addEventListener('abort', () => clearInterval(timer));
+  });
 }
 
 const isAccountWall = (blocker: Blocker) =>
@@ -346,11 +418,16 @@ export async function pauseForHuman(
   blocker: Blocker,
 ): Promise<boolean> {
   if (await signInWithSavedAppleId(applicationId, page, blocker)) return true;
-  if (await signInWithSavedAccount(applicationId, page, blocker)) return true;
+  // Eightfold's modal has no email or password box of its own, so the job
+  // site password has nothing to fill there; the Microsoft account does.
+  const microsoft = isAccountWall(blocker) && (await onMicrosoftSignIn(page).catch(() => false));
+  if (microsoft) {
+    if (await signInWithSavedMicrosoftAccount(applicationId, page)) return true;
+  } else if (await signInWithSavedAccount(applicationId, page, blocker)) return true;
   if (await enterEmailedCode(applicationId, page, blocker)) return true;
   // The app asks for the password in a popup; worth waiting for even on
   // autopilot, because every later account wall then clears by itself.
-  const askingForPassword = isAccountWall(blocker) && !onAppleSignIn(page) && !secret('JOB_SITE_PASSWORD');
+  const askingForPassword = isAccountWall(blocker) && !onAppleSignIn(page) && !microsoft && !secret('JOB_SITE_PASSWORD');
   if (askingForPassword) {
     await bus.emitEvent(
       applicationId,
@@ -362,7 +439,10 @@ export async function pauseForHuman(
   // Park BEFORE announcing, for the same reason as the review gate: a client
   // watching the run can see NEEDS_HUMAN and reply within microseconds, and a
   // reply that arrives before the promise exists is dropped forever.
-  if (!askingForPassword && (await isAutopilot(applicationId))) {
+  // Same for the Microsoft account: saving it in Settings finishes this run.
+  const awaitingMicrosoft = microsoft && !secret('MICROSOFT_ACCOUNT_PASSWORD');
+
+  if (!askingForPassword && !awaitingMicrosoft && (await isAutopilot(applicationId))) {
     await handOffToHuman(applicationId, page, blocker);
     throw new SetAsideError(
       'Autopilot: this needs you in the browser, so it is set aside with the tab left open. ' +
@@ -389,6 +469,7 @@ export async function pauseForHuman(
     watchForManualSubmit(page, done.signal).then((detail) => ({ carryOn: false, submitted: detail })),
   ];
   if (askingForPassword) waits.push(signInOnceSaved(applicationId, page, blocker, done.signal));
+  if (awaitingMicrosoft) waits.push(signInToMicrosoftOnceSaved(applicationId, page, done.signal));
   try {
     decision = await whileWaitingOnHuman(
       applicationId,

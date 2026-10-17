@@ -24,7 +24,8 @@ const TIMEOUT_MS = 15_000;
 /** What closed postings say on the page, across the sites seen so far. */
 const CLOSED_TEXT = [
   /no longer (?:accepting|taking) applications/i,
-  /(?:job|position|posting|opening|role|requisition|vacancy)(?: you(?:'re| are) looking for)? (?:is|has been) no longer (?:available|open|active|posted)/i,
+  /(?:job|position|posting|opening|role|requisition|vacancy)(?: you(?:'re| are) looking for)? (?:is |has been )?no longer (?:available|open|active|posted|listed)/i,
+  /(?:job|position|posting|opening|role|requisition|vacancy) (?:is )?(?:not|no longer) (?:available|found)\b(?! in your)/i,
   /(?:job|position|posting|opening|role|requisition|vacancy) (?:has|have) (?:been )?(?:closed|filled|expired|removed|archived)/i,
   /(?:job|position|posting|opening|role|requisition|vacancy) (?:is|was) (?:closed|filled|expired)/i,
   /(?:this|the) (?:job|position|posting|opening|role) (?:does not|doesn't|no longer) exists?/i,

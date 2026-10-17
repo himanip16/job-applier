@@ -61,6 +61,7 @@ export interface JobSearchReport {
   newLeads: number;
   skippedAlreadySeen: number;
   skippedTooSenior: number;
+  skippedTooJunior: number;
   /** Posted more than MAX_POSTING_AGE_DAYS ago. */
   skippedTooOld: number;
   /** Outside the country you chose to search in, and not remote. */
@@ -70,7 +71,7 @@ export interface JobSearchReport {
   /** Sales, recruiting, legal and the like - not engineering, whatever the keywords. */
   skippedWrongDomain: number;
   /** A few titles behind each of those two counts, so a filter that is too strict is visible. */
-  droppedExamples: { offPlan: string[]; wrongDomain: string[]; tooOld: string[]; tooSenior: string[]; otherCountry: string[] };
+  droppedExamples: { offPlan: string[]; wrongDomain: string[]; tooOld: string[]; tooSenior: string[]; tooJunior: string[]; otherCountry: string[] };
   /** Kept postings that did not say where they are: in the queue as "Location unknown". */
   keptUnknownLocation: number;
   /**
@@ -206,11 +207,12 @@ async function runSearch(
     newLeads: 0,
     skippedAlreadySeen: 0,
     skippedTooSenior: 0,
+    skippedTooJunior: 0,
     skippedTooOld: 0,
     skippedOtherCountry: 0,
     skippedOffPlan: 0,
     skippedWrongDomain: 0,
-    droppedExamples: { offPlan: [], wrongDomain: [], tooOld: [], tooSenior: [], otherCountry: [] },
+    droppedExamples: { offPlan: [], wrongDomain: [], tooOld: [], tooSenior: [], tooJunior: [], otherCountry: [] },
     keptUnknownLocation: 0,
     noSource: [],
     recentlyCrawled: [],
@@ -355,13 +357,14 @@ async function runSearch(
   report.keptUnknownLocation = tally.unknownLocation;
   report.skippedAlreadySeen = tally.rejected.alreadySeen;
   report.skippedTooSenior = tally.rejected.tooSenior;
+  report.skippedTooJunior = tally.rejected.tooJunior;
   report.skippedTooOld = tally.rejected.tooOld;
   report.skippedOtherCountry = tally.rejected.otherCountry;
   report.skippedOffPlan = tally.rejected.offPlan;
   report.skippedWrongDomain = tally.rejected.wrongDomain;
   report.droppedExamples = {
     offPlan: tally.examples.offPlan, wrongDomain: tally.examples.wrongDomain,
-    tooOld: tally.examples.tooOld, tooSenior: tally.examples.tooSenior, otherCountry: tally.examples.otherCountry,
+    tooOld: tally.examples.tooOld, tooSenior: tally.examples.tooSenior, tooJunior: tally.examples.tooJunior, otherCountry: tally.examples.otherCountry,
   };
   report.errors.push(...tally.errors);
   const fresh = tally.fresh;

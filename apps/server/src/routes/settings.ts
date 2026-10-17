@@ -166,7 +166,10 @@ function describe(key: SettingKey) {
     // just make the page harder to read.
     // Not even four characters of a password.
     preview:
-      key === 'JOB_SITE_PASSWORD' || key === 'EMAIL_APP_PASSWORD' || key === 'APPLE_ID_PASSWORD'
+      key === 'JOB_SITE_PASSWORD' ||
+      key === 'EMAIL_APP_PASSWORD' ||
+      key === 'APPLE_ID_PASSWORD' ||
+      key === 'MICROSOFT_ACCOUNT_PASSWORD'
         ? value
           ? '••••'
           : ''
@@ -200,7 +203,13 @@ async function verifyInbox(req: FastifyRequest, appPassword: string): Promise<{ 
 /** Does this key actually work? One real call, with a message worth reading. */
 async function verify(key: SettingKey): Promise<{ ok: boolean; detail: string }> {
   // Nothing to call: it is checked by the first account wall it meets.
-  if (key === 'JOB_SITE_PASSWORD' || key === 'APPLE_ID' || key === 'APPLE_ID_PASSWORD') {
+  if (
+    key === 'JOB_SITE_PASSWORD' ||
+    key === 'APPLE_ID' ||
+    key === 'APPLE_ID_PASSWORD' ||
+    key === 'MICROSOFT_ACCOUNT' ||
+    key === 'MICROSOFT_ACCOUNT_PASSWORD'
+  ) {
     return { ok: true, detail: 'Saved.' };
   }
   try {

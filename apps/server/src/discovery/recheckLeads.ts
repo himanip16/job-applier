@@ -29,7 +29,7 @@ import { API_SOURCES, sourceById, type DiscoveredJob } from './sources/index.js'
 export interface RecheckReport {
   checked: number;
   removed: number;
-  removedBy: { tooOld: number; wrongDomain: number; tooSenior: number; otherCountry: number; closed: number; overCap: number };
+  removedBy: { tooOld: number; wrongDomain: number; tooSenior: number; tooJunior: number; otherCountry: number; closed: number; overCap: number };
   /** Undecided leads kept per company. */
   maxPerCompany: number;
   /** Boards that could not be read; their leads were checked one by one instead. */
@@ -56,7 +56,7 @@ export async function recheckLeads(profileId: string, opts: { country?: Country;
   const report: RecheckReport = {
     checked: leads.length,
     removed: 0,
-    removedBy: { tooOld: 0, wrongDomain: 0, tooSenior: 0, otherCountry: 0, closed: 0, overCap: 0 },
+    removedBy: { tooOld: 0, wrongDomain: 0, tooSenior: 0, tooJunior: 0, otherCountry: 0, closed: 0, overCap: 0 },
     maxPerCompany: MAX_LEADS_PER_COMPANY,
     unreachable: [],
     unknown: 0,
@@ -77,7 +77,7 @@ export async function recheckLeads(profileId: string, opts: { country?: Country;
       postedAt: lead.postedAt ?? undefined,
     };
     const rejection = screen(job, { country: opts.country, openToIndia: opts.openToIndia });
-    if (rejection === 'tooOld' || rejection === 'wrongDomain' || rejection === 'tooSenior' || rejection === 'otherCountry') {
+    if (rejection === 'tooOld' || rejection === 'wrongDomain' || rejection === 'tooSenior' || rejection === 'tooJunior' || rejection === 'otherCountry') {
       report.removedBy[rejection]++;
       doomed.push(lead.id);
     } else {

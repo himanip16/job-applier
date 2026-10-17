@@ -1,8 +1,9 @@
 import { locatedIn, type Country } from '@ja/shared';
 import { prisma } from '../lib/db.js';
+import { decidedPostings, sameJobKey } from './alreadyDecided.js';
 import type { DeepScoreEntry } from './deepScore.js';
 import { isSeniorLevel, isStale, requiresMoreThan5YearsExperience } from './jobFilters.js';
-import { openToIndia, wrongDomain } from './leadCleanup.js';
+import { isJuniorRole, openToIndia, wrongDomain } from './leadCleanup.js';
 import { canonicalUrl } from './jobSearchUtils.js';
 import { type ScoringContext, scoreLexically, serialiseReasons } from './scoring.js';
 import { jobMatchesPlan } from './searchQueries.js';
@@ -18,7 +19,7 @@ import type { DiscoveredJob } from './sources/index.js';
  */
 
 /** Why a posting was turned away, for the run's report. */
-export type Rejection = 'tooOld' | 'wrongDomain' | 'tooSenior' | 'otherCountry' | 'offPlan' | 'alreadySeen';
+export type Rejection = 'tooOld' | 'wrongDomain' | 'tooSenior' | 'tooJunior' | 'otherCountry' | 'offPlan' | 'alreadySeen';
 
 export interface IntakeRules {
   /** Only postings in this country (or remote and open to it). */
@@ -38,6 +39,8 @@ export function screen(job: DiscoveredJob, rules: IntakeRules): Exclude<Rejectio
   // Sales engineers, recruiters, Workday configurators: not this job, whatever the keywords say.
   if (wrongDomain(job.title)) return 'wrongDomain';
   if (isSeniorLevel(job.title) || requiresMoreThan5YearsExperience(job.descriptionText)) return 'tooSenior';
+  // Internships and graduate schemes: years past them.
+  if (isJuniorRole(job.title)) return 'tooJunior';
   if (rules.roleTitles && !jobMatchesPlan(job, rules.roleTitles)) return 'offPlan';
   // A board lists every office. You asked for one country.
   if (rules.country && !locatedIn(job.location, job.remote, rules.country)) return 'otherCountry';
@@ -63,8 +66,8 @@ export const emptyTally = (): IntakeTally => ({
   saved: 0,
   relevant: 0,
   unknownLocation: 0,
-  rejected: { tooOld: 0, wrongDomain: 0, tooSenior: 0, otherCountry: 0, offPlan: 0, alreadySeen: 0 },
-  examples: { tooOld: [], wrongDomain: [], tooSenior: [], otherCountry: [], offPlan: [], alreadySeen: [] },
+  rejected: { tooOld: 0, wrongDomain: 0, tooSenior: 0, tooJunior: 0, otherCountry: 0, offPlan: 0, alreadySeen: 0 },
+  examples: { tooOld: [], wrongDomain: [], tooSenior: [], tooJunior: [], otherCountry: [], offPlan: [], alreadySeen: [] },
   errors: [],
   fresh: [],
 });
@@ -88,11 +91,19 @@ export interface Intake {
   scoring: ScoringContext;
   /** Canonical URLs already in the queue, decided or not. Grows as leads are saved. */
   known: Set<string>;
+  /** sameJobKey of postings dismissed, saved or applied to, under whatever URL. */
+  decidedJobs: Set<string>;
 }
 
 export async function openIntake(profileId: string, rules: IntakeRules, scoring: ScoringContext): Promise<Intake> {
-  const rows = await prisma.jobLead.findMany({ where: { profileId }, select: { url: true } });
-  return { profileId, rules, scoring, known: new Set(rows.map((l) => canonicalUrl(l.url))) };
+  const [rows, decided] = await Promise.all([
+    prisma.jobLead.findMany({ where: { profileId }, select: { url: true } }),
+    decidedPostings(profileId),
+  ]);
+  const known = new Set(rows.map((l) => canonicalUrl(l.url)));
+  // Includes runs started from a pasted URL, which never had a lead.
+  for (const url of decided.urls) known.add(url);
+  return { profileId, rules, scoring, known, decidedJobs: decided.jobs };
 }
 
 /**
@@ -128,6 +139,11 @@ export async function admit(
     intake.known.add(canonical);
 
     const named: DiscoveredJob = { ...job, companyName: company.name || job.companyName };
+    // The same role re-listed under a new link, or found on another board.
+    if (intake.decidedJobs.has(sameJobKey(named.companyName, job.title))) {
+      tally.rejected.alreadySeen++;
+      continue;
+    }
     const lex = scoreLexically(named, intake.scoring);
     try {
       const lead = await prisma.jobLead.create({

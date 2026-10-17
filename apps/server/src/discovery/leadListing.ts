@@ -1,5 +1,6 @@
 import { citiesIn, countryByCode, locatedIn } from '@ja/shared';
 import { prisma, type Prisma } from '../lib/db.js';
+import { decidedPostings, isDecided } from './alreadyDecided.js';
 import { isSeniorLevel, requiredExperience, requiresMoreThan5YearsExperience } from './jobFilters.js';
 import { screen } from './leadIntake.js';
 import { API_SOURCES } from './sources/index.js';
@@ -118,14 +119,17 @@ export async function listLeads(profileId: string, query: LeadListQuery) {
   }
 
   const waiting = query.status === 'NEW';
-  const rows = await prisma.jobLead.findMany({
-    where,
-    orderBy: [{ score: 'desc' }, { discoveredAt: 'desc' }, { id: 'asc' }],
-    select: {
-      id: true, title: true, companyName: true, location: true, remote: true, score: true,
-      postedAt: true, discoveredAt: true, descriptionText: waiting || query.excludeSenior || query.maxYears !== undefined,
-    },
-  });
+  const [rows, decided] = await Promise.all([
+    prisma.jobLead.findMany({
+      where,
+      orderBy: [{ score: 'desc' }, { discoveredAt: 'desc' }, { id: 'asc' }],
+      select: {
+        id: true, url: true, title: true, companyName: true, location: true, remote: true, score: true,
+        postedAt: true, discoveredAt: true, descriptionText: waiting || query.excludeSenior || query.maxYears !== undefined,
+      },
+    }),
+    waiting ? decidedPostings(profileId) : null,
+  ]);
 
   // ---- the rest ----------------------------------------------------------------
   const directory = companyDirectory();
@@ -139,6 +143,9 @@ export async function listLeads(profileId: string, query: LeadListQuery) {
     // engineering, asking for more than five years, or past three months are
     // hidden, including leads saved before a rule existed. Nothing is deleted
     // here; "Re-check listed jobs" removes them for good.
+    // Already dismissed, saved or applied to under another link (or saved
+    // before intake checked for that): not something waiting on a decision.
+    if (decided && isDecided(decided, r)) return false;
     if (waiting && screen({ ...r, url: '', ats: '', location: r.location ?? undefined, descriptionText: r.descriptionText ?? '', postedAt: r.postedAt ?? undefined }, {})) return false;
     if (query.maxYears !== undefined && (requiredExperience(r.descriptionText)?.min ?? 0) > query.maxYears) return false;
     const f = facts(r.companyName);

@@ -12,6 +12,7 @@ import { matchOption, findDeclineOption } from './optionMatch.js';
 import { inferAnswers, type Inference } from '../llm/inferAnswer.js';
 import { generateEssayAnswer } from '../llm/coverLetter.js';
 import { answerFromHistory, degreeLevel } from './repeatableSections.js';
+import { convertSalaries } from './salaryCurrency.js';
 
 export type Resolution =
   | { kind: 'answer'; answer: ResolvedAnswer }
@@ -63,6 +64,7 @@ export async function resolveFields(
     }
   }
   splitCountryCode(fields, out, ctx.profile.countryCode);
+  await convertSalaries(fields, out, { jobDescription: ctx.jobDescription, profileCountry: ctx.profile.country });
   // Callers read the plan in form order.
   return new Map(fields.map((f) => [f.id, out.get(f.id)!]));
 }
@@ -247,6 +249,26 @@ async function resolveWithoutModel(field: FormField, ctx: ResolveContext): Promi
           },
         };
       }
+    }
+  }
+
+  // 3a. The expected CTC saved on the profile page, when no fact says otherwise.
+  if (key === 'compensation.expectation' && ctx.profile.expectedCTC?.trim()) {
+    const shaped = shapeForField(ctx.profile.expectedCTC, field);
+    if (shaped) {
+      return {
+        kind: 'answer',
+        answer: {
+          fieldId: field.id,
+          value: shaped.value,
+          displayValue: shaped.display,
+          source: 'PROFILE',
+          confidence: 1,
+          rationale: `From your profile (expected CTC: ${ctx.profile.expectedCTC}).`,
+          remember: false,
+          canonicalKey: key,
+        },
+      };
     }
   }
 

@@ -17,6 +17,7 @@ export interface CrawlReport {
   newLeads: number;
   skippedAlreadyDecided: number;
   skippedTooSenior: number;
+  skippedTooJunior: number;
   /** Posted more than MAX_POSTING_AGE_DAYS ago. */
   skippedTooOld: number;
   /** Outside the country you chose, and not remote. */
@@ -55,6 +56,7 @@ export async function crawlAll(
     newLeads: 0,
     skippedAlreadyDecided: 0,
     skippedTooSenior: 0,
+    skippedTooJunior: 0,
     skippedTooOld: 0,
     skippedOtherCountry: 0,
     deepScored: 0,
@@ -98,6 +100,7 @@ export async function crawlAll(
   report.newLeads = tally.saved;
   report.skippedAlreadyDecided = tally.rejected.alreadySeen;
   report.skippedTooSenior = tally.rejected.tooSenior;
+  report.skippedTooJunior = tally.rejected.tooJunior;
   report.skippedTooOld = tally.rejected.tooOld;
   report.skippedOtherCountry = tally.rejected.otherCountry;
   report.errors.push(...tally.errors.map((e) => ({ company: e.where, error: e.error })));

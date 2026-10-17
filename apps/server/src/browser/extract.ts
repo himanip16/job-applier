@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import { matchCanonical, type FieldOption, type FormField } from '@ja/shared';
 import { evaluatePage } from './evaluate.js';
+import { optionText } from './fill.js';
 
 /**
  * Raw, DOM-level description of one control, produced inside the page.
@@ -133,8 +134,25 @@ const EXTRACTOR = () => {
    */
   const CAPTION_SELECTOR = 'label, legend, [class*="label"]';
 
+  /**
+   * textContent, but reading a <slot> as what is slotted into it. The `spl-*`
+   * components draw `<label for>` in a shadow root with the question projected
+   * in through `<slot name="label-content">`, so the label's own textContent
+   * is just its "*" - and SmartRecruiters' screening questions all came out
+   * nameless.
+   */
+  const flatText = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
+    if (node instanceof HTMLSlotElement) {
+      const assigned = node.assignedNodes({ flatten: true });
+      if (assigned.length) return assigned.map(flatText).join('');
+    }
+    if (node instanceof Element && /^(STYLE|SCRIPT)$/.test(node.tagName)) return '';
+    return Array.from(node.childNodes).map(flatText).join('');
+  };
+
   const textOf = (el: Element | null): string =>
-    (el?.textContent ?? '')
+    (el ? flatText(el) : '')
       .replace(/\s+/g, ' ')
       .trim()
       .replace(REQUIRED_MARK, '')
@@ -461,6 +479,33 @@ const EXTRACTOR = () => {
       });
     });
 
+    // SmartRecruiters' screening questions draw yes/no as `spl-radio-group >
+    // spl-radio[role=radio]`: custom elements with no input behind them, so
+    // the sweep below never saw the work-authorisation and sponsorship
+    // questions and Submit was refused. The option text is each radio's
+    // `label` attribute; the question is the group's slotted <label>.
+    deepAll(root, 'spl-radio-group').forEach((group) => {
+      const radios = Array.from(group.querySelectorAll<HTMLElement>(':scope > spl-radio'));
+      const r = group.getBoundingClientRect();
+      if (radios.length < 2 || (r.width === 0 && r.height === 0)) return;
+      const handle = mark(group);
+      group.setAttribute('data-ja-group', handle);
+      results.push({
+        handle,
+        name: group.getAttribute('name') || group.id || '',
+        tag: 'spl-radio-group', type: 'button-group',
+        kind: 'RADIO',
+        widget: 'button-group',
+        label: textOf(group.shadowRoot?.querySelector('label') ?? null) || captionAbove(group),
+        helpText: '',
+        required: group.hasAttribute('required') || isRequired(group),
+        options: radios
+          .map((b) => ({ label: (b.getAttribute('label') ?? '').trim() || textOf(b) }))
+          .filter((o) => o.label),
+        groupHandle: handle,
+      });
+    });
+
     // ---- SuccessFactors attachments -----------------------------------------
     // "Resume / CV" and "Cover Letter" are a "+" icon that opens an upload
     // dialog; there is no file input on the page until it is pressed, so the
@@ -718,7 +763,8 @@ const EXTRACTOR = () => {
       const sfPicklist = !!el.closest('.sfCascadingPicklist');
       if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox' || sfPicklist) {
         const multi = !!el.closest(
-          '.select__value-container--is-multi, [class*="is-multi"], .cx-multi-select-container',
+          // SmartRecruiters' "select all that apply" is spl-multiselect-autocomplete.
+          '.select__value-container--is-multi, [class*="is-multi"], .cx-multi-select-container, .c-spl-multiselect-autocomplete-input',
         );
         results.push({
           handle: mark(el),
@@ -840,7 +886,7 @@ async function harvestOptions(page: Page, selector: string, max: number): Promis
     const count = Math.min(await options.count(), max);
     const out: FieldOption[] = [];
     for (let i = 0; i < count; i++) {
-      const label = (await options.nth(i).innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+      const label = (await optionText(options.nth(i))).replace(/\s+/g, ' ').trim();
       if (label) out.push({ label });
     }
     return out;

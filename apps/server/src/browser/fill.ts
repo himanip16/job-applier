@@ -9,6 +9,8 @@ export class FillError extends Error {
     message: string,
     readonly field: FormField,
     readonly recoverable = true,
+    /** The options the list did show, when it had none for the answer. */
+    readonly seen: string[] = [],
   ) {
     super(message);
     this.name = 'FillError';
@@ -419,7 +421,7 @@ async function fillReactSelect(page: Page, field: FormField, value: string | str
  * role="option" div inside a shadow root whose text arrives through a
  * <slot>, so their innerText is empty and the words are the slot's.
  */
-async function optionText(opt: Locator): Promise<string> {
+export async function optionText(opt: Locator): Promise<string> {
   return opt
     .evaluate((el) => {
       const own = (el as HTMLElement).innerText?.trim();
@@ -437,11 +439,14 @@ async function optionText(opt: Locator): Promise<string> {
  * Oracle's `cx-select` lists its options as `[role=gridcell]` rows of a
  * `role=grid` it controls. Only counted inside the control's own list, so no
  * other grid on the page is mistaken for options.
+ *
+ * Lever's location search draws plain `<div class="dropdown-location">` rows,
+ * with no role at all.
  */
-const OPTION = '[role="option"]:visible, .select__option:visible';
+const OPTION = '[role="option"]:visible, .select__option:visible, .dropdown-location:visible';
 const OWNED_OPTION = `${OPTION}, [role="gridcell"]:visible`;
 
-async function waitForOption(page: Page, field: FormField, want: string): Promise<Locator | null> {
+async function waitForOption(page: Page, field: FormField, want: string, offered?: string[]): Promise<Locator | null> {
   // This dropdown's own menu, and only what is visible in it. Greenhouse keeps
   // the phone field's 240-country list in the DOM, hidden, at all times; a
   // page-wide lookup found that first, waited for it to show, and reported
@@ -490,7 +495,10 @@ async function waitForOption(page: Page, field: FormField, want: string): Promis
     stableReads = seen === last ? stableReads + 1 : 0;
     last = seen;
     // About a second unchanged: this is the list, and the answer is not in it.
-    if (stableReads >= 3 || Date.now() > deadline) return null;
+    if (stableReads >= 3 || Date.now() > deadline) {
+      offered?.push(...optionData.map((o) => o.label));
+      return null;
+    }
     await page.waitForTimeout(300);
   }
 }
@@ -549,11 +557,64 @@ async function fillWorkdayPrompt(page: Page, field: FormField, saved: string, ad
       }
     }
   }
+  // Not every tenant's search reaches into the tree: PayPal's "How Did You
+  // Hear About Us?" found nothing for "LinkedIn" twice and the run stopped on
+  // a required field. Open each category, as a person would, and look there.
+  const browsed = await workdayBrowse(page, field, want, took);
+  if (browsed === true) return;
+  if (browsed.length) seen = browsed;
   await page.keyboard.press('Escape').catch(() => {});
   throw new FillError(
     `Could not find option "${want}" for ${field.label}${seen.length ? ` (saw: ${seen.slice(0, 8).join(', ')})` : ''}`,
     field,
+    true,
+    seen,
   );
+}
+
+/**
+ * Walk a Workday prompt's categories one level down for `want`. True when it
+ * was picked; otherwise every option seen on the way, for the error.
+ */
+async function workdayBrowse(
+  page: Page,
+  field: FormField,
+  want: string,
+  took: (option?: string) => Promise<boolean>,
+): Promise<true | string[]> {
+  const input = page.locator(field.selector).first();
+  const reopen = async (): Promise<string[]> => {
+    await page.keyboard.press('Escape').catch(() => {});
+    await input.click({ timeout: FIELD_TIMEOUT_MS }).catch(() => {});
+    await input.fill('').catch(() => {});
+    await page.waitForTimeout(500);
+    return workdayOptions(page);
+  };
+  const top = await reopen();
+  const all = [...top];
+  const pick = async (labels: string[]): Promise<boolean> => {
+    const hit = bestOption(labels.map((label) => ({ label })), want);
+    if (!hit) return false;
+    await page.locator(`[data-ja-opt="${labels.indexOf(hit.label)}"]`).click({ timeout: FIELD_TIMEOUT_MS });
+    await page.waitForTimeout(400);
+    return took(hit.label);
+  };
+  if (await pick(top)) return true;
+  // Only categories are opened: clicking a leaf would answer the question.
+  // A dozen is past any real source list; past that this is not a tree.
+  const categories = (await workdayCategories(page)).slice(0, 12);
+  for (const category of categories) {
+    const labels = await reopen();
+    const at = labels.indexOf(category);
+    if (at < 0) continue;
+    await page.locator(`[data-ja-opt="${at}"]`).click({ timeout: FIELD_TIMEOUT_MS }).catch(() => {});
+    await page.waitForTimeout(500);
+    const inside = await workdayOptions(page);
+    if (inside.join('|') === labels.join('|')) continue;
+    all.push(...inside.filter((l) => !all.includes(l)));
+    if (await pick(inside)) return true;
+  }
+  return all;
 }
 
 /**
@@ -598,10 +659,16 @@ async function fillWorkdayDropdown(page: Page, field: FormField, want: string): 
   if (showsChosenOption(field, want, normalizeLabel(await button.innerText().catch(() => '')))) return;
   await button.scrollIntoViewIfNeeded().catch(() => {});
   await button.click({ timeout: FIELD_TIMEOUT_MS });
-  const option = await waitForOption(page, field, want);
+  const seen: string[] = [];
+  const option = await waitForOption(page, field, want, seen);
   if (!option) {
     await page.keyboard.press('Escape').catch(() => {});
-    throw new FillError(`Could not find option "${want}" for ${field.label}`, field);
+    throw new FillError(
+      `Could not find option "${want}" for ${field.label}${seen.length ? ` (saw: ${seen.slice(0, 8).join(', ')})` : ''}`,
+      field,
+      true,
+      seen,
+    );
   }
   await option.click();
   await page.waitForTimeout(200);
@@ -634,6 +701,26 @@ async function workdayOptions(page: Page): Promise<string[]> {
       }
       return labels;
     }, open)
+    .catch(() => []);
+}
+
+/**
+ * The stamped options that open a level below rather than choose: Workday
+ * draws a right chevron on them and marks the row as having a popup.
+ */
+async function workdayCategories(page: Page): Promise<string[]> {
+  return page
+    .evaluate(() => {
+      const out: string[] = [];
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-ja-opt]'))) {
+        const row = el.closest<HTMLElement>('[role="option"], [data-automation-id="menuItem"]') ?? el;
+        const opens =
+          row.getAttribute('aria-haspopup') === 'true' ||
+          !!row.querySelector('[class*="chevron-right"], [data-automation-id="promptIcon"]');
+        if (opens) out.push((el.getAttribute('data-automation-label') ?? el.innerText).replace(/\s+/g, ' ').trim());
+      }
+      return out;
+    })
     .catch(() => []);
 }
 
@@ -717,10 +804,19 @@ async function fillRadioGroup(page: Page, field: FormField, want: string): Promi
   throw new FillError(`No radio option "${want}" under ${field.label}`, field);
 }
 
-/** A toggle group's buttons: Ashby's `aria-pressed` ones, or Oracle's radio pills. */
-const GROUP_BUTTONS = ':scope > button[aria-pressed], :scope > li > button[role="radio"]';
+/**
+ * A toggle group's buttons: Ashby's `aria-pressed` ones, Oracle's radio pills,
+ * or SmartRecruiters' `spl-radio` elements.
+ */
+const GROUP_BUTTONS =
+  ':scope > button[aria-pressed], :scope > li > button[role="radio"], :scope > spl-radio';
 const GROUP_PRESSED =
-  ':scope > button[aria-pressed="true"], :scope > li > button[role="radio"][aria-checked="true"]';
+  ':scope > button[aria-pressed="true"], :scope > li > button[role="radio"][aria-checked="true"], :scope > spl-radio[aria-checked="true"]';
+
+/** A toggle button's option text. `spl-radio` draws it in a shadow root, so its innerText is empty. */
+async function groupButtonText(button: Locator): Promise<string> {
+  return (await button.getAttribute('label'))?.trim() || (await button.innerText());
+}
 
 /** Yes/no toggles: press the button whose text is the answer. */
 async function fillButtonGroup(page: Page, field: FormField, want: string): Promise<void> {
@@ -729,7 +825,7 @@ async function fillButtonGroup(page: Page, field: FormField, want: string): Prom
   const count = await buttons.count();
   for (let i = 0; i < count; i++) {
     const button = buttons.nth(i);
-    if (normalizeLabel(await button.innerText()) === target) {
+    if (normalizeLabel(await groupButtonText(button)) === target) {
       const on = (await button.getAttribute('aria-pressed')) === 'true' || (await button.getAttribute('aria-checked')) === 'true';
       if (!on) await button.click();
       return;
@@ -962,13 +1058,19 @@ export async function verifyFilled(
 
   try {
     if (field.widget === 'react-select') {
-      // SuccessFactors shows the choice as the box's own value and submits a
-      // hidden id beside it. Words typed but never picked fill the box and
-      // leave the id empty, so both have to agree.
+      // SuccessFactors and Lever's location show the choice as the box's own
+      // value and submit a hidden id beside it. Words typed but never picked
+      // fill the box and leave the id empty, so both have to agree. Lever
+      // shows "Patna, Bihar, IND" for "Patna, Bihar, India", so the shown
+      // text is matched the way an option would be.
       const sf = await sfPicklistState(page, field);
       if (sf) {
         const shown = normalizeLabel(sf.shown);
-        const ok = sf.picked && wants.every((w) => shown === normalizeLabel(w) || showsChosenOption(field, w, shown));
+        const ok =
+          sf.picked &&
+          wants.every(
+            (w) => shown === normalizeLabel(w) || showsChosenOption(field, w, shown) || !!bestOption([{ label: sf.shown }], w),
+          );
         return { ok, actual: sf.picked ? sf.shown : '' };
       }
       // The chosen value renders as text in the control, not as input.value.
@@ -991,7 +1093,10 @@ export async function verifyFilled(
     }
     if (field.widget === 'workday-prompt') {
       const shown = await workdaySelection(page, field);
-      return { ok: wants.every((w) => workdayShows(workdayPlain(w) || w, shown)), actual: shown };
+      // The chosen items, not the screen reader's status around them: an empty
+      // box reads "0 items selected", and after a pause for you that was kept
+      // as your answer to Field of Study and Skills, which were then left empty.
+      return { ok: wants.every((w) => workdayShows(workdayPlain(w) || w, shown)), actual: workdayPlain(shown) };
     }
     if (field.widget === 'workday-dropdown') {
       const shown = normalizeLabel(await page.locator(field.selector).first().innerText().catch(() => ''));
@@ -1000,7 +1105,7 @@ export async function verifyFilled(
     if (field.widget === 'button-group') {
       const pressed = page.locator(field.selector).first().locator(GROUP_PRESSED);
       const labels: string[] = [];
-      for (let i = 0; i < (await pressed.count()); i++) labels.push(normalizeLabel(await pressed.nth(i).innerText()));
+      for (let i = 0; i < (await pressed.count()); i++) labels.push(normalizeLabel(await groupButtonText(pressed.nth(i))));
       return { ok: wants.every((w) => labels.includes(w)), actual: labels.join(', ') };
     }
     if (field.widget === 'radio-group' || field.widget === 'checkbox-group') {
@@ -1085,7 +1190,7 @@ export async function readShown(page: Page, field: FormField): Promise<string[] 
     if (field.widget === 'button-group') {
       const pressed = el.locator(GROUP_PRESSED);
       const labels: string[] = [];
-      for (let i = 0; i < (await pressed.count()); i++) labels.push(await pressed.nth(i).innerText());
+      for (let i = 0; i < (await pressed.count()); i++) labels.push(await groupButtonText(pressed.nth(i)));
       return asOptions(labels);
     }
     if (field.widget === 'react-select') {
@@ -1127,12 +1232,21 @@ async function byNameInRow(page: Page, field: FormField): Promise<Locator> {
 }
 
 /** The text shown in the smallest box around one control, without the next question's. */
-/** A SuccessFactors picklist's shown text, and whether its hidden value is set. */
+/**
+ * A SuccessFactors picklist's or Lever location's shown text, and whether its
+ * hidden value is set.
+ */
 async function sfPicklistState(page: Page, field: FormField): Promise<{ shown: string; picked: boolean } | null> {
   return page
     .locator(field.selector)
     .first()
     .evaluate((el) => {
+      // <input id="location-input"><input type="hidden" name="selectedLocation">
+      // Lever empties both on blur unless a search result was picked.
+      const lever = el.parentElement?.querySelector('input[type="hidden"][name="selectedLocation"]');
+      if (lever instanceof HTMLInputElement) {
+        return { shown: (el as HTMLInputElement).value.trim(), picked: Boolean(lever.value) };
+      }
       const shell = el.closest('.sfCascadingPicklist')?.parentElement;
       if (!shell) return null;
       // <div id="picklist_country">...</div><input type="hidden" id="tor__fcountry">
@@ -1149,6 +1263,15 @@ async function shownAroundControl(page: Page, field: FormField): Promise<string>
     .first()
     .evaluate((input) => {
       const own = (input as HTMLInputElement).value?.trim();
+      // SmartRecruiters' multi-select shows each pick as an spl-tag in the
+      // tags list's shadow root, its words in a `label` attribute.
+      const tags = input.closest('spl-tags-list')?.shadowRoot?.querySelectorAll('spl-tag');
+      if (tags?.length) {
+        return Array.from(tags)
+          .map((t) => t.getAttribute('label')?.trim() ?? '')
+          .filter(Boolean)
+          .join(', ');
+      }
       // Oracle's single-choice cx-select: the box around the input holds its
       // caption ("Country code"), the choice is the input's own value.
       if (input.closest('.cx-select-container')) return own ?? '';

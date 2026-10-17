@@ -24,6 +24,17 @@ import { generate } from '../llm/client.js';
  *   oc-experience > [data-test=experience] … oc-experience-entry*, oc-button[data-test=add-experience]
  *   oc-education  > [data-test=education]  … oc-education-entry*,  oc-button[data-test=add-education]
  *
+ * Oracle Recruiting Cloud lists saved entries as tiles and opens one inline
+ * editor at a time from its "Add Education" / "Add Experience" button; the
+ * editor closes with its own Save. Its blocks carry no stable name, so the
+ * Oracle adapter tags each container with `data-ja-rows` from the block's
+ * title:
+ *
+ *   [data-ja-rows] … article.apply-flow-profile-item-tile*, .profile-item-content, button.apply-flow-profile-item-tile__new-tile
+ *
+ * With one editor at a time, a pass adds a single entry: enough for a
+ * required block, and the rest are on the resume.
+ *
  * Every row reuses the same labels ("Company name", "Title", ...), so without
  * help the model sees three identical questions and fills the most recent
  * role into all of them. Two things fix that: add rows until there is one per
@@ -39,30 +50,34 @@ export type SectionKind = 'employment' | 'education';
 const SECTIONS: Record<SectionKind, { container: string; title: string }> = {
   employment: {
     container:
-      '.employment--container, [role="group"][aria-labelledby="Work-Experience-section"], oc-experience > [data-test="experience"]',
+      '.employment--container, [role="group"][aria-labelledby="Work-Experience-section"], oc-experience > [data-test="experience"], ' +
+      '[data-ja-rows="employment"]',
     title: 'Employment',
   },
   education: {
     container:
-      '.education--container, [role="group"][aria-labelledby="Education-section"], oc-education > [data-test="education"]',
+      '.education--container, [role="group"][aria-labelledby="Education-section"], oc-education > [data-test="education"], ' +
+      '[data-ja-rows="education"]',
     title: 'Education',
   },
 };
 
 /**
  * Greenhouse's trailing button, Workday's inside its own wrapper (which holds
- * no input), or SmartRecruiters' "Add" web component.
+ * no input), SmartRecruiters' "Add" web component, or Oracle's "Add ..."
+ * button (disabled while its editor is open).
  */
 const ADD_ANOTHER =
   ':scope > button.add-another-button, :scope > :not(:has(input)) button[data-automation-id="add-button"], ' +
-  'oc-button[data-test^="add-"] spl-button';
+  'oc-button[data-test^="add-"] spl-button, button.apply-flow-profile-item-tile__new-tile:not(:disabled)';
 
 /**
  * Rows that are their own element, wherever they sit in the container.
  * Without one, a row is a direct child holding an input (Greenhouse, Workday);
  * SmartRecruiters' inputs are all in shadow roots, so that test sees none.
+ * Oracle's saved tiles hold no input at all, and its open editor is a row too.
  */
-const ROW = 'oc-experience-entry, oc-education-entry';
+const ROW = 'oc-experience-entry, oc-education-entry, article.apply-flow-profile-item-tile, .profile-item-content';
 
 /** More than this is a runaway loop, not a career. */
 const MAX_ROWS = 10;

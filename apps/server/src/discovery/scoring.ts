@@ -4,7 +4,8 @@ import { candidateRejections } from './decisionHistory.js';
 import { prisma, type Prisma } from '../lib/db.js';
 import { generate, describeLlmError } from '../llm/client.js';
 import type { DiscoveredJob } from './sources/index.js';
-import { wrongDomain } from './leadCleanup.js';
+import { levelMismatch, wrongDomain } from './leadCleanup.js';
+import { candidateConstraints, entryLevelVerdict, isEntryLevelTitle } from './hardRules.js';
 
 /**
  * Ranking leads, and learning to rank them better.
@@ -85,7 +86,26 @@ const STOP_TERMS = new Set([
   'qualifications', 'preferred', 'plus', 'excellent', 'communication', 'collaborate',
   'collaboration', 'stakeholders', 'deliver', 'delivery', 'drive', 'impact', 'problems',
   'solve', 'systems', 'system', 'design', 'implementation', 'implement', 'features', 'feature',
+  // The equal-opportunity footer, and the EEO answers saved as profile facts.
+  // "disability" and "live" put a 2026 new-grad role at 100% for a working
+  // engineer: the posting and the profile agreed about the legal boilerplate.
+  'disability', 'disabilities', 'disabled', 'veteran', 'veterans', 'gender', 'race', 'ethnicity',
+  'ethnic', 'religion', 'religious', 'orientation', 'sexual', 'sex', 'national', 'origin',
+  'equal', 'employer', 'accommodation', 'accommodations', 'protected', 'status', 'marital',
+  'pregnancy', 'age', 'identity', 'expression', 'live', 'lives', 'living',
+  // Recruiting adjectives. Every posting is dedicated, passionate and
+  // fast-paced, so they gather learned weight from whatever you apply to and
+  // then lift everything else that says them.
+  'dedicated', 'passionate', 'growth', 'grow', 'exciting', 'fast', 'paced', 'innovative',
+  'driven', 'committed', 'mission', 'culture', 'opportunities', 'growing', 'dynamic',
 ]);
+
+/**
+ * A word that can say what a job is. Bare numbers cannot: "2026" is on every
+ * resume as a date and in every new-grad title as a class year, and matching
+ * one to the other is what made a graduate role look like a perfect fit.
+ */
+const countable = (term: string) => !STOP_TERMS.has(term) && !/^\d+$/.test(term);
 
 /**
  * A title that names a technical role. An engineer's resume shares plenty of
@@ -94,6 +114,19 @@ const STOP_TERMS = new Set([
  */
 const TECH_TITLE =
   /engineer|developer|software|\bsde\b|back[- ]?end|front[- ]?end|full[- ]?stack|platform|devops|\bsre\b|reliability|infrastructure|\bdata\b|machine learning|\bml\b|\bai\b|architect|programmer|technical|technology|security|cloud|mobile|\bios\b|android|\bqa\b|\btest|automation|systems|kubernetes|golang|java|python|scientist/i;
+
+/**
+ * A title that is only frontend. Full-stack and backend titles are left alone:
+ * those are the candidate's job with some UI in it, not a different one.
+ */
+const FRONTEND_TITLE = /\b(front[- ]?end|ui engineer|ui developer|web ui)\b/i;
+const SPANS_BACKEND = /\b(full[- ]?stack|back[- ]?end)\b/i;
+
+/**
+ * The most a frontend role scores for a backend candidate. Engineering, and
+ * a job they could do, but a step sideways: worth a look, never a top match.
+ */
+const FRONTEND_CAP = 60;
 
 /** The most a non-technical title can score for a technical candidate. */
 const OFF_ROLE_CAP = 20;
@@ -105,7 +138,7 @@ function jobTermWeights(
   const title = new Map<string, number>();
   const body = new Map<string, number>();
   const add = (into: Map<string, number>, term: string, n: number) => {
-    if (STOP_TERMS.has(term)) return;
+    if (!countable(term)) return;
     into.set(term, (into.get(term) ?? 0) + n);
   };
 
@@ -158,7 +191,7 @@ export function profileVocabulary(profile: {
     profile.summary ?? '',
     ...(profile.facts ?? []).map((f) => f.value),
   ].join('\n');
-  return new Set(tokenize(normalizeLabel(text)).filter((t) => !STOP_TERMS.has(t)));
+  return new Set(tokenize(normalizeLabel(text)).filter(countable));
 }
 
 /** Everything the cheap pass needs, loaded once per crawl rather than per job. */
@@ -169,6 +202,14 @@ export interface ScoringContext {
   vocabulary: Set<string>;
   /** The resume is an engineer's: non-technical titles are capped, not ranked on shared words. */
   technical?: boolean;
+  /**
+   * The resume is a backend engineer's: frontend-only titles are capped. A
+   * backend resume mentions TypeScript and "frontend" in passing, so word
+   * overlap ranked a Frontend Engineer role at 100%.
+   */
+  backend?: boolean;
+  /** Years of experience, so new-grad and intern titles are capped for someone who works. */
+  candidateYears?: number | null;
 }
 
 export async function loadScoringContext(profileId: string): Promise<ScoringContext> {
@@ -181,6 +222,8 @@ export async function loadScoringContext(profileId: string): Promise<ScoringCont
     signals,
     vocabulary: profile ? profileVocabulary(profile) : new Set(),
     technical: /\b(software|backend|back-end|frontend|full[- ]?stack|engineer|developer|sde)\b/i.test(text),
+    backend: /\bback[- ]?end\b/i.test(text),
+    candidateYears: profile ? candidateConstraints(profile).candidateYears : null,
   };
 }
 
@@ -204,6 +247,8 @@ export interface LexicalScore {
    * so is better than voting 50 on everything.
    */
   confidence: number;
+  /** Why the score was held down regardless of the words, when it was. */
+  capped?: { tag: string; reason: string };
 }
 
 /**
@@ -216,6 +261,26 @@ export interface LexicalScore {
  * titles is what keeps them honest.
  */
 const AFFINITY_NEUTRAL = 0.35;
+
+/**
+ * How far learned weights can move a quick score, and how many matching terms
+ * it takes to earn all of it.
+ *
+ * Learned weights used to be summed, over as many as sixty terms. Every job
+ * you applied to raised "cloud", "google" and "dedicated" a little, a posting
+ * that said all three summed past anything the resume could say, and an Azure
+ * Cloud Architect scored 100% for a backend engineer on words alone. The mean
+ * says what the matching terms are worth; the count only decides how much of
+ * it to believe.
+ */
+const LEARNED_MAX_DRIVE = 2.5;
+const LEARNED_FULL_HITS = 3;
+
+/**
+ * The furthest a keyword score sits from the middle. It is a guess from word
+ * overlap, and "100%" on a guess reads as certainty it does not have.
+ */
+const QUICK_SCORE_SPAN = 42;
 const AFFINITY_GAIN = 7;
 
 /**
@@ -269,13 +334,13 @@ export function scoreLexically(job: ScorableJob, ctx: ScoringContext): LexicalSc
     (ctx.vocabulary.has(term) ? shared : missing).push(term);
   }
 
-  let learned = 0;
+  const learnedWeights: number[] = [];
   const positives: string[] = [];
   const negatives: string[] = [];
   for (const term of new Set(byWeight.map(([t]) => t))) {
     const w = ctx.signals.get(term);
     if (w === undefined || Math.abs(w) < 0.15) continue;
-    learned += w;
+    learnedWeights.push(w);
     if (w > 0) positives.push(term);
     else negatives.push(term);
   }
@@ -283,12 +348,39 @@ export function scoreLexically(job: ScorableJob, ctx: ScoringContext): LexicalSc
   // Squash to 0-100. With neither a resume nor a matching signal the drive is
   // zero and the job lands mid-pack, which is the honest answer when nothing
   // is known - but now it is the rare case rather than every row.
-  const drive = (known ? AFFINITY_GAIN * (affinity - AFFINITY_NEUTRAL) : 0) + learned / 3;
-  const raw = 100 / (1 + Math.exp(-drive));
+  const learnedMean = learnedWeights.length
+    ? learnedWeights.reduce((a, b) => a + b, 0) / learnedWeights.length
+    : 0;
+  const learned =
+    LEARNED_MAX_DRIVE *
+    Math.tanh(learnedMean / 2) *
+    Math.min(1, learnedWeights.length / LEARNED_FULL_HITS);
+  const drive = (known ? AFFINITY_GAIN * (affinity - AFFINITY_NEUTRAL) : 0) + learned;
+  const raw = 50 + QUICK_SCORE_SPAN * Math.tanh(drive / 2);
   // A sales engineer or a Workday configurator is off-role however many
   // words the description shares with the resume.
-  const offRole = (ctx.technical && !TECH_TITLE.test(job.title)) || wrongDomain(job.title) !== null;
-  const score = offRole ? Math.min(raw, OFF_ROLE_CAP) : raw;
+  // The title decides what the job is, and no amount of shared vocabulary
+  // changes it. A new-grad role or an architect role shares a backend
+  // engineer's whole vocabulary and is still the wrong job.
+  const years = ctx.candidateYears ?? null;
+  const domain = wrongDomain(job.title);
+  // With no years on file, an engineer's resume is still evidence enough that
+  // an internship is not the next job.
+  const entryLevel =
+    years === null && ctx.technical && isEntryLevelTitle(job.title)
+      ? { against: 'Written for graduates or interns, and your resume is a working engineer’s.' }
+      : entryLevelVerdict(years, job.title);
+  const capped =
+    domain !== null
+      ? { tag: domain, reason: `Not a software engineering role: this is ${domain}.` }
+      : ctx.technical && !TECH_TITLE.test(job.title)
+        ? { tag: 'not engineering', reason: 'The title does not name an engineering role.' }
+        : ctx.backend && FRONTEND_TITLE.test(job.title) && !SPANS_BACKEND.test(job.title)
+          ? { tag: 'frontend', reason: 'A frontend role; your resume is backend.', cap: FRONTEND_CAP }
+        : entryLevel
+          ? { tag: 'entry level', reason: entryLevel.against! }
+          : levelMismatch(job.title, years);
+  const score = capped ? Math.min(raw, 'cap' in capped ? capped.cap : OFF_ROLE_CAP) : raw;
 
   const hits = positives.length + negatives.length;
   const confidence = Math.min(1, (known ? 0.7 : 0) + Math.min(0.3, hits * 0.075));
@@ -301,6 +393,7 @@ export function scoreLexically(job: ScorableJob, ctx: ScoringContext): LexicalSc
     shared: shared.slice(0, 8),
     missing: missing.slice(0, 8),
     confidence,
+    ...(capped ? { capped: { tag: capped.tag, reason: capped.reason } } : {}),
   };
 }
 
@@ -323,7 +416,7 @@ export async function loadSignals(profileId: string): Promise<Map<string, number
   // Filter on the way out as well as on the way in. Terms banned after they
   // were already learned would otherwise keep scoring for ever, and a stored
   // weight on "span" is not something anyone can see to delete.
-  return new Map(rows.filter((r) => !STOP_TERMS.has(r.term)).map((r) => [r.term, r.weight]));
+  return new Map(rows.filter((r) => countable(r.term)).map((r) => [r.term, r.weight]));
 }
 
 /**
@@ -536,6 +629,7 @@ export function serialiseReasons(
     affinity: Math.round(lexical.affinity * 100),
     sharedTerms: lexical.shared,
     missingTerms: lexical.missing,
+    ...(lexical.capped ? { capped: lexical.capped } : {}),
     ...(fit
       ? {
           verdict: fit.verdict,

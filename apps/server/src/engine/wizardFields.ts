@@ -56,9 +56,9 @@ async function fillPlannedField(planned: FormField, context: FillStepContext): P
   if (state.locked) return recordLockedField(context, field, answer, state);
   if (afterHumanPause && (await preserveHumanValue(context, field, answer))) return false;
 
-  const { check, failure } = await fillWithRecovery(applicationId, page, adapter, field, wanted);
+  const { check, failure, seen } = await fillWithRecovery(applicationId, page, adapter, field, wanted);
   if (!check && /Could not find option/.test(failure)) {
-    if (await fillListFallback(context, field, answer, wanted)) return false;
+    if (await fillListFallback(context, field, answer, wanted, seen)) return false;
   }
   if (check) {
     plan.push({
@@ -89,9 +89,16 @@ async function fillPlannedField(planned: FormField, context: FillStepContext): P
  *   list has no Haldia Institute of Technology at all, and a required School
  *   stopped the run. The list's "Other" is what a person would pick.
  * - Degree: "Bachelor of Technology" is listed as "Bachelor's Degree" or
- *   "Bachelors". Walmart's Workday degree list stopped on it.
+ *   "Bachelors". Walmart's Workday degree list stopped on it. A list that
+ *   words it some other way (PayPal's stopped on it too) is read for the
+ *   one option at that level; with two or more ("Bachelor of Science",
+ *   "Bachelor of Engineering") which one is yours is a question, not a pick.
  */
-function listFallbacks(field: FormField, wanted: string | string[]): { values: string[]; why: string }[] {
+function listFallbacks(
+  field: FormField,
+  wanted: string | string[],
+  seen: string[] = [],
+): { values: string[]; why: string }[] {
   if (Array.isArray(wanted)) return [];
   const out: { values: string[]; why: string }[] = [];
   if (/degree|qualification/i.test(field.label) && !/field of study|discipline|major/i.test(field.label)) {
@@ -102,6 +109,8 @@ function listFallbacks(field: FormField, wanted: string | string[]): { values: s
       // "Bachelor" matches "Bachelor of Arts" by prefix, a different degree.
       const bare = field.options?.some((o) => normalizeLabel(o.label) === normalizeLabel(word));
       out.push({ values: [level, `${word}s`, ...(bare ? [word] : [])], why: `listed as the degree level` });
+      const same = [...new Set(seen)].filter((o) => degreeLevel(o) === level);
+      if (same.length === 1) out.push({ values: same, why: 'the only option at that degree level' });
     }
   }
   if (/school|university|college|institution/i.test(field.label)) {
@@ -115,8 +124,9 @@ async function fillListFallback(
   field: FormField,
   answer: ResolvedAnswer,
   wanted: string | string[],
+  seen: string[] = [],
 ): Promise<boolean> {
-  for (const { values, why } of listFallbacks(field, wanted)) {
+  for (const { values, why } of listFallbacks(field, wanted, seen)) {
     for (const value of values) {
       const { check } = await fillWithRecovery(applicationId, page, adapter, field, value);
       if (!check?.ok) continue;
@@ -240,7 +250,7 @@ async function preserveHumanValue(
   const wanted = answer.value as string | string[];
   const now = await verifyFilled(page, field, wanted);
   const shown = now.actual.trim();
-  const blank = !shown || /^(select\b|not ticked$|verification failed)/i.test(shown);
+  const blank = !shown || /^(select\b|not ticked$|verification failed|(expanded |collapsed )?0 items? selected)/i.test(shown);
   if (now.ok || !blank) {
     plan.push({
       ...entry(field, answer, true),
@@ -263,7 +273,7 @@ async function fillWithRecovery(
   adapter: AtsAdapter,
   field: FormField,
   wanted: string | string[],
-): Promise<{ check: Awaited<ReturnType<typeof verifyFilled>> | null; failure: string }> {
+): Promise<{ check: Awaited<ReturnType<typeof verifyFilled>> | null; failure: string; seen: string[] }> {
   const attempt = async (target: FormField) => {
     await fillField(page, target, wanted);
     return verifyFilled(page, target, wanted);
@@ -271,17 +281,19 @@ async function fillWithRecovery(
 
   let check: Awaited<ReturnType<typeof verifyFilled>> | null = null;
   let failure = '';
+  let seen: string[] = [];
   try {
     check = await attempt(field);
   } catch (err) {
     failure = err instanceof FillError ? err.message : (err as Error).message;
+    if (err instanceof FillError) seen = err.seen;
     if (page.isClosed()) throw new PageClosedError('while the form was being filled');
 
     // The control was there; its list just has no such option. Re-reading the
     // form opens every dropdown on it and cannot add one. On IMC's 52-field
     // Greenhouse form that kept the browser on School for two minutes, and the
     // tab was closed before the "Other" fallback ever ran.
-    if (/Could not find option/.test(failure)) return { check, failure };
+    if (/Could not find option/.test(failure)) return { check, failure, seen };
 
     // Filling one control routinely re-renders its neighbours — a phone
     // country picker rebuilds the number input beside it — and the
@@ -303,7 +315,7 @@ async function fillWithRecovery(
       }
     }
   }
-  return { check, failure };
+  return { check, failure, seen };
 }
 
 /**

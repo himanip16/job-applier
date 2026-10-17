@@ -41,6 +41,14 @@ import { extractFields } from '../../browser/extract.js';
  *     dropdowns are `cx-select` comboboxes whose options are
  *     `[role=gridcell]` rows in `#<id>-listbox`; Preferred Location is a
  *     `cx-multi-select`. The shared extractor and filler handle all three.
+ *   - Section 2 (Education and Experience; Amex marks Education required)
+ *     has no fields until "Add Education" / "Add Experience" opens an inline
+ *     editor, one at a time, closed by its Save
+ *     (`profileItemInlineSaveButton`); saved entries become tiles. Each block
+ *     is tagged here (`data-ja-rows`) so the shared "Add another" handling
+ *     opens an editor and names its fields after your record, and the editor
+ *     is saved before Next. The editor's markup comes from Oracle's own
+ *     bundle (`profile-item-inline`); its fields have not been seen filled.
  *   - The last section has an E-Signature "Full Name" box.
  *
  * The final step has not been seen in a real run, so every run stops for review.
@@ -50,6 +58,8 @@ const DECLINE_COOKIES = '.cookie-consent__button.decline';
 const APPLY_NOW = 'button.apply-now-button';
 const PAGINATION = '.apply-flow-pagination';
 const HONEYPOT = /honey-?pot/i;
+const PROFILE_EDITOR = '.profile-item-content';
+const PROFILE_SAVE = 'button[data-qa="profileItemInlineSaveButton"]';
 const SETTLE_MS = 30_000;
 
 async function dismissOverlays(page: Page): Promise<void> {
@@ -58,6 +68,48 @@ async function dismissOverlays(page: Page): Promise<void> {
   // "Welcome Back": keep the profile Oracle already has rather than importing from Indeed.
   const useProfile = page.getByRole('button', { name: /^use my profile$/i }).first();
   if (await useProfile.isVisible().catch(() => false)) await useProfile.click().catch(() => {});
+}
+
+/**
+ * Name the Education and Experience blocks for the shared row handling, which
+ * finds containers by selector; Oracle's only name for them is the title.
+ */
+async function tagProfileBlocks(page: Page): Promise<void> {
+  await page
+    .evaluate(() => {
+      for (const block of Array.from(document.querySelectorAll('.apply-flow-block--tile-profile-items'))) {
+        const title = (block.querySelector('.apply-flow-block__title')?.textContent ?? '').replace(/\s+/g, ' ').trim();
+        const kind = /^education\b/i.test(title)
+          ? 'education'
+          : /^(work |professional )?(experience|employment|work history)\b/i.test(title)
+            ? 'employment'
+            : null;
+        const container = block.querySelector('.profile-item-container');
+        if (kind && container) container.setAttribute('data-ja-rows', kind);
+      }
+    })
+    .catch(() => {});
+}
+
+/**
+ * Save every open Education/Experience editor. One left open is not part of
+ * the application; one that will not save (a required box left empty) stays
+ * open, and Next then reports it.
+ */
+async function saveProfileEditors(page: Page): Promise<void> {
+  const saves = page.locator(`${PROFILE_SAVE}:visible`);
+  for (let i = await saves.count(); i > 0; i--) {
+    const open = await page.locator(PROFILE_EDITOR).count();
+    await saves.first().click({ timeout: 5000 }).catch(() => {});
+    await page
+      .waitForFunction(
+        ({ sel, was }) => document.querySelectorAll(sel).length < was,
+        { sel: PROFILE_EDITOR, was: open },
+        { timeout: 10_000 },
+      )
+      .catch(() => {});
+    if ((await page.locator(PROFILE_EDITOR).count()) >= open) break;
+  }
 }
 
 /**
@@ -83,6 +135,7 @@ async function settle(page: Page): Promise<void> {
     )
     .catch(() => {});
   await dismissOverlays(page);
+  await tagProfileBlocks(page);
 }
 
 /** `.../job/<id>`, without any `/apply/...` tail, query or hash. */
@@ -154,6 +207,7 @@ export const oracleHcmAdapter: AtsAdapter = {
    * on Amex, October 2026).
    */
   async beforeAdvance(page) {
+    await saveProfileEditors(page);
     const boxes = page.locator('input[type="checkbox"].input-row__hidden-control[required]');
     for (let i = 0; i < (await boxes.count()); i++) {
       const box = boxes.nth(i);
@@ -167,6 +221,12 @@ export const oracleHcmAdapter: AtsAdapter = {
   },
 
   async extractForm(page) {
+    // An editor just opened by "Add Education" fetches its fields first.
+    const editor = page.locator(`${PROFILE_EDITOR}:visible`).first();
+    if (await editor.count()) {
+      await editor.locator('input, textarea').first().waitFor({ state: 'attached', timeout: 8000 }).catch(() => {});
+      await settle(page);
+    }
     const fields = await extractFields(page, { harvestComboboxOptions: true });
     // Where each control sits: the profile-import box, or one of the two
     // identically named attachment uploads.
@@ -216,6 +276,7 @@ export const oracleHcmAdapter: AtsAdapter = {
     'Ticks Oracle\'s required "I agree with the terms and conditions" box, which is hidden from the form reader.',
     'Takes "Use My Profile" when Oracle offers your saved profile.',
     'The resume goes to the application\'s own upload, not Oracle\'s "Import your profile" parser.',
+    'Education and Experience: opens one entry each from your record (Oracle edits one at a time) and saves it before Next.',
     'The final step has not been mapped yet, so every run stops for review.',
   ],
 };

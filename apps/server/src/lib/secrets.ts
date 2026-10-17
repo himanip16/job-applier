@@ -72,6 +72,18 @@ export const EDITABLE_SETTINGS = {
     where: '',
     secret: true,
   },
+  MICROSOFT_ACCOUNT: {
+    label: 'Microsoft account',
+    help: 'The Microsoft account Microsoft Careers applications sign in with. Blank uses your profile email.',
+    where: '',
+    secret: false,
+  },
+  MICROSOFT_ACCOUNT_PASSWORD: {
+    label: 'Microsoft account password',
+    help: 'Fills the Microsoft sign-in on apply.careers.microsoft.com. A code or Authenticator approval still waits for you.',
+    where: '',
+    secret: true,
+  },
   LLM_PROVIDER: {
     label: 'Model provider',
     help: 'Leave blank to use whichever key is set. Gemini wins if both are.',

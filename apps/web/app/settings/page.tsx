@@ -119,9 +119,18 @@ export default function SettingsPage() {
         <SignInProvider setting={byKey.get('SSO_PROVIDER')!} onChange={load} />
       )}
       {byKey.get('APPLE_ID_PASSWORD') && (
-        <AppleAccount
-          appleId={byKey.get('APPLE_ID')}
+        <SavedSignIn
+          copy={APPLE_COPY}
+          accountId={byKey.get('APPLE_ID')}
           password={byKey.get('APPLE_ID_PASSWORD')!}
+          onChange={load}
+        />
+      )}
+      {byKey.get('MICROSOFT_ACCOUNT_PASSWORD') && (
+        <SavedSignIn
+          copy={MICROSOFT_COPY}
+          accountId={byKey.get('MICROSOFT_ACCOUNT')}
+          password={byKey.get('MICROSOFT_ACCOUNT_PASSWORD')!}
           onChange={load}
         />
       )}
@@ -881,21 +890,71 @@ function InboxCodes({ setting, onChange }: { setting: Setting; onChange: () => P
   );
 }
 
+interface SignInCopy {
+  title: string;
+  body: React.ReactNode;
+  idLabel: string;
+  passwordLabel: string;
+  saved: string;
+  removeConfirm: string;
+}
+
 /**
  * The Apple Account that Apple Careers makes every application sign in with.
  * Filled by plain DOM code (browser/appleId.ts); the six-digit code Apple
  * pushes to your devices still waits for you.
  */
-function AppleAccount({
-  appleId,
+const APPLE_COPY: SignInCopy = {
+  title: 'Apple Account',
+  body: (
+    <>
+      Apple Careers sends every application through an Apple Account sign-in. The run fills in this
+      Apple ID and password, then stops for the six-digit code Apple sends to your iPhone or Mac: type
+      it in the open window and choose <strong>Trust</strong>, and later Apple applications skip the
+      sign-in altogether.
+    </>
+  ),
+  idLabel: 'Apple ID',
+  passwordLabel: 'Apple Account password',
+  saved: 'Saved. Apple sign-ins are filled in automatically from now on.',
+  removeConfirm: 'Remove the Apple Account password? Apple sign-ins will wait for you again.',
+};
+
+/**
+ * The Microsoft account behind Microsoft Careers' "Sign in using Microsoft".
+ * Filled by plain DOM code (browser/microsoftAccount.ts); a code or an
+ * Authenticator approval still waits for you.
+ */
+const MICROSOFT_COPY: SignInCopy = {
+  title: 'Microsoft account',
+  body: (
+    <>
+      Microsoft Careers asks you to sign in before every application. The run picks{' '}
+      <strong>Sign in using Microsoft</strong>, fills in this account and password, and answers{' '}
+      <strong>Stay signed in</strong> with Yes, so later Microsoft applications skip the sign-in. If
+      Microsoft asks for a code or an Authenticator approval, the run waits for you in the open
+      window.
+    </>
+  ),
+  idLabel: 'Microsoft account email',
+  passwordLabel: 'Microsoft account password',
+  saved: 'Saved. Microsoft Careers sign-ins are filled in automatically from now on.',
+  removeConfirm: 'Remove the Microsoft account password? Microsoft Careers sign-ins will wait for you again.',
+};
+
+/** One saved account for a careers site that signs in through its own identity provider. */
+function SavedSignIn({
+  copy,
+  accountId,
   password,
   onChange,
 }: {
-  appleId?: Setting;
+  copy: SignInCopy;
+  accountId?: Setting;
   password: Setting;
   onChange: () => Promise<void>;
 }) {
-  const [id, setId] = useState(appleId?.preview ?? '');
+  const [id, setId] = useState(accountId?.preview ?? '');
   const [value, setValue] = useState('');
   const [editing, setEditing] = useState(!password.set);
   const [busy, setBusy] = useState(false);
@@ -906,10 +965,10 @@ function AppleAccount({
     setBusy(true);
     setResult(null);
     try {
-      if (appleId) {
+      if (accountId) {
         await api('/api/settings', {
           method: 'PUT',
-          body: JSON.stringify({ key: appleId.key, value: id, verify: false }),
+          body: JSON.stringify({ key: accountId.key, value: id, verify: false }),
         });
       }
       await api('/api/settings', {
@@ -918,7 +977,7 @@ function AppleAccount({
       });
       setValue('');
       setEditing(false);
-      setResult({ ok: true, detail: 'Saved. Apple sign-ins are filled in automatically from now on.' });
+      setResult({ ok: true, detail: copy.saved });
       await onChange();
     } catch (err) {
       setResult({ ok: false, detail: (err as Error).message });
@@ -928,12 +987,12 @@ function AppleAccount({
   }
 
   async function clear() {
-    if (!confirm('Remove the Apple Account password? Apple sign-ins will wait for you again.')) return;
+    if (!confirm(copy.removeConfirm)) return;
     setBusy(true);
     setResult(null);
     try {
       await api(`/api/settings/${password.key}`, { method: 'DELETE' });
-      if (appleId?.origin === 'saved') await api(`/api/settings/${appleId.key}`, { method: 'DELETE' });
+      if (accountId?.origin === 'saved') await api(`/api/settings/${accountId.key}`, { method: 'DELETE' });
       setId('');
       await onChange();
       setEditing(true);
@@ -948,13 +1007,8 @@ function AppleAccount({
     <section className={s.card}>
       <div className={s.cardHead}>
         <div>
-          <h2>Apple Account</h2>
-          <p>
-            Apple Careers sends every application through an Apple Account sign-in. The run fills in
-            this Apple ID and password, then stops for the six-digit code Apple sends to your iPhone
-            or Mac: type it in the open window and choose <strong>Trust</strong>, and later Apple
-            applications skip the sign-in altogether.
-          </p>
+          <h2>{copy.title}</h2>
+          <p>{copy.body}</p>
         </div>
       </div>
 
@@ -962,7 +1016,7 @@ function AppleAccount({
         <div className={`${s.row} ${s.rowActive}`}>
           <span className={`${s.dot} ${s.dotFirecrawl}`} aria-hidden />
           <div className={s.rowMain}>
-            <span className={s.rowName}>{appleId?.preview || 'Profile email'}</span>
+            <span className={s.rowName}>{accountId?.preview || 'Profile email'}</span>
             <span className={s.rowMeta}>
               <code>••••••••</code>
               {password.origin === 'env' && ' · from .env'}
@@ -982,25 +1036,25 @@ function AppleAccount({
         </div>
       ) : (
         <form className={s.inline} onSubmit={save}>
-          {appleId && (
+          {accountId && (
             <input
               type="email"
-              placeholder="Apple ID (blank: profile email)"
+              placeholder={`${copy.idLabel} (blank: profile email)`}
               value={id}
               onChange={(e) => setId(e.target.value)}
               autoComplete="off"
               spellCheck={false}
-              aria-label="Apple ID"
+              aria-label={copy.idLabel}
             />
           )}
           <input
             type="password"
-            placeholder="Apple Account password"
+            placeholder={copy.passwordLabel}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             autoComplete="new-password"
             spellCheck={false}
-            aria-label="Apple Account password"
+            aria-label={copy.passwordLabel}
           />
           {password.set && (
             <button type="button" className={`ghost ${s.pill}`} onClick={() => setEditing(false)} disabled={busy}>

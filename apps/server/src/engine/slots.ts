@@ -11,7 +11,7 @@
  * Chromium's focus emulation for every page: a background tab still believes
  * it has focus, which is what comboboxes and blur-validation check.
  */
-export const CONCURRENCY = Math.max(1, Number(process.env.RUN_CONCURRENCY) || 3);
+export const CONCURRENCY = Math.max(1, Number(process.env.RUN_CONCURRENCY) || 5);
 
 const holding = new Set<string>();
 /** Runs coming back from a wait. Served before new jobs, so a half-filled form is never starved. */

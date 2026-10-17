@@ -72,11 +72,6 @@ export function LeadCard({
               </span>
             )}
             <LeetcodeSignals lead={lead} />
-            {lead.autoApply === false && (
-              <span className="jc-chip" title="The app has no form-filler for this site: expect to finish this one yourself">
-                Apply by hand
-              </span>
-            )}
             <a
               href={lead.url}
               target="_blank"
@@ -223,15 +218,22 @@ function QuickScoreReasons({
     missingTerms?: string[];
     likedTerms?: string[];
     dislikedTerms?: string[];
+    /** A string on leads scored before the cap carried its own tag. */
+    capped?: string | { tag: string; reason: string };
   };
 }) {
   const readable = (t: string) => t.length > 3 && !/['’]/.test(t);
   const shared = [...new Set(reasons.sharedTerms ?? [])].filter(readable).slice(0, 5);
   const missing = [...new Set(reasons.missingTerms ?? [])].filter((t) => readable(t) && !shared.includes(t)).slice(0, 3);
-  if (!shared.length && !missing.length) return null;
+  const capped =
+    typeof reasons.capped === 'string' ? { tag: 'entry level', reason: reasons.capped } : reasons.capped;
+  if (!shared.length && !missing.length && !capped) return null;
 
   return (
     <ul className="jc-reasons" aria-label="Why it ranked here">
+      {capped && (
+        <li className="jc-missing" title={capped.reason}>{capped.tag}</li>
+      )}
       {shared.map((t) => (
         <li key={`s-${t}`} className="jc-for" title="In your resume">{t}</li>
       ))}
