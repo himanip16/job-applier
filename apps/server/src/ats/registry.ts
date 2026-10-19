@@ -14,6 +14,7 @@ import { oracleHcmAdapter } from './adapters/oracleHcm.js';
 import { jobviteAdapter } from './adapters/jobvite.js';
 import { deShawAdapter } from './adapters/deShaw.js';
 import { icimsAdapter } from './adapters/icims.js';
+import { linkedinAdapter } from './adapters/linkedin.js';
 import { genericAdapter } from './adapters/generic.js';
 
 /** Order matters: generic must be last, it matches everything. */
@@ -33,6 +34,7 @@ export const ADAPTERS: AtsAdapter[] = [
   jobviteAdapter,
   deShawAdapter,
   icimsAdapter,
+  linkedinAdapter,
   genericAdapter,
 ];
 
