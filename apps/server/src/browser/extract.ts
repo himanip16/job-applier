@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import { matchCanonical, type FieldOption, type FormField } from '@ja/shared';
 import { evaluatePage } from './evaluate.js';
-import { controlledListId, optionText, slottedOptionRoot } from './fill.js';
+import { controlledListId, openUi5ValueHelp, optionText, slottedOptionRoot } from './fill.js';
 
 /**
  * Raw, DOM-level description of one control, produced inside the page.
@@ -51,6 +51,43 @@ const EXTRACTOR = () => {
   /** getElementById in the control's own tree: a shadow root's ids are not the document's. */
   const byId = (el: Element, id: string): HTMLElement | null =>
     (el.getRootNode() as Document | ShadowRoot).getElementById?.(id) ?? document.getElementById(id);
+
+  /** The `ui5-*` web component whose shadow root holds this control, if any. */
+  const ui5HostOf = (el: Element): Element | null => {
+    const host = (el.getRootNode() as ShadowRoot).host;
+    return host && /^UI5-(INPUT|DATETIME-INPUT|DATE-PICKER|FILE-UPLOADER)/.test(host.tagName) ? host : null;
+  };
+
+  /**
+   * UI5's date picker types its date as words ("Jan 5, 1998"), and says so
+   * only in its placeholder. Passed on as help so the answer is typed that way.
+   */
+  const dateFormatHint = (el: Element): string => {
+    if (el.getAttribute('aria-roledescription') !== 'Date Input') return '';
+    const pattern = el.getAttribute('placeholder')?.trim();
+    return pattern ? `A date, typed in the format ${pattern} (for example ${pattern.replace(/MMMM/, 'January').replace(/MMM/, 'Jan').replace(/\bd{1,2}\b/, '5').replace(/y{2,4}/, '1998')}).` : '';
+  };
+
+  /**
+   * The caption of a UI5 form item, for a control that has none of its own.
+   * SuccessFactors' resume and cover letter uploaders are an <input
+   * type=file> deep in a `ui5-file-uploader`, in a form item of their own;
+   * the words ("Resume/CV", "Cover Letter") sit one or two items above, after
+   * a long "Supported formats" note. Read as unlabelled, both came out as
+   * "Resume".
+   */
+  const ui5ItemCaption = (el: Element): string => {
+    let node: Element | null = el;
+    while (node && !node.hasAttribute('ui5-form-item')) {
+      node = node.parentElement ?? ((node.getRootNode() as ShadowRoot).host || null);
+    }
+    for (let item: Element | null = node, hops = 0; item && hops < 3; item = item.previousElementSibling, hops++) {
+      const label = item.querySelector(':scope > [slot="labelContent"]');
+      const text = textOf(label) || (hops ? textOf(item) : '');
+      if (text && text.length <= 60) return text;
+    }
+    return '';
+  };
 
   // Clear any handles from a previous extraction on this page.
   deepAll(document, `[${ATTR}]`).forEach((n) => n.removeAttribute(ATTR));
@@ -673,7 +710,7 @@ const EXTRACTOR = () => {
           tag, type,
           kind: 'FILE',
           widget: 'file',
-          label: labelFor(el) || (id.includes('cover') ? 'Cover Letter' : 'Resume'),
+          label: labelFor(el) || ui5ItemCaption(el) || (id.includes('cover') ? 'Cover Letter' : 'Resume'),
           helpText: helpFor(el),
           required: isRequired(el),
           options: [],
@@ -766,7 +803,13 @@ const EXTRACTOR = () => {
       // words never picked anything. The choices sit in a display:none
       // <select> beside the wrapper, which is what the form submits.
       const comboWrapper = tag === 'input' ? el.parentElement?.closest('[role="combobox"]') : null;
-      if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox' || sfPicklist || comboWrapper) {
+      // SuccessFactors' new application wizard (Nomura, October 2026) is SAP
+      // UI5 web components: Country, Currency and the diversity questions are
+      // a `ui5-input` with suggestions, its <input> in the shadow root with
+      // aria-haspopup="dialog". Read as text boxes, the words were typed and
+      // nothing was picked.
+      const ui5Suggest = ui5HostOf(el)?.hasAttribute('show-suggestions') ?? false;
+      if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox' || sfPicklist || comboWrapper || ui5Suggest) {
         const multi = !!el.closest(
           // SmartRecruiters' "select all that apply" is spl-multiselect-autocomplete.
           '.select__value-container--is-multi, [class*="is-multi"], .cx-multi-select-container, .c-spl-multiselect-autocomplete-input',
@@ -808,7 +851,7 @@ const EXTRACTOR = () => {
         kind,
         widget: 'native',
         label: labelFor(el),
-        helpText: helpFor(el),
+        helpText: [helpFor(el), dateFormatHint(el)].filter(Boolean).join(' '),
         required: isRequired(el),
         options: [],
       });
@@ -880,6 +923,7 @@ async function harvestOptions(page: Page, selector: string, max: number): Promis
     await input.click({ timeout: 3000 });
     // A click focuses Greenhouse's dropdowns without opening them; ArrowDown does.
     if ((await input.getAttribute('aria-expanded')) !== 'true') await input.press('ArrowDown');
+    await openUi5ValueHelp(input);
 
     // Only this dropdown's own menu. Reading every [role=option] on the page
     // picked up the phone field's always-rendered, hidden country list first,
