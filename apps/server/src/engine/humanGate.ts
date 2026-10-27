@@ -298,19 +298,13 @@ async function signInWithSavedAppleId(applicationId: string, page: Page, blocker
  * Careers signed in. A code or an Authenticator approval - like no password
  * saved, or a refused one - falls through to the ordinary pause, which carries
  * on by itself once the modal is gone.
+ *
+ * When no Microsoft password is saved, this now attempts SSO fallback via
+ * existing Google/LinkedIn sessions in the persistent profile, or switches to
+ * native account creation (handled by the standard account wall handler).
  */
 async function signInWithSavedMicrosoftAccount(applicationId: string, page: Page): Promise<boolean> {
   const password = secret('MICROSOFT_ACCOUNT_PASSWORD');
-  if (!password) {
-    // Said out loud: a silent fall-through read as the sign-in being broken.
-    await bus.emitEvent(
-      applicationId,
-      'LOG',
-      'No Microsoft account password is saved, so the Microsoft sign-in cannot be done for you. ' +
-        'Save it under Settings > Microsoft account and this run signs in by itself.',
-    );
-    return false;
-  }
   let email = secret('MICROSOFT_ACCOUNT');
   if (!email) {
     const app = await prisma.application.findUnique({
@@ -321,13 +315,46 @@ async function signInWithSavedMicrosoftAccount(applicationId: string, page: Page
   }
   if (!email) return false;
 
-  await bus.emitEvent(applicationId, 'LOG', 'Microsoft Careers sign-in: using your saved Microsoft account.');
-  const attempt = await signInWithMicrosoftAccount(page, { email, password }).catch((err: unknown) => ({
-    outcome: 'failed' as const,
-    detail: `Microsoft sign-in failed: ${(err as Error).message}`,
-  }));
-  await bus.emitEvent(applicationId, 'LOG', attempt.detail);
-  return attempt.outcome === 'signed-in';
+  // Try with Microsoft credentials if available, otherwise fallback to SSO/native
+  if (password) {
+    await bus.emitEvent(applicationId, 'LOG', 'Microsoft Careers sign-in: using your saved Microsoft account.');
+    const attempt = await signInWithMicrosoftAccount(page, { email, password }, {
+      allowSsoFallback: true,
+      allowNativeFallback: false, // Native needs JOB_SITE_PASSWORD, handled separately
+    }).catch((err: unknown) => ({
+      outcome: 'failed' as const,
+      detail: `Microsoft sign-in failed: ${(err as Error).message}`,
+    }));
+    await bus.emitEvent(applicationId, 'LOG', attempt.detail);
+    if (attempt.outcome === 'signed-in') return true;
+  } else {
+    // No Microsoft password - try SSO fallback first
+    await bus.emitEvent(
+      applicationId,
+      'LOG',
+      'No Microsoft account password saved. Checking for existing Google/LinkedIn sessions in the browser profile.',
+    );
+    const attempt = await signInWithMicrosoftAccount(page, { email, password: '' }, {
+      allowSsoFallback: true,
+      allowNativeFallback: true,
+    }).catch((err: unknown) => ({
+      outcome: 'failed' as const,
+      detail: `Microsoft sign-in failed: ${(err as Error).message}`,
+    }));
+    await bus.emitEvent(applicationId, 'LOG', attempt.detail);
+    if (attempt.outcome === 'signed-in') return true;
+    if (attempt.outcome === 'needs-you') {
+      // Switched to native account - let the standard account wall handler take over
+      await bus.emitEvent(
+        applicationId,
+        'LOG',
+        'Switched to native account creation. The standard account wall handler will take over.',
+      );
+      return false;
+    }
+  }
+
+  return false;
 }
 
 /**

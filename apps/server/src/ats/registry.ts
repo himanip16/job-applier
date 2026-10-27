@@ -15,6 +15,7 @@ import { jobviteAdapter } from './adapters/jobvite.js';
 import { deShawAdapter } from './adapters/deShaw.js';
 import { icimsAdapter } from './adapters/icims.js';
 import { linkedinAdapter } from './adapters/linkedin.js';
+import { successFactorsAdapter } from './adapters/successfactors.js';
 import { genericAdapter } from './adapters/generic.js';
 
 /** Order matters: generic must be last, it matches everything. */
@@ -35,6 +36,7 @@ export const ADAPTERS: AtsAdapter[] = [
   deShawAdapter,
   icimsAdapter,
   linkedinAdapter,
+  successFactorsAdapter,
   genericAdapter,
 ];
 

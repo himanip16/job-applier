@@ -198,8 +198,45 @@ export async function fillWorkdayDropdown(page: Page, field: FormField, want: st
   if (showsChosenOption(field, want, normalizeLabel(await button.innerText().catch(() => '')))) return;
   await button.scrollIntoViewIfNeeded().catch(() => {});
   await button.click({ timeout: FIELD_TIMEOUT_MS });
+
+  // Workday renders active popups directly in a portal at body level
+  // Wait for the listbox to appear
+  const listbox = page.locator('[role="listbox"]').filter({ has: page.locator('[role="option"]') });
+  try {
+    await listbox.waitFor({ state: 'visible', timeout: 5000 });
+  } catch {
+    await page.keyboard.press('Escape').catch(() => {});
+    throw new FillError(`Listbox did not appear for ${field.label}`, field, true);
+  }
+
+  // Find and click the matching option
   const seen: string[] = [];
-  const option = await waitForOption(page, field, want, seen);
+  const deadline = Date.now() + OPTION_TIMEOUT_MS;
+  let option: Locator | null = null;
+
+  while (Date.now() < deadline) {
+    const options = listbox.locator('[role="option"]');
+    const count = await options.count();
+    const optionData: { label: string; locator: Locator }[] = [];
+
+    for (let i = 0; i < count; i++) {
+      const opt = options.nth(i);
+      const text = normalizeLabel((await opt.innerText().catch(() => '')) ?? '');
+      if (text) {
+        optionData.push({ label: text, locator: opt });
+        if (!seen.includes(text)) seen.push(text);
+      }
+    }
+
+    const matched = bestOption(optionData.map((o) => ({ label: o.label })), want);
+    if (matched) {
+      option = optionData.find((o) => normalizeLabel(o.label) === normalizeLabel(matched.label))?.locator ?? null;
+      break;
+    }
+
+    await page.waitForTimeout(250);
+  }
+
   if (!option) {
     await page.keyboard.press('Escape').catch(() => {});
     throw new FillError(
@@ -209,7 +246,17 @@ export async function fillWorkdayDropdown(page: Page, field: FormField, want: st
       seen,
     );
   }
-  await option.click();
+
+  await option.click({ timeout: FIELD_TIMEOUT_MS });
+
+  // Ensure menu closes and button value settles
+  try {
+    await listbox.waitFor({ state: 'hidden', timeout: 3000 });
+  } catch {
+    // Menu might already be closed or dismissed
+    await page.keyboard.press('Escape').catch(() => {});
+  }
+
   await page.waitForTimeout(200);
 }
 

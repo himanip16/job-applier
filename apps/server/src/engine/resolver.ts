@@ -527,7 +527,7 @@ function shapeForField(
 
   const picked: string[] = [];
   for (const want of list) {
-    const m = matchOption(want, field.options);
+    const m = matchOption(want, field.options, field.label);
     // 0.7 is the point below which the match is a guess rather than a mapping.
     if (!m || m.score < 0.7) return null;
     picked.push(m.option.label);

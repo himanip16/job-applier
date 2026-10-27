@@ -1,4 +1,5 @@
 import { normalizeLabel, type FieldOption } from '@ja/shared';
+import { normalizeCityName, normalizeStateCode, normalizeCurrencyCode } from '@ja/shared';
 
 const AFFIRMATIVE = new Set(['yes', 'y', 'true', '1', 'yes i am', 'i am', 'authorized', 'agree', 'i agree', 'accept']);
 const NEGATIVE = new Set(['no', 'n', 'false', '0', 'not required', 'i do not', 'disagree', 'decline']);
@@ -16,6 +17,42 @@ export interface OptionMatch {
 }
 
 /**
+ * Normalize a desired value for UI5 value-help inputs.
+ * SAP UI5 dropdowns often use internal codes (KA, INR) instead of full names.
+ * This function detects field type and normalizes accordingly.
+ */
+function normalizeForUI5(desired: string, fieldLabel: string): string {
+  const lowerLabel = fieldLabel.toLowerCase();
+  const lowerDesired = desired.toLowerCase();
+
+  // City fields: "Bangalore" → "Bengaluru"
+  if (/city/i.test(lowerLabel)) {
+    const normalized = normalizeCityName(desired);
+    if (normalized && normalized.toLowerCase() !== lowerDesired) {
+      return normalized;
+    }
+  }
+
+  // State/Province fields: "Karnataka" → "KA"
+  if (/state|province|region/i.test(lowerLabel)) {
+    const normalized = normalizeStateCode(desired);
+    if (normalized && normalized.toLowerCase() !== lowerDesired) {
+      return normalized;
+    }
+  }
+
+  // Currency fields: "Indian Rupee" → "INR"
+  if (/currency/i.test(lowerLabel)) {
+    const normalized = normalizeCurrencyCode(desired);
+    if (normalized && normalized.toLowerCase() !== lowerDesired) {
+      return normalized;
+    }
+  }
+
+  return desired;
+}
+
+/**
  * Map a free-form desired answer onto one of a control's actual options.
  *
  * This is where a stored answer of `true` becomes the literal string the form
@@ -24,9 +61,12 @@ export interface OptionMatch {
  * submits the opposite of what the candidate said, so anything below the
  * caller's threshold is escalated to a human rather than guessed.
  */
-export function matchOption(desired: string, options: FieldOption[]): OptionMatch | null {
+export function matchOption(desired: string, options: FieldOption[], fieldLabel?: string): OptionMatch | null {
   if (!options.length) return null;
-  const want = normalizeLabel(desired);
+
+  // Apply UI5-specific normalization for known field types
+  const normalizedDesired = fieldLabel ? normalizeForUI5(desired, fieldLabel) : desired;
+  const want = normalizeLabel(normalizedDesired);
   if (!want) return null;
 
   // 1. Exact normalised match.
