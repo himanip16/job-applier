@@ -20,7 +20,10 @@ vi.mock('../src/lib/db.js', () => ({
 }));
 vi.mock('../src/lib/config.js', () => ({ config: { maxApplicationSteps: 12 } }));
 vi.mock('../src/lib/events.js', () => ({ bus: { emitEvent: vi.fn() } }));
-vi.mock('../src/browser/blockers.js', () => ({ detectBlockers: vi.fn() }));
+vi.mock('../src/browser/blockers.js', () => ({
+  detectBlockers: vi.fn(),
+  inlineAccountPending: vi.fn(),
+}));
 vi.mock('../src/browser/session.js', () => ({
   assertOpen: vi.fn(), screenshot: vi.fn(),
   PageClosedError: class PageClosedError extends Error {},

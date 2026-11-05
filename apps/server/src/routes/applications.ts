@@ -4,7 +4,7 @@ import { prisma, Prisma } from '../lib/db.js';
 import { enqueue, activeRuns } from '../engine/queue.js';
 import { submitAnswers, decideReview, continueRun } from '../engine/runner.js';
 import { rememberAnswer } from '../engine/answerBank.js';
-import { ANSWER_POLL_MS } from '../engine/humanGate.js';
+import { ANSWER_POLL_MS } from '../engine/questionManager.js';
 import { isParked, blockerKey } from '../engine/waiters.js';
 import { syncLead } from '../engine/leadSync.js';
 import { adapterFor } from '../ats/registry.js';
