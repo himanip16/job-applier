@@ -52,12 +52,30 @@ export async function generateColdOutreach(input: {
     }
   }
 
+  // Validate company name - avoid empty strings in AI drafts
+  if (!companyName || companyName.trim() === '') {
+    throw new Error('Company name is required for outreach generation');
+  }
+
   // Build candidate context
   const candidateContext = buildCandidateContext({ ...profile, email: profile.user?.email });
 
   // Determine channel based on connection degree
   const channel: OutreachChannel = contact.isConnection ? 'DIRECT_MESSAGE' : 'CONNECTION_NOTE';
   const charLimit = CHAR_LIMITS[channel];
+
+  // Check for existing DRAFT or APPROVED outreach for this contact
+  const existing = await prisma.outreachItem.findFirst({
+    where: {
+      profileId: input.profileId,
+      contactId: input.contactId,
+      status: { in: ['DRAFT', 'APPROVED'] },
+    },
+  });
+
+  if (existing) {
+    throw new Error(`Outreach already exists for this contact (ID: ${existing.id}). Use the existing draft or skip it first.`);
+  }
 
   // Generate message draft
   const contactRole: Exclude<ContactRole, 'OTHER'> =
@@ -95,7 +113,7 @@ export async function generateColdOutreach(input: {
     id: item.id,
     draftBody: draft.body,
     charLimit,
-    overLimit: draft.overLimit,
+    overLimit: draft.body.length > charLimit,
   };
 }
 

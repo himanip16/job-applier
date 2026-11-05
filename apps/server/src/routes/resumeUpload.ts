@@ -23,7 +23,7 @@ export function registerResumeUploadRoutes(app: FastifyInstance, requireProfile:
     // profile exists: make one from the account, then fill it from the file.
     preHandler: async (req, reply) => {
       const user = await currentUser(req);
-      if (!user) return reply.code(401).send({ error: 'Sign in to use this.' });
+      if (!user) return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
       const profile =
         (await prisma.profile.findUnique({ where: { userId: user.id } })) ??
         (await prisma.profile.create({
@@ -67,7 +67,7 @@ export function registerResumeUploadRoutes(app: FastifyInstance, requireProfile:
   app.post<{ Params: { id: string } }>('/api/resume/:id/default', {
     preHandler: async (req, reply) => {
       const profile = await requireProfile(req, reply);
-      if (!profile) return reply.code(401).send({ error: 'Sign in to use this.' });
+      if (!profile) return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
       (req as any).profile = profile;
     }
   }, async (req, reply) => {

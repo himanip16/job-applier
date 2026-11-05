@@ -13,11 +13,11 @@ import { api } from '../lib/api';
  */
 export function AuthGate({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const [state, setState] = useState<'checking' | 'in' | 'out'>('checking');
+  const [state, setState] = useState<'checking' | 'allowed' | 'redirecting'>('checking');
 
   useEffect(() => {
     if (pathname?.startsWith('/signin')) {
-      setState('in');
+      setState('allowed');
       return;
     }
     let live = true;
@@ -25,10 +25,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
       .then((d) => {
         if (!live) return;
         if (d.user) {
-          setState('in');
+          setState('allowed');
           return;
         }
-        setState('out');
+        setState('redirecting');
         const here = window.location.pathname + window.location.search;
         window.location.href = `/signin?next=${encodeURIComponent(here)}`;
       })
@@ -36,13 +36,13 @@ export function AuthGate({ children }: { children: ReactNode }) {
         // The API is unreachable, which is a different problem from being
         // signed out. Let the page render and report its own error rather
         // than bouncing to a sign-in form that also cannot reach the server.
-        if (live) setState('in');
+        if (live) setState('allowed');
       });
     return () => {
       live = false;
     };
   }, [pathname]);
 
-  if (state !== 'in') return null;
+  if (state !== 'allowed') return null;
   return <>{children}</>;
 }

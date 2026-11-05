@@ -201,7 +201,12 @@ describe('rescoring only what was picked', () => {
 
   it('reads exactly the leads it was given, and leaves the rest alone', async () => {
     const all = await leads();
-    const [pickedA, pickedB] = [all.leads[7]!, all.leads[8]!];
+    // Deliberately two in-domain, non-remote leads. The hard rules block
+    // another profession's job outright and block a US posting that never
+    // mentions sponsorship, and the seed contains both - "Sales Engineer" and
+    // the "Remote - US" ones - so picking those would be testing the rules
+    // rather than the batching.
+    const [pickedA, pickedB] = [all.leads[3]!, all.leads[5]!];
     const untouched = all.leads[6]!;
 
     generateMock.mockResolvedValue(modelSays(88));
@@ -280,7 +285,7 @@ describe('rescoring only what was picked', () => {
   it('still scores one lead through its own route', async () => {
     const all = await leads();
     generateMock.mockResolvedValue(modelSays(95));
-    const res = await app.inject({ method: 'POST', url: `/api/leads/${all.leads[8]!.id}/rescore` });
+    const res = await app.inject({ method: 'POST', url: `/api/leads/${all.leads[5]!.id}/rescore` });
     expect(res.statusCode).toBe(200);
     const { lead } = res.json() as { lead: { deepScored: boolean; score: number } };
     expect(lead.deepScored).toBe(true);

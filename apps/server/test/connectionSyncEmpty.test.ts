@@ -8,7 +8,11 @@ const { page, syncUpsert, contactUpsert, openLinkedIn } = vi.hoisted(() => ({
 }));
 
 vi.mock('../src/lib/db.js', () => ({
-  prisma: { linkedInSync: { upsert: syncUpsert }, contact: { upsert: contactUpsert } },
+  prisma: {
+    linkedInSync: { upsert: syncUpsert },
+    contact: { upsert: contactUpsert },
+    profile: { findUnique: vi.fn().mockResolvedValue({ linkedinConnectionStatus: 'CONNECTED' }) },
+  },
 }));
 vi.mock('../src/linkedin/session.js', () => ({
   linkedInPage: vi.fn().mockResolvedValue(page), openLinkedIn, scrollToLoad: vi.fn(),

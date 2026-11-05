@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { useOverview, type Overview } from '../lib/overview';
+import { useAuth } from '../lib/auth';
 
 /**
  * The overview.
@@ -28,9 +29,12 @@ interface Health {
 }
 
 export default function Home() {
-  const { data: ov, error } = useOverview();
+  const auth = useAuth();
+  // Without a profile there is no overview to fetch - it would only come back as an error.
+  const { data: ov, error } = useOverview(auth.authenticated && !!auth.profile);
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   // Health is separate and barely changes — a key being added is the only
   // thing that moves it, and that already forces a reload of this page.
@@ -42,17 +46,62 @@ export default function Home() {
       });
   }, []);
 
-  if (error) {
+  if (auth.loading) {
     return (
       <div className="panel">
-        <h2>Cannot reach the server</h2>
+        <div className="skel" style={{ height: '4.5rem' }} />
+      </div>
+    );
+  }
+
+  if (auth.error) {
+    return (
+      <div className="panel">
+        <h2>Could not check your sign-in</h2>
+        <div className="notice bad">{auth.error}</div>
+      </div>
+    );
+  }
+
+  if (auth.authenticated && !auth.profile) {
+    return (
+      <div className="panel">
+        <h2>Create your profile</h2>
+        <p className="sub">Everything here starts from your profile and resume.</p>
+        <a href="/profile" className="btn primary">
+          Create profile
+        </a>
+      </div>
+    );
+  }
+
+  if (error) {
+    // Say which kind of failure it was; only an unreachable server needs the start command.
+    const unreachable = /failed to fetch|econnrefused|networkerror/i.test(error);
+    const title = unreachable
+      ? 'Cannot reach the server'
+      : /\b5\d\d\b/.test(error)
+        ? 'Server error'
+        : 'Could not load your overview';
+    return (
+      <div className="panel">
+        <h2>{title}</h2>
         <div className="notice bad">{error}</div>
-        <div className="row" style={{ gap: '.6rem', marginTop: '.6rem' }}>
-          <button onClick={() => navigator.clipboard.writeText('pnpm dev:server')}>
-            Copy start command
-          </button>
-          <span className="small muted">Server runs on port 8787</span>
-        </div>
+        {unreachable && (
+          <div className="row" style={{ gap: '.6rem', marginTop: '.6rem' }}>
+            <button
+              onClick={() =>
+                navigator.clipboard?.writeText('pnpm dev:server').then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                })
+              }
+            >
+              {copied ? 'Copied!' : 'Copy start command'}
+            </button>
+            <span className="small muted">Server runs on port 8787</span>
+          </div>
+        )}
       </div>
     );
   }
@@ -70,7 +119,7 @@ export default function Home() {
       <details className="panel disclosure">
         <summary>
           <strong>How it works</strong>
-          <span className="muted small">four parts, each usable on its own</span>
+          <span className="muted small">five parts, each usable on its own</span>
         </summary>
         <div className="disclosure-body">
 
@@ -116,6 +165,16 @@ export default function Home() {
 
         <Feature
           step="4"
+          title="LinkedIn outreach"
+          href="/outreach"
+          cta="Open outreach queue"
+        >
+          Sync your LinkedIn connections, draft personalised messages to recruiters and engineers,
+          and track replies. Nothing is sent until you approve it.
+        </Feature>
+
+        <Feature
+          step="5"
           title="Track and learn"
           href="/tracker"
           cta="Open the tracker"

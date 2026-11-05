@@ -83,17 +83,70 @@ export async function verifyPassword(password: string, stored: string): Promise<
 }
 
 /**
+ * Password validation result with detailed feedback.
+ */
+export interface PasswordValidationResult {
+  valid: boolean;
+  errors: string[];
+  requirements: {
+    minLength: number;
+    maxLength: number;
+    requiresUppercase: boolean;
+    requiresLowercase: boolean;
+    requiresNumber: boolean;
+    requiresSpecial: boolean;
+  };
+}
+
+/**
  * What is wrong with a password, in a sentence, or null if nothing is.
  *
  * Password must be at least 10 characters and include uppercase, lowercase,
  * number, and special character for enhanced security.
  */
 export function passwordProblem(password: string): string | null {
-  if (password.length < 10) return 'Use at least 10 characters.';
-  if (password.length > 200) return 'That is longer than 200 characters.';
-  if (!/[A-Z]/.test(password)) return 'Include at least one uppercase letter.';
-  if (!/[a-z]/.test(password)) return 'Include at least one lowercase letter.';
-  if (!/\d/.test(password)) return 'Include at least one number.';
-  if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) return 'Include at least one special character (!@#$%^&*(),.?":{}|<>).';
-  return null;
+  const result = validatePassword(password);
+  if (result.valid) return null;
+  return result.errors.join(' ');
+}
+
+/**
+ * Detailed password validation that returns all issues at once.
+ *
+ * This provides more comprehensive feedback for better user experience.
+ */
+export function validatePassword(password: string): PasswordValidationResult {
+  const errors: string[] = [];
+  
+  if (password.length < 10) {
+    errors.push('Use at least 10 characters');
+  }
+  if (password.length > 200) {
+    errors.push('That is longer than 200 characters');
+  }
+  if (!/[A-Z]/.test(password)) {
+    errors.push('Include at least one uppercase letter (A-Z)');
+  }
+  if (!/[a-z]/.test(password)) {
+    errors.push('Include at least one lowercase letter (a-z)');
+  }
+  if (!/\d/.test(password)) {
+    errors.push('Include at least one number (0-9)');
+  }
+  if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+    errors.push('Include at least one special character (!@#$%^&*(),.?":{}|<>)');
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    requirements: {
+      minLength: 10,
+      maxLength: 200,
+      requiresUppercase: true,
+      requiresLowercase: true,
+      requiresNumber: true,
+      requiresSpecial: true,
+    },
+  };
 }

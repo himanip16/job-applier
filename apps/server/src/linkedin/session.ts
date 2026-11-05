@@ -48,6 +48,38 @@ export async function hasLinkedInSession(): Promise<boolean> {
 /** Pages LinkedIn serves when it wants a login instead of showing you the thing. */
 const AUTH_WALL = /\/(authwall|login|uas\/login|checkpoint|signup)\b/;
 
+/** Additional pages that indicate LinkedIn challenges or rate limiting */
+const CHALLENGE_PAGES = /\/(checkpoint|challenge|verify|security|unusual|captcha|rate-limit)\b/;
+
+/**
+ * Check if the current page state indicates a logged-in LinkedIn session.
+ *
+ * Uses multiple signals for robustness:
+ * 1. URL is not on an auth wall or challenge page
+ * 2. Page contains authenticated user elements (nav menu, profile dropdown)
+ * 3. No login form is visible
+ */
+export async function isLoggedIn(page: Page): Promise<boolean> {
+  const url = page.url();
+  
+  // Check if we're on an auth wall or challenge page
+  if (AUTH_WALL.test(new URL(url).pathname) || CHALLENGE_PAGES.test(new URL(url).pathname)) {
+    return false;
+  }
+
+  // Check for authenticated page elements
+  const hasAuthenticatedElements = await page.evaluate(() => {
+    // Look for elements that only exist when logged in
+    const hasNavMenu = !!document.querySelector('nav.global-nav, .global-nav, [data-test-id="global-nav"]');
+    const hasMeDropdown = !!document.querySelector('.global-nav__me, [data-test-id="global-nav__me"], .profile-rail-card');
+    const hasNoLoginForm = !document.querySelector('#login-form, .login-form, [data-test-id="login-form"]');
+    
+    return hasNavMenu || hasMeDropdown;
+  });
+
+  return hasAuthenticatedElements;
+}
+
 /**
  * Navigate, pause, and fail loudly if we ended up logged out or challenged.
  *
@@ -61,11 +93,20 @@ export async function openLinkedIn(page: Page, url: string): Promise<void> {
   await page.waitForTimeout(config.linkedinDelayMs);
 
   const landed = page.url();
-  if (AUTH_WALL.test(new URL(landed).pathname)) {
+  const landedPath = new URL(landed).pathname;
+  
+  if (AUTH_WALL.test(landedPath)) {
     throw new LinkedInSignInRequired(
       `LinkedIn redirected to ${landed}, which is its sign-in wall. Sign in by hand in the ` +
         'browser window this app controls, then run it again. If you are already signed in, ' +
         'LinkedIn has challenged the session — open the window and clear the challenge yourself.',
+    );
+  }
+
+  if (CHALLENGE_PAGES.test(landedPath)) {
+    throw new LinkedInSignInRequired(
+      `LinkedIn has challenged the session with a security checkpoint at ${landed}. ` +
+        'Please resolve the challenge in the browser window manually, then try again.',
     );
   }
 }

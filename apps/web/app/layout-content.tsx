@@ -9,6 +9,7 @@ import { AccountMenu } from '../components/AccountMenu';
 import { ErrorProvider, useError } from '../contexts/ErrorContext';
 import { RateLimitModal } from '../components/RateLimitModal';
 import { setRateLimitModalHandler } from '../lib/api';
+import { ToastProvider } from '../components/Toast';
 
 function ClientLayout({ children }: { children: ReactNode }) {
   const { rateLimitError, showRateLimitModal, hideRateLimitModal } = useError();
@@ -49,7 +50,9 @@ function ClientLayout({ children }: { children: ReactNode }) {
 export function LayoutContent({ children }: { children: ReactNode }) {
   return (
     <ErrorProvider>
-      <ClientLayout>{children}</ClientLayout>
+      <ToastProvider>
+        <ClientLayout>{children}</ClientLayout>
+      </ToastProvider>
     </ErrorProvider>
   );
 }

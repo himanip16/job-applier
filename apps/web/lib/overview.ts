@@ -129,10 +129,15 @@ function onVisibilityChange(): void {
   schedule();
 }
 
-export function useOverview(): { data: Overview | null; error: string | null; refresh: () => void } {
+export function useOverview(enabled: boolean = true): { data: Overview | null; error: string | null; refresh: () => void } {
   const [state, setState] = useState(latest);
 
   useEffect(() => {
+    if (!enabled) {
+      setState({ data: null, error: null });
+      return;
+    }
+
     listeners.add(setState);
     // A component mounting mid-cycle should not wait out the interval for its
     // first numbers, but it also should not trigger a fetch when one just
@@ -153,7 +158,7 @@ export function useOverview(): { data: Overview | null; error: string | null; re
         document.removeEventListener('visibilitychange', onVisibilityChange);
       }
     };
-  }, []);
+  }, [enabled]);
 
   return { ...state, refresh: () => void refresh() };
 }

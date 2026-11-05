@@ -41,7 +41,7 @@ const ProfileInput = z.object({
 export function registerProfileRoutes(app: FastifyInstance, requireProfile: RequireProfile) {
   app.get('/api/profile', async (req, reply) => {
     const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in to use this.' });
+    if (!user) return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
     const profile = await prisma.profile.findUnique({
       where: { userId: user.id },
       include: { facts: { orderBy: { key: 'asc' } }, resumes: { orderBy: { createdAt: 'desc' } } },
@@ -60,7 +60,7 @@ export function registerProfileRoutes(app: FastifyInstance, requireProfile: Requ
 
   app.put('/api/profile', async (req, reply) => {
     const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in to use this.' });
+    if (!user) return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
     const parseResult = ProfileInput.safeParse(req.body);
     if (!parseResult.success) {
       return reply.code(400).send({ error: 'Invalid input', issues: parseResult.error.issues });

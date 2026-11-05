@@ -80,6 +80,28 @@ export interface DraftInput {
 }
 
 /**
+ * A deterministic fallback keeps outreach usable when no LLM is configured or
+ * the provider is temporarily unavailable. Recruiters get an interview ask;
+ * everyone else gets a referral ask, using only known profile/contact fields.
+ */
+export function defaultOutreach(input: Pick<DraftInput,
+  'candidateContext' | 'contactFirstName' | 'contactRole' | 'companyName' | 'jobTitle' | 'channel'
+>): OutreachDraft {
+  const name = input.contactFirstName || 'there';
+  const candidateName = /(?:^|\n)Name:\s*([^\n]+)/i.exec(input.candidateContext)?.[1]?.trim();
+  const role = input.jobTitle.trim();
+  const atCompany = input.companyName.trim() ? ` at ${input.companyName.trim()}` : '';
+  const aboutRole = role ? ` for the ${role} role${atCompany}` : atCompany;
+
+  const body = input.contactRole === 'TALENT'
+    ? `Hi ${name}, I'm interested in opportunities${aboutRole}. Would you be open to a brief interview or conversation about where my profile could fit?${candidateName ? ` Thanks, ${candidateName}` : ''}`
+    : `Hi ${name}, I'm interested in opportunities${aboutRole}. Based on my profile, would you be comfortable referring me for a suitable role?${candidateName ? ` Thanks, ${candidateName}` : ''}`;
+
+  const limit = CHAR_LIMITS[input.channel];
+  return { body, claimsMade: [], unsupportedClaims: [], overLimit: body.length > limit };
+}
+
+/**
  * The character cap is stated in the prompt and checked afterwards.
  *
  * A 300-character connection note is the hard case: models overshoot it
@@ -116,14 +138,19 @@ Write the message.`;
 
   const system = `${SHARED}\n\n${BY_ROLE[input.contactRole]}\n\n${channelNote}`;
 
-  let parsed = await generate({
-    task: 'outreach',
-    system,
-    prompt: prompt(),
-    schema: DraftSchema,
-    maxTokens: 2000,
-  });
-  if (!parsed) throw new Error('Outreach drafting returned no parseable output.');
+  let parsed;
+  try {
+    parsed = await generate({
+      task: 'outreach',
+      system,
+      prompt: prompt(),
+      schema: DraftSchema,
+      maxTokens: 2000,
+    });
+  } catch {
+    return defaultOutreach(input);
+  }
+  if (!parsed) return defaultOutreach(input);
 
   if (parsed.body.trim().length > limit) {
     const retry = await generate({

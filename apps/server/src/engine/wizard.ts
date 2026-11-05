@@ -613,7 +613,7 @@ async function pauseForRequiredFields(
 }
 
 async function attachStepFiles(
-  { applicationId, page, resume, ctx }: WalkContext,
+  { applicationId, page, adapter, resume, ctx }: WalkContext,
   state: WalkState,
   { resume: resumeInput, coverLetter: coverInput }: ReturnType<AtsAdapter['fileInputs']>,
 ): Promise<boolean> {
@@ -628,7 +628,9 @@ async function attachStepFiles(
         !(await fileBoxShowsFile(page, resumeInput.selector, resume?.filename ?? ''))));
   if (resumeInput && resumeWanted) {
     if (!resume) throw new Error('This form wants a resume and none is uploaded to your profile.');
-    await attachFile(page, resumeInput.selector, path.resolve(resume.path));
+    // Some boards (Okta's) hide the real input behind their own uploader.
+    if (adapter.attachFile) await adapter.attachFile(page, resumeInput, path.resolve(resume.path));
+    else await attachFile(page, resumeInput.selector, path.resolve(resume.path));
     state.resumeAttached = true;
     state.resumeStep = state.step;
     attached = true;
@@ -640,7 +642,8 @@ async function attachStepFiles(
   }
   if (coverInput && coverLetter && !state.coverAttached) {
     const file = await writeCoverLetterFile(applicationId, coverLetter);
-    await attachFile(page, coverInput.selector, file);
+    if (adapter.attachFile) await adapter.attachFile(page, coverInput, file);
+    else await attachFile(page, coverInput.selector, file);
     state.coverAttached = true;
     attached = true;
     await bus.emitEvent(applicationId, 'FILE_ATTACHED', 'Attached the generated cover letter.');

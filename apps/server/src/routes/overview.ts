@@ -24,7 +24,7 @@ export function registerOverviewRoutes(app: FastifyInstance) {
     const profile = user
       ? await prisma.profile.findUnique({
           where: { userId: user.id },
-          include: { facts: true, resumes: true, _count: { select: { answers: true } } },
+          include: { facts: true, resumes: true, user: true, _count: { select: { answers: true } } },
         })
       : null;
 
@@ -154,8 +154,8 @@ export function registerOverviewRoutes(app: FastifyInstance) {
       {
         id: 'profile',
         label: 'Fill in your profile',
-        done: Boolean(profile?.email && profile?.fullName),
-        detail: profile ? `${profile.fullName} · ${profile.email}` : 'Name, contact and links fill half of every form directly.',
+        done: Boolean(profile?.user?.email && profile?.fullName),
+        detail: profile?.user ? `${profile.fullName} · ${profile.user.email}` : 'Name, contact and links fill half of every form directly.',
         href: '/profile',
       },
       {
@@ -242,7 +242,7 @@ export function registerOverviewRoutes(app: FastifyInstance) {
    */
   app.get('/api/system', async (req, reply) => {
     const user = await currentUser(req);
-    if (!user) return reply.code(401).send({ error: 'Sign in to use this.' });
+    if (!user) return reply.code(401).send({ error: 'Sign in to use this.', code: 'AUTH_REQUIRED' });
 
     return {
       llmConfigured: isConfigured(),
