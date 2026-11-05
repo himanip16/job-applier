@@ -14,6 +14,7 @@ import { resolveFields } from '../src/engine/resolver.js';
 import { askHuman, pauseForHuman } from '../src/engine/humanGate.js';
 import { saveToAnswerCache } from '../src/engine/answerCache.js';
 import { generateCoverLetter } from '../src/llm/coverLetter.js';
+import { handleAutofillPrompt, chooseAutofill } from '../src/engine/autofillHandler.js';
 
 vi.mock('../src/lib/db.js', () => ({
   prisma: { pendingQuestion: { findMany: vi.fn() }, application: { update: vi.fn() } },
@@ -29,7 +30,7 @@ vi.mock('../src/browser/session.js', () => ({
   PageClosedError: class PageClosedError extends Error {},
 }));
 vi.mock('../src/browser/fill.js', () => ({
-  attachFile: vi.fn(), fillField: vi.fn(), inspectControl: vi.fn(), verifyFilled: vi.fn(),
+  attachFile: vi.fn(), fillField: vi.fn(), inspectControl: vi.fn(), verifyFilled: vi.fn(), readShown: vi.fn(),
   alreadyHolds: (actual: string, wanted: string) => actual === wanted,
   FillError: class FillError extends Error {},
 }));
@@ -38,6 +39,9 @@ vi.mock('../src/browser/steps.js', () => ({
   pageSignature: vi.fn(), readStepProgress: vi.fn(), readValidationErrors: vi.fn(),
   settle: vi.fn(), waitForStepChange: vi.fn(),
   isNavigationRace: (err: Error) => err.message === 'navigation race',
+}));
+vi.mock('../src/engine/autofillHandler.js', () => ({
+  handleAutofillPrompt: vi.fn(), chooseAutofill: vi.fn(),
 }));
 vi.mock('../src/llm/candidateContext.js', () => ({ renderCandidateContext: () => 'candidate' }));
 vi.mock('../src/llm/coverLetter.js', () => ({ generateCoverLetter: vi.fn() }));
@@ -57,7 +61,9 @@ const submit = { kind: 'SUBMIT' as const, label: 'Submit', selector: '#submit' }
 const answerFor = (id: string): ResolvedAnswer => ({
   fieldId: id, value: 'Himani', displayValue: 'Himani', source: 'PROFILE', confidence: 1, remember: false,
 });
-const page = { click: vi.fn(), isClosed: vi.fn() };
+const firstMock = { evaluate: vi.fn() };
+const locatorMock = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnValue(firstMock) };
+const page = { click: vi.fn(), isClosed: vi.fn(), locator: vi.fn().mockReturnValue(locatorMock), waitForLoadState: vi.fn().mockResolvedValue(undefined) };
 const adapter = {
   extractForm: vi.fn(), fileInputs: vi.fn(), submit: vi.fn(),
 };
@@ -74,6 +80,11 @@ beforeEach(() => {
   Object.assign(config, { maxApplicationSteps: 12 });
   page.click.mockReset().mockResolvedValue(undefined);
   page.isClosed.mockReturnValue(false);
+  page.locator.mockReset().mockReturnValue(locatorMock);
+  page.waitForLoadState.mockReset().mockResolvedValue(undefined);
+  locatorMock.count.mockReset().mockResolvedValue(0);
+  locatorMock.first.mockReset().mockReturnValue(firstMock);
+  firstMock.evaluate.mockReset();
   adapter.extractForm.mockReset().mockResolvedValue([field]);
   adapter.fileInputs.mockReturnValue({});
   vi.mocked(prisma.pendingQuestion.findMany).mockResolvedValue([]);
@@ -95,6 +106,8 @@ beforeEach(() => {
   vi.mocked(pauseForHuman).mockReset().mockResolvedValue(true);
   vi.mocked(askHuman).mockReset().mockResolvedValue(new Map());
   vi.mocked(generateCoverLetter).mockReset().mockResolvedValue({ body: 'Letter', claimsMade: [], unsupportedClaims: [] });
+  vi.mocked(handleAutofillPrompt).mockReset().mockResolvedValue({ shouldContinue: false, shouldDecrementStep: false });
+  vi.mocked(chooseAutofill).mockReset().mockResolvedValue(null);
 });
 
 describe('walking an application', () => {
@@ -128,21 +141,19 @@ describe('walking an application', () => {
 
   it('does not charge a successful autofill choice against the step budget', async () => {
     Object.assign(config, { maxApplicationSteps: 1 });
-    vi.mocked(steps.detectAutofillPrompt).mockResolvedValueOnce({
-      question: 'Autofill?', manualSelector: '#manual', autofillSelector: '#autofill',
-    });
+    vi.mocked(handleAutofillPrompt).mockResolvedValueOnce({ shouldContinue: true, shouldDecrementStep: true });
+    vi.mocked(chooseAutofill).mockResolvedValueOnce('#manual');
     expect(await walk()).toMatchObject({ kind: 'REACHED_END', fields: [{ id: 's1:f0' }] });
     expect(page.click).toHaveBeenCalledWith('#manual');
   });
 
   it('handles a false autofill prompt once while re-reading a rejected step', async () => {
-    vi.mocked(steps.detectAutofillPrompt).mockResolvedValue({
-      question: 'Autofill?', manualSelector: '#manual', autofillSelector: '#autofill',
-    });
+    vi.mocked(handleAutofillPrompt).mockResolvedValueOnce({ shouldContinue: true, shouldDecrementStep: false });
+    vi.mocked(chooseAutofill).mockResolvedValue('#manual');
     vi.mocked(steps.findAdvanceControl).mockResolvedValueOnce(next);
     vi.mocked(steps.waitForStepChange).mockResolvedValue(false);
     await walk();
-    expect(steps.detectAutofillPrompt).toHaveBeenCalledTimes(1);
+    expect(handleAutofillPrompt).toHaveBeenCalledTimes(1);
     expect(page.click.mock.calls).toEqual([['#manual'], ['#next']]);
   });
 

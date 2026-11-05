@@ -16,7 +16,7 @@ import { logger, createProfileLogger, createApplicationLogger } from './logger.j
 /**
  * Scheduler for periodic job discovery and auto-apply.
  *
- * Runs findJobs for all profiles every 6 hours (at 0, 6, 12, 18, 24 UTC).
+ * Runs findJobs for all profiles every 12 hours (at 0, 12, 24 UTC).
  * If auto-apply is enabled, automatically applies to high-scoring discovered jobs.
  * Can also be triggered manually via an admin endpoint.
  */
@@ -343,7 +343,7 @@ async function autoApplyToHighScoringJobs(profileId: string, email: string): Pro
 /**
  * Start the scheduler.
  *
- * Schedules the job to run every 6 hours at 0, 6, 12, 18, 24 UTC.
+ * Schedules the job to run every 12 hours at 0, 12, 24 UTC.
  * Only one scheduler can be active at a time.
  */
 export function startScheduler(): void {
@@ -352,9 +352,9 @@ export function startScheduler(): void {
     return;
   }
 
-  // Cron expression: run every 6 hours (0, 6, 12, 18, 24 UTC)
+  // Cron expression: run every 12 hours (0, 12, 24 UTC)
   // Using UTC to ensure consistent timing across all timezones
-  const cronExpression = '0 */6 * * *';
+  const cronExpression = '0 */12 * * *';
 
   scheduledTask = cron.schedule(cronExpression, async () => {
     await runScheduledJobDiscovery();
@@ -362,7 +362,7 @@ export function startScheduler(): void {
     timezone: 'UTC', // Explicitly set UTC for consistent scheduling
   });
 
-  logger.info('[scheduler] Started - running every 6 hours (0, 6, 12, 18, 24 UTC)');
+  logger.info('[scheduler] Started - running every 12 hours (0, 12, 24 UTC)');
 }
 
 /**

@@ -1,42 +1,31 @@
-import path from 'node:path';
 import type { Page } from 'playwright';
 import { normalizeLabel, type AnswerGap, type FormField, type ResolvedAnswer } from '@ja/shared';
 import { prisma, type Prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
-import { PageClosedError, screenshot } from '../browser/session.js';
-import { attachFile, fileBoxShowsFile, inspectControl, readShown } from '../browser/fill.js';
+import { PageClosedError } from '../browser/session.js';
 import { detectBlockers, inlineAccountPending } from '../browser/blockers.js';
 import {
-  detectAutofillPrompt,
-  findAdvanceControl,
-  isNavigationRace,
   looksLikeAGate,
   pageSignature,
-  readStepProgress,
-  readValidationErrors,
   settle,
-  waitForStepChange,
   type AdvanceControl,
 } from '../browser/steps.js';
 import type { AtsAdapter, JobMeta } from '../ats/types.js';
 import { renderCandidateContext } from '../llm/candidateContext.js';
-import { generateCoverLetter } from '../llm/coverLetter.js';
 import { resolveFields, type ResolveContext } from './resolver.js';
-import { askHuman, pauseForHuman } from './humanGate.js';
+import { pauseForHuman } from './humanGate.js';
 import { artifact, setStatus, truncate, writeCoverLetterFile } from './runLog.js';
 import type { FieldPlanEntry } from './fieldPlan.js';
 import { fillApplicationFields } from './wizardFields.js';
-import { readAnswerCache, reuseCachedAnswers, saveToAnswerCache } from './answerCache.js';
+import { readAnswerCache } from './answerCache.js';
 import { BrowserEdits } from './browserEdits.js';
-import {
-  expandRepeatableSections,
-  hasRepeatableSections,
-  historyFromFacts,
-  labelRepeatableFields,
-  readResumeHistory,
-  type ResumeHistory,
-} from './repeatableSections.js';
+import { handleAutofillPrompt } from './autofillHandler.js';
+import { readStepFields, workHistory } from './stepReader.js';
+import { resolveStepAnswers, askAboutGaps, followsANo } from './stepResolver.js';
+import { attachStepFiles, prepareCoverLetter } from './fileAttacher.js';
+import { advanceStep, recoverNavigation, awaitingParentPick, pauseForRequiredFields, type StepOutcome } from './stepNavigator.js';
+import { answersFromEarlierRuns, carryOverEarlierReplies, rekeyRereadStep } from './answerReuse.js';
 
 /**
  * Walking an application from its first screen to its last.
@@ -70,12 +59,12 @@ export type WalkOutcome =
        * button" and "the button that ends the application" are only the same
        * thing on the last screen.
        */
-      submitControl: AdvanceControl | null;
+      submitControl: import('../browser/steps.js').AdvanceControl | null;
       companyKey: string;
       edits: BrowserEdits;
     };
 
-interface WalkArgs {
+export interface WalkArgs {
   applicationId: string;
   page: Page;
   adapter: AtsAdapter;
@@ -87,17 +76,17 @@ interface WalkArgs {
   edits?: BrowserEdits;
 }
 
-interface WalkContext extends WalkArgs {
+export interface WalkContext extends WalkArgs {
   edits: BrowserEdits;
   resume: RunRecord['profile']['resumes'][number] | undefined;
   earlierReplies: Awaited<ReturnType<typeof answersFromEarlierRuns>>;
   earlierDerived: Awaited<ReturnType<typeof readAnswerCache>>;
   ctx: ResolveContext;
   /** Jobs and schools to lay out in "Add another" sections; read on first need. */
-  history?: ResumeHistory | null;
+  history?: import('./repeatableSections.js').ResumeHistory | null;
 }
 
-interface WalkState {
+export interface WalkState {
   plan: FieldPlanEntry[];
   allFields: FormField[];
   answers: Map<string, ResolvedAnswer>;
@@ -119,8 +108,6 @@ interface WalkState {
   // The screen read again for dependent picklists' choices.
   cascadeRereadOn: string | null;
 }
-
-type StepOutcome = 'CONTINUE' | 'ABANDONED' | 'REACHED_END';
 
 export async function walkApplication(args: WalkArgs): Promise<WalkOutcome> {
   const context = await createWalkContext(args);
@@ -231,7 +218,11 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
     };
     if (!(await pauseForHuman(applicationId, page, account))) return 'ABANDONED';
   }
-  if (await handleAutofillPrompt(context, state, signature)) return 'CONTINUE';
+  const autofillResult = await handleAutofillPrompt({ applicationId, page, resume: context.resume }, state, signature);
+  if (autofillResult.shouldContinue) {
+    if (autofillResult.shouldDecrementStep) state.step--;
+    return 'CONTINUE';
+  }
 
   const { fields, rowsDeferred } = await readStepFields(context, state, signature);
   const fileInputs = adapter.fileInputs(fields);
@@ -297,662 +288,4 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
     return advanceStep(context, state, await pageSignature(page));
   }
   return advanceStep(context, state, signature);
-}
-
-/**
- * A required SuccessFactors picklist that was read with no choices and can be
- * opened now - its parent was picked by this pass.
- */
-async function awaitingParentPick(page: Page, fields: FormField[]): Promise<boolean> {
-  for (const f of fields) {
-    if (!f.required || f.widget !== 'react-select' || f.options?.length) continue;
-    const ready = await page
-      .locator(f.selector)
-      .first()
-      .evaluate((el) => !!el.closest('.sfCascadingPicklist') && !(el as HTMLInputElement).disabled, undefined, {
-        timeout: 2_000,
-      })
-      .catch(() => false);
-    if (ready) return true;
-  }
-  return false;
-}
-
-/** True only when answering the prompt moved to another screen. */
-async function handleAutofillPrompt(
-  { applicationId, page, resume }: WalkContext,
-  state: WalkState,
-  signature: string,
-): Promise<boolean> {
-  if (state.handledPrompts.has(signature)) return false;
-  const prompt = await detectAutofillPrompt(page);
-  if (!prompt) return false;
-  state.handledPrompts.add(signature);
-  const target = await chooseAutofill(applicationId, prompt, Boolean(resume));
-  if (!target) return false;
-  await page.click(target).catch(() => {});
-  if (await waitForStepChange(page, signature, 20_000)) {
-    state.step--;
-    return true;
-  }
-  await bus.emitEvent(
-    applicationId,
-    'LOG',
-    'That choice did not change the page; carrying on with the form as it is.',
-  );
-  return false;
-}
-
-async function readStepFields(
-  context: WalkContext,
-  state: WalkState,
-  signature: string,
-): Promise<{ fields: FormField[]; rowsDeferred: boolean }> {
-  const { applicationId, page, adapter, earlierReplies, earlierDerived, ctx } = context;
-  const { sessionAnswers } = ctx;
-  // Extraction re-stamps handles; the last read's no longer point at its controls.
-  context.edits.forget();
-  const progress = await readStepProgress(page);
-  await setStatus(applicationId, 'FILLING', describeStep(state.step, progress), { progress });
-
-  const gate = await looksLikeAGate(page);
-  let fields: FormField[] = [];
-  let rowsDeferred = false;
-  if (!gate) {
-    // Handles restart at f0 on every extraction, so they are namespaced by
-    // step before anything stores them - otherwise step 2's "f0" would
-    // overwrite step 1's answer and its pending question.
-    const sections = await hasRepeatableSections(page);
-    // Resume first, then everything else. Workday's My Experience puts the
-    // resume upload beside Work Experience and Education, and its parser adds
-    // rows of its own - so adding rows before the upload left duplicates.
-    // Hold the rows back once per screen; the walk attaches and reads again.
-    rowsDeferred =
-      sections &&
-      !state.resumeAttached &&
-      state.rowsDeferredOn !== signature &&
-      (await page.locator('input[type="file"]').count().catch(() => 0)) > 0;
-    if (rowsDeferred) state.rowsDeferredOn = signature;
-    const history = sections && !rowsDeferred ? await workHistory(context) : null;
-    if (history) {
-      for (const r of await expandRepeatableSections(page, history)) {
-        if (r.after === r.before) continue;
-        await bus.emitEvent(
-          applicationId,
-          'LOG',
-          `Added ${r.kind} rows: ${r.before} -> ${r.after} (you have ${r.wanted} on record).`,
-        );
-      }
-    }
-    fields = (await adapter.extractForm(page)).map((f) => ({ ...f, id: `s${state.step}:${f.id}` }));
-    // Every row repeats the same labels; name each after the entry it is for.
-    if (sections) fields = await labelRepeatableFields(page, fields, history);
-    rekeyRereadStep(fields, state, sessionAnswers);
-    state.allFields.push(...fields);
-    carryOverEarlierReplies(fields, earlierReplies, sessionAnswers);
-    reuseCachedAnswers(fields, earlierDerived, sessionAnswers);
-    await bus.emitEvent(
-      applicationId,
-      'FORM_EXTRACTED',
-      `Step ${state.step}: ${fields.length} field(s), ${fields.filter((f) => f.required).length} required.`,
-      { step: state.step, fields },
-    );
-  }
-
-  // Once the resume is in, Workday's "Autofill with Resume" step swaps its drop
-  // zone for a file card and has no inputs left - that is the step done, not a
-  // wall. Fall through to Continue so its parser fills the next steps.
-  if (gate && state.step === 1 && !state.resumeAttached) {
-    throw new Error(
-      'No form fields found on the page. The posting may be closed, or the form behind a wall.',
-    );
-  }
-  return { fields, rowsDeferred };
-}
-
-/** Saved employment.N / education.N facts first; the resume only when there are none. */
-async function workHistory(context: WalkContext): Promise<ResumeHistory | null> {
-  if (context.history === undefined) {
-    context.history =
-      historyFromFacts(context.app.profile.facts) ??
-      (await readResumeHistory(context.ctx.candidateContext).catch(() => null));
-  }
-  return context.history;
-}
-
-/** Generate only when requested or required, before resolving text fields. */
-async function prepareCoverLetter(
-  { applicationId, app, meta, ctx }: WalkContext,
-  fields: FormField[],
-  coverInput: FormField | undefined,
-): Promise<void> {
-  const { candidateContext } = ctx;
-  const coverField = fields.find((f) => /cover letter/i.test(f.label) && f.kind === 'TEXTAREA');
-  const demanded = coverField?.required === true || coverInput?.required === true;
-  const wantsCoverLetter = (app.writeCoverLetter || demanded) && (!!coverInput || !!coverField);
-  if (wantsCoverLetter && !ctx.coverLetter) {
-    if (demanded && !app.writeCoverLetter) {
-      await bus.emitEvent(
-        applicationId,
-        'LOG',
-        'This form requires a cover letter, so one is being written even though the ' +
-          'application was set not to.',
-      );
-    }
-    ctx.coverLetter = await writeCoverLetter(applicationId, {
-      candidateContext,
-      companyName: meta.company,
-      jobTitle: meta.title,
-      jobDescription: meta.descriptionText,
-    });
-  }
-}
-
-/** Resolve what we can; returns the required fields nothing answered. */
-async function resolveStepAnswers(
-  { applicationId, ctx }: WalkContext,
-  state: WalkState,
-  fillable: FormField[],
-): Promise<AnswerGap[]> {
-  const gaps: AnswerGap[] = [];
-  const resolved = await resolveFields(fillable, ctx);
-  // Keep what the model worked out before anything can go wrong, so a
-  // restart reuses it instead of paying for it again.
-  await saveToAnswerCache(
-    applicationId,
-    fillable,
-    new Map([...resolved].flatMap(([id, r]) => (r.kind === 'answer' ? [[id, r.answer] as const] : []))),
-  );
-  for (const field of fillable) {
-    const res = resolved.get(field.id)!;
-    if (res.kind === 'answer') {
-      state.answers.set(field.id, res.answer);
-      await bus.emitEvent(
-        applicationId,
-        'FIELD_RESOLVED',
-        `${field.label}: ${truncate(res.answer.displayValue)} [${res.answer.source}]`,
-        { fieldId: field.id, source: res.answer.source, confidence: res.answer.confidence },
-      );
-    } else if (!field.required || followsANo(field, fillable, state.answers)) {
-      // Questions are asked before anything is filled, so one optional box we
-      // cannot answer (ServiceNow's Facebook, X and "Message to the Hiring
-      // Team") left the whole form blank while the run waited on you. Blank
-      // is a legitimate answer to an optional question; a guess is not.
-      state.answers.set(field.id, {
-        fieldId: field.id,
-        value: null,
-        displayValue: '',
-        source: 'SKIPPED',
-        confidence: 1,
-        rationale: field.required
-          ? 'Follow-up to a question answered No, so it does not apply and is left blank.'
-          : 'Optional, and nothing in your profile answers it, so it is left blank.',
-        remember: false,
-        canonicalKey: field.canonicalKey,
-      });
-      const why = field.required ? 'follow-up to a No' : 'optional';
-      await bus.emitEvent(applicationId, 'FIELD_RESOLVED', `${field.label}: left blank (${why}) [SKIPPED]`, {
-        fieldId: field.id,
-        source: 'SKIPPED',
-        confidence: 1,
-      });
-    } else {
-      gaps.push(res.gap);
-    }
-  }
-
-  return gaps;
-}
-
-/**
- * Ask about the required fields nothing answered, once the rest is filled,
- * and return the ones that now have an answer.
- *
- * Filling can settle a question by itself: ticking "I currently work here"
- * removes or disables the "To" date it was asked about. Those are dropped
- * rather than put to you.
- */
-async function askAboutGaps(
-  { applicationId, page, ctx }: WalkContext,
-  state: WalkState,
-  fillable: FormField[],
-  gaps: AnswerGap[],
-): Promise<FormField[]> {
-  const byId = new Map(fillable.map((f) => [f.id, f]));
-  const open: AnswerGap[] = [];
-  for (const gap of gaps) {
-    const field = byId.get(gap.fieldId);
-    if (!field) continue;
-    const control = await inspectControl(page, field);
-    if (!control.exists || control.locked) continue;
-    // What the page shows, not input.value: every radio carries a value
-    // whether or not it is picked. A site default that is already selected
-    // (Okta's "Upload PDF") stands, rather than being put to you.
-    const shown = await readShown(page, field);
-    if (shown && !shown.length) open.push(gap);
-  }
-  if (!open.length) return [];
-  const supplied = await askHuman(applicationId, page, fillable, open);
-  for (const [fieldId, answer] of supplied) {
-    state.answers.set(fieldId, answer);
-    ctx.sessionAnswers.set(fieldId, answer);
-  }
-  const asked = open.map((g) => byId.get(g.fieldId)!);
-  const stillMissing = asked.filter((f) => !state.answers.has(f.id));
-  if (stillMissing.length) {
-    throw new Error(
-      `Required field(s) left unanswered: ${stillMissing.map((f) => f.label).join(', ')}`,
-    );
-  }
-  return asked;
-}
-
-/**
- * "If yes, please describe..." under a question this run answered No.
- *
- * Forms mark these required even though they only apply to a Yes, so they
- * were put to you after you (or your profile) had already said No.
- */
-// Starts with the condition. "Do you have a non-compete? If yes, describe" is
-// a question of its own, and is still asked.
-const FOLLOW_UP =
-  /^\W*(if (yes|so)\b|if you (answered|selected|chose|said) \W?yes\b)|^(please )?(describe|explain|specify|provide details|list|give details)\b[^?]{0,60}\bif (yes|so)\b/i;
-export function followsANo(
-  field: FormField,
-  fields: FormField[],
-  answers: Map<string, ResolvedAnswer>,
-): boolean {
-  if (!FOLLOW_UP.test(field.label.trim())) return false;
-  // The question it hangs off is a yes/no-shaped one just before it.
-  const at = fields.indexOf(field);
-  for (let i = at - 1; i >= 0 && i >= at - 2; i--) {
-    const prev = fields[i]!;
-    const answer = answers.get(prev.id);
-    const yesNo =
-      prev.options?.some((o) => /^no\b/i.test(o.label.trim())) ||
-      prev.kind === 'CHECKBOX' ||
-      answer?.value === false;
-    if (!yesNo) continue;
-    if (!answer) return false;
-    const shown = normalizeLabel(answer.displayValue);
-    return answer.value === false || /^(no|false)\b/.test(shown);
-  }
-  return false;
-}
-
-async function pauseForRequiredFields(
-  { applicationId, page, edits }: WalkContext,
-  state: WalkState,
-  unfilledRequired: string[],
-): Promise<StepOutcome> {
-  // Path and heading only: the field list changes under your hands as you
-  // answer (Microsoft drops the Legal Name boxes on "same name? Yes").
-  const where = (sig: string) => sig.split('#').slice(0, 2).join('#');
-  const here = where(await pageSignature(page));
-  let movedOn = false;
-  const carryOn = await edits.during(pauseForHuman(applicationId, page, {
-    clearedWhen: async () => {
-      const now = await pageSignature(page).catch(() => '');
-      movedOn = Boolean(now) && where(now) !== here;
-      return movedOn;
-    },
-    kind: 'UNKNOWN',
-    detail:
-      `Could not fill ${unfilledRequired.map((l) => `"${l}"`).join(', ')}, which ` +
-      `${unfilledRequired.length === 1 ? 'is' : 'are'} required. Everything else on this step ` +
-      'is filled in - set those in the open browser and it will carry on.',
-    humanCanClear: true,
-    autoClears: false,
-  }));
-  if (!carryOn) return 'ABANDONED';
-  // You pressed Next yourself: this is a new step, read it as one.
-  if (movedOn) return 'CONTINUE';
-  state.afterHumanPause = true;
-  state.step--;
-  return 'CONTINUE';
-}
-
-async function attachStepFiles(
-  { applicationId, page, adapter, resume, ctx }: WalkContext,
-  state: WalkState,
-  { resume: resumeInput, coverLetter: coverInput }: ReturnType<AtsAdapter['fileInputs']>,
-): Promise<boolean> {
-  const { coverLetter } = ctx;
-  let attached = false;
-  // Once per step, and on a later step only if its box does not already show
-  // the file - Workday carries it over on some tenants and not on others.
-  const resumeWanted =
-    resumeInput &&
-    (!state.resumeAttached ||
-      (state.resumeStep !== state.step &&
-        !(await fileBoxShowsFile(page, resumeInput.selector, resume?.filename ?? ''))));
-  if (resumeInput && resumeWanted) {
-    if (!resume) throw new Error('This form wants a resume and none is uploaded to your profile.');
-    // Some boards (Okta's) hide the real input behind their own uploader.
-    if (adapter.attachFile) await adapter.attachFile(page, resumeInput, path.resolve(resume.path));
-    else await attachFile(page, resumeInput.selector, path.resolve(resume.path));
-    state.resumeAttached = true;
-    state.resumeStep = state.step;
-    attached = true;
-    await bus.emitEvent(applicationId, 'FILE_ATTACHED', `Attached ${resume.filename}.`);
-    state.plan.push({
-      fieldId: resumeInput.id, label: resumeInput.label, kind: 'FILE', required: resumeInput.required,
-      value: resume.filename, source: 'PROFILE', confidence: 1, filled: true,
-    });
-  }
-  if (coverInput && coverLetter && !state.coverAttached) {
-    const file = await writeCoverLetterFile(applicationId, coverLetter);
-    if (adapter.attachFile) await adapter.attachFile(page, coverInput, file);
-    else await attachFile(page, coverInput.selector, file);
-    state.coverAttached = true;
-    attached = true;
-    await bus.emitEvent(applicationId, 'FILE_ATTACHED', 'Attached the generated cover letter.');
-  }
-  return attached;
-}
-
-async function advanceStep(
-  context: WalkContext,
-  state: WalkState,
-  signature: string,
-): Promise<StepOutcome> {
-  const { applicationId, page, adapter, edits } = context;
-  // An upload or save can hold the continue button disabled for a moment.
-  await adapter.settle?.(page);
-  let advance = await findAdvanceControl(page);
-  // "Submit" on a step that is not the last one only moves the form along.
-  if (advance?.kind === 'SUBMIT' && adapter.isFinalStep && !(await adapter.isFinalStep(page).catch(() => true))) {
-    advance = { ...advance, kind: 'NEXT' };
-  }
-  if (!advance && (await detectAutofillPrompt(page))) {
-    // Never the end of a form: it is the screen before the first step.
-    throw new Error(
-      'Stuck on the site\'s "Autofill with Resume / Apply Manually" screen: choosing did not open the form.',
-    );
-  }
-  if (!advance) {
-    // Nothing to press. On a one-page form that is normal - the adapter
-    // knows how to submit it. Mid-wizard it means the markup changed.
-    await bus.emitEvent(
-      applicationId,
-      'LOG',
-      state.step === 1
-        ? 'Single-page form; handing over to the adapter to submit.'
-        : `No next or submit control on step ${state.step}; letting the adapter try to submit.`,
-    );
-    return 'REACHED_END';
-  }
-
-  if (advance.kind === 'SUBMIT') {
-    state.submitControl = advance;
-    await bus.emitEvent(
-      applicationId,
-      'LOG',
-      `Reached the end of the application ("${advance.label}") after ${state.step} step(s).`,
-    );
-    return 'REACHED_END';
-  }
-
-  await artifact(
-    applicationId,
-    'screenshot',
-    `step-${state.step}`,
-    await screenshot(page, applicationId, `step-${state.step}`),
-  ).catch(() => {});
-
-  // Last look before the step's values leave the screen.
-  await edits.capture();
-  await page.click(advance.selector).catch(async (err: unknown) => {
-    throw new Error(`Could not press "${advance.label}": ${(err as Error).message}`);
-  });
-  const moved = await waitForStepChange(page, signature, 20_000);
-  if (!moved) return handleRejectedStep(context, state, signature, advance);
-  edits.forget();
-  state.stuckSignature = null;
-  state.navigationRetries = 0;
-  return 'CONTINUE';
-}
-
-async function handleRejectedStep(
-  { applicationId, page, edits }: WalkContext,
-  state: WalkState,
-  signature: string,
-  advance: AdvanceControl,
-): Promise<StepOutcome> {
-  // Pressing continue changed nothing. Almost always the step is
-  // rejecting something; occasionally the button was not the one that
-  // moves forward. Either way the page's own complaint is the useful
-  // thing to report, not "the page did not change".
-  const errors = await readValidationErrors(page);
-  const detail = errors.length
-    ? `Step ${state.step} would not accept the form: ${errors.join(' · ')}`
-    : `Pressing "${advance.label}" on step ${state.step} did not move the application on, and the ` +
-      'page gave no reason.';
-
-  if (state.stuckSignature === signature) {
-    const carryOn = await edits.during(pauseForHuman(applicationId, page, {
-      kind: 'UNKNOWN',
-      detail: `${detail} The browser is open on it - fix it there and continue, or cancel.`,
-      humanCanClear: true,
-      autoClears: false,
-    }));
-    if (!carryOn) return 'ABANDONED';
-    state.afterHumanPause = true;
-    state.stuckSignature = null;
-    return 'CONTINUE';
-  }
-
-  // First failure: re-read the step. A rejected submit often reveals
-  // fields that were not rendered before, and filling those is exactly
-  // what the next iteration does.
-  state.stuckSignature = signature;
-  await bus.emitEvent(applicationId, 'WARNING', `${detail} Re-reading the step.`);
-  state.step--;
-  return 'CONTINUE';
-}
-
-async function recoverNavigation(
-  { applicationId, page }: WalkContext,
-  state: WalkState,
-  err: unknown,
-): Promise<void> {
-  // The page moved while we were working on it. That is a wizard doing
-  // its job, not a failure - look at wherever it landed instead. Bounded,
-  // because a page that navigates on a timer would otherwise spin here
-  // forever without ever making progress.
-  // A closed tab also reads as "Target closed"; it is not coming back.
-  if (page.isClosed() && !(err instanceof PageClosedError)) {
-    throw new PageClosedError('while the form was being filled');
-  }
-  if (!isNavigationRace(err) || state.navigationRetries >= 4) throw err;
-  state.navigationRetries++;
-  state.step--;
-  await bus.emitEvent(
-    applicationId,
-    'LOG',
-    `The page navigated while it was being read; looking at where it landed (${state.navigationRetries}/4).`,
-  );
-}
-
-/**
- * Answers given to this application on an earlier run that did not finish.
- *
- * The run most likely to need restarting is the one where you have just typed
- * two dozen answers and the tab then closed; asking all of them again is the
- * worst possible response to that.
- */
-async function answersFromEarlierRuns(
-  applicationId: string,
-): Promise<Map<string, { label: string; value: string | string[]; remember: boolean }>> {
-  const answered = await prisma.pendingQuestion.findMany({
-    where: { applicationId, answeredAt: { not: null } },
-    orderBy: { answeredAt: 'asc' },
-  });
-  const out = new Map<string, { label: string; value: string | string[]; remember: boolean }>();
-  for (const q of answered) {
-    const v = q.answerValue;
-    if (typeof v !== 'string' && !(Array.isArray(v) && v.every((x) => typeof x === 'string'))) continue;
-    out.set(q.fieldId, { label: normalizeLabel(q.rawLabel), value: v as string | string[], remember: q.remember });
-  }
-  return out;
-}
-
-/**
- * Move this step's answers onto the handles of a fresh read of the same step.
- *
- * A step is read again after a pause (state.step is wound back), and handles
- * are positional: when the page re-renders with one control more or fewer,
- * every handle after it shifts. Answers were looked up by handle alone, so on
- * Microsoft's contact page the dial code landed in "Alternate Phone Number",
- * the phone number in "Address" and the country in "Postal Code/Zip". Answers
- * now follow the question, and a handle's old answer never outlives it.
- */
-function rekeyRereadStep(
-  fields: FormField[],
-  state: WalkState,
-  sessionAnswers: Map<string, ResolvedAnswer>,
-): void {
-  const prefix = `s${state.step}:`;
-  const question = (f: FormField) => `${f.kind}:${normalizeLabel(f.label)}`;
-  // Only the latest read of each handle owns what is stored under it.
-  const byQuestion = new Map<string, ResolvedAnswer>();
-  const seen = new Set<string>();
-  for (const f of [...state.allFields].reverse()) {
-    if (!f.id.startsWith(prefix) || seen.has(f.id)) continue;
-    seen.add(f.id);
-    const answer = sessionAnswers.get(f.id);
-    if (answer && !byQuestion.has(question(f))) byQuestion.set(question(f), answer);
-  }
-  if (!seen.size) return;
-  for (const id of seen) {
-    sessionAnswers.delete(id);
-    state.answers.delete(id);
-  }
-  for (const f of fields) {
-    const answer = byQuestion.get(question(f));
-    if (answer) sessionAnswers.set(f.id, { ...answer, fieldId: f.id });
-  }
-}
-
-/**
- * Reuse an earlier reply for a field on this screen - only when it is the same
- * handle AND the same question, since handles are positional and a form that
- * changed between runs would otherwise put an answer in the wrong box.
- */
-function carryOverEarlierReplies(
-  fields: FormField[],
-  earlier: Map<string, { label: string; value: string | string[]; remember: boolean }>,
-  sessionAnswers: Map<string, ResolvedAnswer>,
-): void {
-  for (const field of fields) {
-    const prior = earlier.get(field.id);
-    if (!prior || prior.label !== normalizeLabel(field.label) || sessionAnswers.has(field.id)) continue;
-    sessionAnswers.set(field.id, {
-      fieldId: field.id,
-      value: prior.value,
-      displayValue: Array.isArray(prior.value) ? prior.value.join(', ') : prior.value,
-      source: 'USER',
-      confidence: 1,
-      rationale: 'You answered this on an earlier attempt.',
-      remember: prior.remember,
-      canonicalKey: field.canonicalKey,
-    });
-  }
-}
-
-/**
- * Which side of the "autofill with your resume?" question to take.
- *
- * Autofill, when a resume is available. It is the employer's own parser
- * reading the candidate's own document, and it is the only practical way past
- * a page like Workday's My Experience, where the alternative is typing an
- * employment history the app does not hold in structured form.
- *
- * It does not weaken the no-fabrication rule, because of what happens next:
- * the loop re-reads the step, and anything the profile can answer is written
- * over the parsed value. Parsed values survive only where we had nothing, and
- * the whole application still goes through the review gate before submission.
- * The fixture deliberately parses a phone number wrong to keep that honest.
- */
-async function chooseAutofill(
-  applicationId: string,
-  prompt: { question: string; autofillSelector: string | null; manualSelector: string | null },
-  haveResume: boolean,
-): Promise<string | null> {
-  if (haveResume && prompt.autofillSelector) {
-    await bus.emitEvent(
-      applicationId,
-      'LOG',
-      `The site offered to autofill from the resume ("${prompt.question}") - taking it. ` +
-        'Anything your profile can answer is written over the parsed value afterwards.',
-    );
-    return prompt.autofillSelector;
-  }
-  if (prompt.manualSelector) {
-    await bus.emitEvent(
-      applicationId,
-      'LOG',
-      haveResume
-        ? `Filling this in manually ("${prompt.question}").`
-        : `No resume on file, so filling manually ("${prompt.question}").`,
-    );
-    return prompt.manualSelector;
-  }
-  return null;
-}
-
-/** "Step 3 of 5: Application Questions", when the page says that much. */
-function describeStep(
-  step: number,
-  progress: { index: number | null; total: number | null; label: string | null },
-): string {
-  const where =
-    progress.index && progress.total
-      ? `Step ${progress.index} of ${progress.total}`
-      : `Step ${step}`;
-  return progress.label ? `${where}: ${progress.label}` : where;
-}
-
-/**
- * Write the cover letter, and treat failure as degraded rather than fatal.
- *
- * It is usually an optional field, and losing it should not lose the whole
- * application - so this says so and returns undefined.
- */
-async function writeCoverLetter(
-  applicationId: string,
-  args: {
-    candidateContext: string;
-    companyName: string;
-    jobTitle: string;
-    jobDescription: string;
-  },
-): Promise<string | undefined> {
-  await bus.emitEvent(applicationId, 'LOG', 'Writing a cover letter for this role.');
-  try {
-    const generated = await generateCoverLetter(args);
-    await prisma.application.update({
-      where: { id: applicationId },
-      data: { coverLetter: generated.body },
-    });
-    if (generated.unsupportedClaims.length) {
-      await bus.emitEvent(
-        applicationId,
-        'WARNING',
-        `The cover letter contains ${generated.unsupportedClaims.length} claim(s) not grounded in your resume. Check them before submitting.`,
-        { unsupportedClaims: generated.unsupportedClaims },
-      );
-    }
-    await bus.emitEvent(applicationId, 'COVER_LETTER', 'Cover letter ready.', {
-      coverLetter: generated.body,
-    });
-    return generated.body;
-  } catch (err) {
-    await bus.emitEvent(
-      applicationId,
-      'WARNING',
-      `Could not write a cover letter: ${(err as Error).message}. Carrying on without one.`,
-    );
-    return undefined;
-  }
 }

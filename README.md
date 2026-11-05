@@ -72,7 +72,7 @@ When `AUTO_APPLY_ENABLED=true`, the scheduler will automatically apply to discov
 - **Rate limiting**: At most `AUTO_APPLY_MAX_PER_RUN` (default 5) jobs are auto-applied per scheduled run
 - **Safety**: Requires `REQUIRE_REVIEW=false` for actual auto-submission; otherwise applications queue for review
 
-Auto-apply runs during the scheduled job discovery (every 6 hours by default). Each auto-applied job:
+Auto-apply runs during the scheduled job discovery (every 12 hours by default). Each auto-applied job:
 - Creates an application with `requiresReview=false`
 - Enqueues it for processing in the normal application queue
 - Learns from the decision (treated as SHORTLIST)
