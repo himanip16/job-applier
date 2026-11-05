@@ -15,6 +15,7 @@ import { schemaProblem, cachedSchemaProblem } from './lib/schemaCheck.js';
 import { currentUser } from './auth/sessions.js';
 import { loadSettings } from './lib/secrets.js';
 import { isFirecrawlConfigured } from './discovery/firecrawl.js';
+import { startScheduler } from './lib/scheduler.js';
 import { ZodError } from 'zod';
 import { requireProfile, requireUser, type RequireUser } from './auth/requireProfile.js';
 import { registerAuthRoutes } from './routes/auth.js';
@@ -37,6 +38,7 @@ import { registerQuestionDraftRoutes } from './routes/questionDrafts.js';
 import { registerStreamRoutes } from './routes/stream.js';
 import { registerResumeUploadRoutes } from './routes/resumeUpload.js';
 import { registerOverviewRoutes } from './routes/overview.js';
+import { registerAdminRoutes } from './routes/admin.js';
 
 const app = Fastify({ logger: { level: 'warn' } });
 /**
@@ -182,6 +184,7 @@ registerQuestionDraftRoutes(app, requireProfile);
 registerStreamRoutes(app, requireProfile);
 registerResumeUploadRoutes(app, requireProfile);
 registerOverviewRoutes(app);
+registerAdminRoutes(app);
 
 // ----------------------------------------------------------------- health ---
 
@@ -226,6 +229,9 @@ if (moved.length) process.stdout.write(`Re-sorted job cards: ${moved.map(([tab, 
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
 process.stdout.write(`API on http://localhost:${config.port}\n`);
+
+// Start the scheduler for periodic job discovery
+startScheduler();
 
 // Quick scores are stored, so a change to how they are worked out reached a
 // card only when something else happened to rescore it - a reject, a

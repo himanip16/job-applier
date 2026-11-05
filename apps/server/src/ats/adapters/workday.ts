@@ -3,39 +3,6 @@ import { fileHint } from '../types.js';
 import type { AtsAdapter, JobMeta } from '../types.js';
 import { extractFields } from '../../browser/extract.js';
 
-/**
- * Workday (<tenant>.wd<N>.myworkdayjobs.com, myworkdaysite.com).
- *
- * Checked against a live CrowdStrike posting and saved run snapshots in
- * October 2026:
- *   - `<posting>/apply` opens the start page directly: "Autofill with Resume",
- *     "Apply Manually", "Use My Last Application". The wizard's autofill
- *     handling takes the first.
- *   - Every step after that is behind a Workday account. The account-wall
- *     handling signs in with the saved email and password.
- *   - The wizard is ~6 steps (Autofill with Resume, My Information, My
- *     Experience, Application Questions, Voluntary Disclosures, Review), each
- *     a client-side render under `applyFlowPage`, with one footer button
- *     `pageFooterNextButton` that says "Save and Continue" and then "Submit".
- *   - That button is disabled while a step loads, saves, or uploads a file.
- *     Reading a step in that window found no controls and no enabled button,
- *     which the wizard took for "single page form, submit it". `settle` waits
- *     it out - and for the step's own controls, because the `applyFlowPage`
- *     container is drawn before them (a Create Account screen read in that
- *     gap looked like an empty step 1 and ended the run).
- *   - A cookie notice (`legalNotice`) sits over the page until answered. It is
- *     declined: only the necessary cookies, which the site works with.
- *   - Two dropdowns that are not selects. "How Did You Hear About Us?" and
- *     "Country Phone Code" are search prompts (a text input with
- *     `data-uxi-widget-type="selectinput"`, filled as `workday-prompt`);
- *     "Phone Device Type" is a `button[aria-haspopup="listbox"]`
- *     (`workday-dropdown`). Typed into as text boxes, they stayed at
- *     "0 items selected" and Workday refused the step.
- *   - Signing in can drop you on Candidate Home ("My Applications") or the
- *     bare posting instead of the step you were on (BlackRock and Walmart in
- *     October 2026: the run read Candidate Home as a step and went nowhere).
- *     `afterWall` goes back to `<posting>/apply`, which resumes the draft.
- */
 
 const NEXT = '[data-automation-id="pageFooterNextButton"]';
 const DECLINE_COOKIES = '[data-automation-id="legalNoticeDeclineButton"]';

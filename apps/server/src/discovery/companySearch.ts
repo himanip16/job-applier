@@ -70,7 +70,6 @@ const blank = (company: string, source: string, handle: string): TargetCompany =
   handle,
   tier: '',
   sde2_ctc_lpa: '',
-  india_locations: '',
 });
 
 /** A careers-page entry whose handle is a bare domain has nothing to read. */

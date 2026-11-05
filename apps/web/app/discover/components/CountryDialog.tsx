@@ -53,6 +53,8 @@ export function CountryDialog({
   company = '',
   onCompanyChange,
   onActionChange,
+  fullRefresh = false,
+  onFullRefreshChange,
   onCancel,
   onConfirm,
 }: {
@@ -64,6 +66,9 @@ export function CountryDialog({
   onCompanyChange?: (name: string) => void;
   /** Lets "Find new jobs" switch between every company and one company. */
   onActionChange?: (action: CountryAction) => void;
+  /** Force re-read all companies, ignoring the cooldown. */
+  fullRefresh?: boolean;
+  onFullRefreshChange?: (enabled: boolean) => void;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -72,6 +77,7 @@ export function CountryDialog({
   const copy = worldwide ? WORLDWIDE_COPY[action] : COPY[action];
   const asksCompany = action === 'company';
   const findsJobs = (action === 'find' || action === 'company') && !!onActionChange;
+  const showFullRefresh = action === 'find' && !!onFullRefreshChange;
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <form
@@ -107,11 +113,27 @@ export function CountryDialog({
         )}
         <label className="field">
           <span className="cap">Country</span>
-          <select value={value} onChange={(e) => onChange(e.target.value)} autoFocus={!asksCompany}>
+          <select value={value} onChange={(e) => onChange(e.target.value)} autoFocus={!asksCompany && !showFullRefresh}>
             <option value={WORLDWIDE}>Anywhere (open to India)</option>
             {COUNTRIES.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
           </select>
         </label>
+        {showFullRefresh && (
+          <label className="field" style={{ display: 'flex', alignItems: 'flex-start', gap: '.5rem', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={fullRefresh}
+              onChange={(e) => onFullRefreshChange?.(e.target.checked)}
+              style={{ marginTop: '.15rem' }}
+            />
+            <div className="small muted">
+              <strong>Full refresh</strong>
+              <div style={{ marginTop: '.2rem' }}>
+                Recheck every company, ignoring its cooldown. This takes longer to respect rate limits.
+              </div>
+            </div>
+          </label>
+        )}
         <div className="row" style={{ justifyContent: 'flex-end', gap: '.5rem', marginTop: '1rem' }}>
           <button type="button" className="ghost" onClick={onCancel}>Cancel</button>
           <button type="submit" className="primary" disabled={asksCompany && !company.trim()} style={{ display: 'inline-flex', alignItems: 'center', gap: '.4rem' }}>

@@ -43,7 +43,9 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
         maxBoards: z.number().min(1).max(500).optional(),
         deepScoreTop: z.number().min(0).max(60).default(DEFAULT_DEEP_SCORE_TOP),
         country: z.string().length(2).optional(),
-        force: z.boolean().default(false),
+        mode: z.enum(['incremental', 'full']).default('incremental'),
+        /** Kept for older clients; new clients should send `mode`. */
+        force: z.boolean().optional(),
       })
       .parse(req.body ?? {});
 

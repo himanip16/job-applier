@@ -195,6 +195,7 @@ export default function DiscoverPage() {
   const [companyName, setCompanyName] = useState('');
   // Which way "Find new jobs" opens: every company, or the one company last asked for.
   const [findScope, setFindScope] = useState<'find' | 'company'>('find');
+  const [fullRefresh, setFullRefresh] = useState(false);
   useEffect(() => {
     let saved = '';
     try { saved = window.localStorage.getItem('ja.searchCountry') ?? ''; } catch { /* default below */ }
@@ -206,6 +207,7 @@ export default function DiscoverPage() {
 
   async function run(action: CountryAction) {
     setAsking(null);
+    setFullRefresh(false);
     try { window.localStorage.setItem('ja.searchCountry', country); } catch { /* still used */ }
     const worldwide = country === WORLDWIDE;
     const name = worldwide ? 'worldwide' : countryByCode(country)?.name ?? country;
@@ -235,7 +237,7 @@ export default function DiscoverPage() {
       if (action === 'find') {
         const r = await api<{ report: SearchReport }>('/api/discovery/find', {
           method: 'POST',
-          body: JSON.stringify({ country: target }),
+          body: JSON.stringify({ country: target, mode: fullRefresh ? 'full' : 'incremental' }),
         });
         setReport(r.report);
       } else if (action === 'crawl') {
@@ -624,6 +626,8 @@ export default function DiscoverPage() {
           company={companyName}
           onCompanyChange={setCompanyName}
           onActionChange={(a) => { setAsking(a); if (a === 'find' || a === 'company') setFindScope(a); }}
+          fullRefresh={fullRefresh}
+          onFullRefreshChange={setFullRefresh}
           onCancel={() => setAsking(null)}
           onConfirm={() => run(asking)}
         />
