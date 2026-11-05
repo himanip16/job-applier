@@ -1,9 +1,8 @@
 import type { Country } from '@ja/shared';
 import { z } from 'zod';
-import { normalizeLabel } from '@ja/shared';
+import { tokenize, normalizeLabel } from '@ja/shared';
 import { prisma } from '../lib/db.js';
 import { generate, isConfigured } from '../llm/client.js';
-import { tokenize, normalizeLabel } from '@ja/shared';
 import { extractResumeKeywords, getTopSkills, getPrimaryRole, getDomains, type ResumeKeyword } from './keywordExtraction.js';
 import { MAX_QUERY_LENGTH } from './firecrawl.js';
 import { candidateRejections } from './decisionHistory.js';

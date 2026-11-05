@@ -198,8 +198,12 @@ export async function finishApplication(args: {
     await markLeadApplied(applicationId);
     await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, companyKey);
     // Write outbox event for reliable delivery
+    const jobId = await getJobIdForApplication(applicationId);
     await bestEffort(
-      () => writeOutboxEvent('application.submitted', applicationId, 'application', {
+      async () => writeOutboxEvent('application.submitted', applicationId, 'application', {
+        applicationId,
+        profileId: app.profileId,
+        jobId,
         confirmation: outcome.detail,
         timestamp: new Date().toISOString(),
       }),
@@ -381,4 +385,15 @@ async function persistLearnedAnswers(
       `Saved ${saved} answer${saved === 1 ? '' : 's'} to your answer bank. Future applications will reuse them.`,
     );
   }
+}
+
+async function getJobIdForApplication(applicationId: string): Promise<string> {
+  const application = await prisma.application.findUnique({
+    where: { id: applicationId },
+    select: { jobId: true },
+  });
+  if (!application) {
+    throw new Error(`Application ${applicationId} not found`);
+  }
+  return application.jobId;
 }

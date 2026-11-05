@@ -208,7 +208,7 @@ async function autoApplyToHighScoringJobs(profileId: string, email: string): Pro
           title: lead.title,
           location: lead.location,
           descriptionText: lead.descriptionText,
-          workMode: lead.remote ? 'REMOTE' : undefined,
+          workMode: undefined,
         },
         lead.id,
       );

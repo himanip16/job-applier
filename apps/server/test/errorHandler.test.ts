@@ -114,7 +114,7 @@ describe('errorHandler', () => {
       handleError(error, { operation: 'test' });
 
       expect(consoleErrorSpy).toHaveBeenCalled();
-      expect(consoleErrorSpy.mock.calls[0][0]).toContain('[CRITICAL]');
+      expect(consoleErrorSpy.mock.calls[0]?.[0]).toContain('[CRITICAL]');
     });
 
     it('converts unknown Error to AppError', () => {
@@ -250,7 +250,7 @@ describe('errorHandler', () => {
       );
 
       expect(consoleInfoSpy).toHaveBeenCalled();
-      expect(consoleInfoSpy.mock.calls[0][0]).toContain('[BEST_EFFORT]');
+      expect(consoleInfoSpy.mock.calls[0]?.[0]).toContain('[BEST_EFFORT]');
     });
 
     it('never throws', async () => {
@@ -295,7 +295,7 @@ describe('errorHandler', () => {
       );
 
       expect(consoleDebugSpy).toHaveBeenCalled();
-      expect(consoleDebugSpy.mock.calls[0][0]).toContain('[EXPECTED]');
+      expect(consoleDebugSpy.mock.calls[0]?.[0]).toContain('[EXPECTED]');
     });
 
     it('never throws', async () => {
@@ -344,7 +344,7 @@ describe('errorHandler', () => {
       }
 
       expect(consoleErrorSpy).toHaveBeenCalled();
-      expect(consoleErrorSpy.mock.calls[0][0]).toContain('[CRITICAL]');
+      expect(consoleErrorSpy.mock.calls[0]?.[0]).toContain('[CRITICAL]');
     });
   });
 

@@ -143,9 +143,10 @@ export async function getLLMUsageStats(profileId: string, since?: Date) {
     return acc;
   }, {} as Record<string, number>);
   const byModel = usage.reduce((acc, u) => {
-    acc[u.model] = (acc[u.model] || { tokens: 0, cost: 0 });
-    acc[u.model].tokens += u.totalTokens;
-    acc[u.model].cost += u.estimatedCost;
+    const model = acc[u.model] || { tokens: 0, cost: 0 };
+    model.tokens += u.totalTokens;
+    model.cost += u.estimatedCost;
+    acc[u.model] = model;
     return acc;
   }, {} as Record<string, { tokens: number; cost: number }>);
 

@@ -214,7 +214,7 @@ export async function acquireLock(
   // We'll use pg_try_advisory_lock in a loop with timeout
 
   while (Date.now() - startTime < timeoutMs) {
-    const acquired = await prisma.$queryRaw<boolean[]>`
+    const acquired = await prisma.$queryRaw<Array<{ acquired: boolean }>>`
       SELECT pg_try_advisory_lock(${lockKey}::bigint) as acquired
     `;
 

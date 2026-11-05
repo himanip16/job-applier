@@ -18,7 +18,12 @@ export async function loadScoringContext(profileId: string): Promise<ScoringCont
     loadSignals(profileId),
     prisma.profile.findUnique({ where: { id: profileId }, include: { facts: true } }),
   ]);
-  const vocabulary: Set<string> = profile ? buildVocabulary(profile) : new Set();
+  const vocabulary: Set<string> = profile ? buildVocabulary({
+    resumeText: profile.resumeText,
+    summary: profile.summary,
+    facts: profile.facts,
+    resumeKeywords: profile.resumeKeywords as any,
+  }) : new Set();
   const text = `${profile?.resumeText ?? ''}\n${profile?.summary ?? ''}`;
   return {
     signals,
