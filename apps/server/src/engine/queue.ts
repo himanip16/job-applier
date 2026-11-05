@@ -4,6 +4,10 @@ import { runApplication } from './runner.js';
 import { markLeadProcessing, syncLead } from './leadSync.js';
 import { give, tryTake, whenSlotFrees } from './slots.js';
 import { tailorForApplication, wantedTailoring } from './tailorForApplication.js';
+import { scheduleRetry, getApplicationsReadyForRetry } from './applicationReliability.js';
+import { writeOutboxEvent, deliverOutboxEvents, cleanupOldOutboxEvents } from './outbox.js';
+import { bestEffort, BestEffortError, RecoverableError, ErrorSeverity } from '../lib/errorHandler.js';
+import { logger, createApplicationLogger } from '../lib/logger.js';
 
 /**
  * A deliberately small in-process queue.
@@ -29,11 +33,65 @@ const tailorFirst = new Set<string>();
 
 whenSlotFrees(() => pump());
 
+/**
+ * Process applications ready for retry.
+ *
+ * Periodically checks for applications whose nextRetryAt has passed and
+ * re-queues them for processing.
+ */
+setInterval(async () => {
+  try {
+    const readyForRetry = await getApplicationsReadyForRetry();
+    for (const id of readyForRetry) {
+      if (!active.has(id) && !queued.includes(id)) {
+        enqueue(id);
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, '[queue] Failed to process retry queue');
+  }
+}, 60 * 1000); // Check every minute
+
+/**
+ * Process outbox events.
+ *
+ * Periodically delivers pending outbox events to ensure reliable event delivery.
+ */
+setInterval(async () => {
+  try {
+    const { delivered, failed, deadLettered } = await deliverOutboxEvents();
+    if (delivered > 0 || failed > 0 || deadLettered > 0) {
+      logger.info({ delivered, failed, deadLettered }, '[outbox] Delivered events');
+    }
+  } catch (err) {
+    logger.error({ err }, '[outbox] Failed to deliver events');
+  }
+}, 30 * 1000); // Check every 30 seconds
+
+/**
+ * Clean up old outbox events.
+ *
+ * Runs once per hour to remove delivered events older than 7 days.
+ */
+setInterval(async () => {
+  try {
+    const deleted = await cleanupOldOutboxEvents(7);
+    if (deleted > 0) {
+      logger.info({ deleted }, '[outbox] Cleaned up old events');
+    }
+  } catch (err) {
+    logger.error({ err }, '[outbox] Failed to cleanup old events');
+  }
+}, 60 * 60 * 1000); // Run every hour
+
 export function enqueue(applicationId: string, opts: { tailor?: boolean } = {}): void {
   if (active.has(applicationId) || queued.includes(applicationId)) return;
   if (opts.tailor) tailorFirst.add(applicationId);
   queued.push(applicationId);
-  void markLeadProcessing(applicationId).catch(() => {});
+  void bestEffort(
+    () => markLeadProcessing(applicationId),
+    { operation: 'markLeadProcessing', entityId: applicationId },
+  );
   pump();
 }
 
@@ -56,15 +114,43 @@ function pump(): void {
       await runApplication(id);
     })()
       .catch(async (err: unknown) => {
-        await bus
-          .emitEvent(id, 'ERROR', `Run crashed: ${(err as Error).message}`)
-          .catch(() => {});
+        const errorMessage = (err as Error).message;
+        await bestEffort(
+          () => bus.emitEvent(id, 'ERROR', `Run crashed: ${errorMessage}`),
+          { operation: 'emitEvent', entityId: id },
+        );
+
+        // Schedule retry for transient failures
+        await bestEffort(
+          () => scheduleRetry(id, errorMessage),
+          { operation: 'scheduleRetry', entityId: id },
+        );
+
+        // Write outbox event for failure
+        await bestEffort(async () => {
+          const app = await prisma.application.findUnique({
+            where: { id },
+            select: { profileId: true, jobId: true },
+          });
+          if (app) {
+            await writeOutboxEvent('application.failed', id, 'application', {
+              applicationId: id,
+              profileId: app.profileId,
+              jobId: app.jobId,
+              error: errorMessage,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        }, { operation: 'writeOutboxEvent', entityId: id });
       })
       .finally(() => {
         active.delete(id);
         give(id);
         // Submitted -> Applied, failed -> back to For you, waiting on you -> stays Processing.
-        void syncLead(id).catch(() => {});
+        void bestEffort(
+          () => syncLead(id),
+          { operation: 'syncLead', entityId: id },
+        );
       });
   }
 }

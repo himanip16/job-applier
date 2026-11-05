@@ -1,5 +1,6 @@
 import type { Locator, Page } from 'playwright';
 import { normalizeLabel, type FormField } from '@ja/shared';
+import { expected } from '../src/lib/errorHandler.js';
 
 const FIELD_TIMEOUT_MS = 10_000;
 const OPTION_TIMEOUT_MS = 5_000;
@@ -141,12 +142,18 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
   const el = page.locator(field.selector).first();
   await el.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
 
-  const disabled = await el.isDisabled().catch(() => false);
+  const disabled = await (await expected(
+    () => el.isDisabled(),
+    { operation: 'isDisabled', metadata: { field: field.label } },
+  )) ?? false;
   if (disabled) return;
 
   const wants = (Array.isArray(value) ? value : [value]).map(normalizeLabel).filter(Boolean);
   if (wants.length) {
-    const current = normalizeLabel((await el.inputValue().catch(() => '')) ?? '');
+    const current = normalizeLabel((await expected(
+      () => el.inputValue(),
+      { operation: 'inputValue', metadata: { field: field.label } },
+    )) ?? '' ?? '');
     if (current && wants.every((want) => current.includes(want))) return;
   }
 
@@ -187,13 +194,19 @@ async function fillNative(page: Page, field: FormField, value: string | string[]
     }
     default: {
       const text = asOne(value, field);
-      await el.scrollIntoViewIfNeeded().catch(() => {});
+      await expected(
+        () => el.scrollIntoViewIfNeeded(),
+        { operation: 'scrollIntoViewIfNeeded', metadata: { field: field.label } },
+      );
       await el.fill('');
       // type() rather than fill() so React's onChange fires per keystroke;
       // some forms only validate on keyup and stay in an error state otherwise.
       await el.type(text, { delay: 12 });
       // Press Tab to trigger proper blur behavior instead of synthetic events
-      await el.press('Tab').catch(() => {});
+      await expected(
+        () => el.press('Tab'),
+        { operation: 'pressTab', metadata: { field: field.label } },
+      );
     }
   }
 }
@@ -299,7 +312,10 @@ async function fillReactSelect(page: Page, field: FormField, value: string | str
   const wants = Array.isArray(value) ? value : [value];
   const input = page.locator(field.selector).first();
   await input.waitFor({ state: 'attached', timeout: FIELD_TIMEOUT_MS });
-  await input.scrollIntoViewIfNeeded().catch(() => {});
+  await expected(
+    () => input.scrollIntoViewIfNeeded(),
+    { operation: 'scrollIntoViewIfNeeded', metadata: { field: field.label } },
+  );
 
   for (const want of wants) {
     await input.click({ timeout: FIELD_TIMEOUT_MS });

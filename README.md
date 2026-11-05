@@ -63,6 +63,28 @@ changing your saved, applied or rejected decisions. Older automatically dismisse
 jobs remain in Dismissed, but their recorded automatic reasons are excluded from
 both search-planning and fit-assessment preference history.
 
+### Auto-apply (Optional)
+
+When `AUTO_APPLY_ENABLED=true`, the scheduler will automatically apply to discovered jobs that meet your criteria:
+
+- **Score threshold**: Only jobs with a score >= `AUTO_APPLY_MIN_SCORE` (default 70) are auto-applied
+- **Board compatibility**: Only jobs on boards with form adapters (Greenhouse, Lever, Ashby, Workable) are eligible
+- **Rate limiting**: At most `AUTO_APPLY_MAX_PER_RUN` (default 5) jobs are auto-applied per scheduled run
+- **Safety**: Requires `REQUIRE_REVIEW=false` for actual auto-submission; otherwise applications queue for review
+
+Auto-apply runs during the scheduled job discovery (every 6 hours by default). Each auto-applied job:
+- Creates an application with `requiresReview=false`
+- Enqueues it for processing in the normal application queue
+- Learns from the decision (treated as SHORTLIST)
+- Respects all existing filters (country, seniority, etc.)
+
+To enable auto-apply safely:
+1. Set `AUTO_APPLY_ENABLED=true`
+2. Set `AUTO_APPLY_MIN_SCORE` to a threshold you're comfortable with (e.g., 75-80)
+3. Set `AUTO_APPLY_MAX_PER_RUN` to a conservative limit (e.g., 3-5)
+4. Initially keep `REQUIRE_REVIEW=true` to review before submission
+5. After verifying quality, set `REQUIRE_REVIEW=false` for true automation
+
 ### How the ranking learns
 
 Two layers you can inspect:
@@ -305,6 +327,9 @@ can actually reach, rather than trusting the defaults in `.env.example`.
 |---|---|---|
 | `HEADLESS` | `false` | **Keep it false.** A visible, persistent profile passes invisible CAPTCHA far more often, and it is the only way you can take over when a challenge appears. |
 | `REQUIRE_REVIEW` | `true` | Every application stops for your approval before submitting. Turn it off only once you trust it. |
+| `AUTO_APPLY_ENABLED` | `false` | Enable auto-apply for high-scoring discovered jobs during scheduled runs. Jobs with score >= AUTO_APPLY_MIN_SCORE will be automatically applied to. |
+| `AUTO_APPLY_MIN_SCORE` | `70` | Minimum score (0-100) required for auto-apply. Only jobs scoring this or higher will be automatically applied to during scheduled discovery runs. |
+| `AUTO_APPLY_MAX_PER_RUN` | `5` | Maximum number of jobs to auto-apply per scheduled run. Prevents accidental bulk submissions if many jobs meet the score threshold. |
 | `MAX_SUBMITS_PER_HOUR` | `10` | Hard cap. Exists so a bug cannot send fifty applications in your name. |
 | `ANSWER_CONFIDENCE_THRESHOLD` | `0.82` | Below this the resolver asks you instead of guessing. |
 | `MEMORY_REUSE_THRESHOLD` | `0.86` | How similar a past question must be before its answer is reused. |

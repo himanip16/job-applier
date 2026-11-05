@@ -12,6 +12,16 @@ import { CONCURRENCY } from '../engine/slots.js';
 import { TAILOR_LATER_NOTE, tailorForApplication } from '../engine/tailorForApplication.js';
 import { bus } from '../lib/events.js';
 import type { RequireProfile } from './types.js';
+import {
+  claimLeadForApplication,
+  checkDuplicateApplication,
+  excludeCompany,
+  removeCompanyExclusion,
+  getExcludedCompanies,
+  validateProfile,
+} from '../engine/applicationReliability.js';
+import { validateApplicationEligibility } from '../engine/applicationValidation.js';
+import { writeOutboxEvent } from '../engine/outbox.js';
 
 /**
  * How many leads one "rescore selected" press may read.
@@ -323,8 +333,60 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
     | { applicationId: string; alreadyRunning?: boolean }
     | { code: number; error: string; applicationId?: string; submittedAt?: Date | null }
   > {
+    // Validate profile before proceeding
+    const validation = await validateProfile(profileId);
+    if (!validation.valid) {
+      return { code: 400, error: `Profile incomplete: ${validation.missing.join(', ')}` };
+    }
+
     const lead = await ownedLead(profileId, leadId);
     if (!lead) return { code: 404, error: 'Not found' };
+
+    // Run comprehensive validation checks
+    const eligibilityCheck = await validateApplicationEligibility(
+      profileId,
+      {
+        url: lead.url,
+        company: lead.companyName,
+        title: lead.title,
+        location: lead.location,
+        descriptionText: lead.descriptionText,
+        workMode: lead.remote ? 'REMOTE' : undefined,
+      },
+      leadId,
+    );
+
+    if (!eligibilityCheck.allPassed) {
+      const failures = eligibilityCheck.results.filter((r) => !r.passed);
+      return {
+        code: 400,
+        error: `Application validation failed: ${failures.map((f) => f.reason).join('; ')}`,
+      };
+    }
+
+    // Atomically claim the lead to prevent race conditions
+    const claim = await claimLeadForApplication(profileId, leadId);
+    if (!claim.success) {
+      if (claim.reason?.includes('Already applied')) {
+        // Find the existing application
+        const existing = await prisma.application.findFirst({
+          where: {
+            profileId,
+            job: { url: lead.url },
+          },
+          select: { id: true, status: true, submittedAt: true },
+        });
+        if (existing?.status === 'SUBMITTED') {
+          return {
+            code: 409,
+            error: 'You already applied to this job.',
+            applicationId: existing.id,
+            submittedAt: existing.submittedAt,
+          };
+        }
+      }
+      return { code: 409, error: claim.reason || 'Cannot apply to this job' };
+    }
 
     const adapter = adapterFor(lead.url);
     const job = await prisma.job.upsert({
@@ -437,5 +499,140 @@ export function registerLeadRoutes(app: FastifyInstance, requireProfile: Require
     // Once for the batch, not once per job: it re-reads every unscored lead.
     void rescoreLexically(profile.id).catch(() => {});
     return { queued, failed, concurrency: CONCURRENCY, waiting: queuedRuns().length };
+  });
+
+  /**
+   * Get all excluded companies for the current profile.
+   */
+  app.get('/api/leads/exclusions', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+
+    const exclusions = await getExcludedCompanies(profile.id);
+    return { exclusions };
+  });
+
+  /**
+   * Validate that the profile is ready for applications.
+   */
+  app.get('/api/leads/validate-profile', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+
+    const validation = await validateProfile(profile.id);
+    return validation;
+  });
+
+  /**
+   * Get application audit logs and statistics for the dashboard.
+   */
+  app.get('/api/leads/audit', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+
+    const { limit, offset } = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+        offset: z.coerce.number().int().min(0).default(0),
+      })
+      .parse(req.query ?? {});
+
+    // Get recent applications with their events
+    const applications = await prisma.application.findMany({
+      where: { profileId: profile.id },
+      include: {
+        job: {
+          select: {
+            company: true,
+            title: true,
+            url: true,
+          },
+        },
+        events: {
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      skip: offset,
+    });
+
+    // Get statistics
+    const [total, submitted, failed, processing] = await Promise.all([
+      prisma.application.count({ where: { profileId: profile.id } }),
+      prisma.application.count({ where: { profileId: profile.id, status: 'SUBMITTED' } }),
+      prisma.application.count({ where: { profileId: profile.id, status: 'FAILED' } }),
+      prisma.application.count({
+        where: {
+          profileId: profile.id,
+          status: { in: ['QUEUED', 'PREPARING', 'FILLING', 'NEEDS_INPUT', 'REVIEW', 'SUBMITTING'] },
+        },
+      }),
+    ]);
+
+    // Get dead-lettered applications
+    const deadLettered = await prisma.application.findMany({
+      where: {
+        profileId: profile.id,
+        deadLettered: true,
+      },
+      select: {
+        id: true,
+        status: true,
+        deadLetterReason: true,
+        retryCount: true,
+        job: {
+          select: {
+            company: true,
+            title: true,
+          },
+        },
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    });
+
+    return {
+      applications,
+      statistics: {
+        total,
+        submitted,
+        failed,
+        processing,
+        successRate: total > 0 ? ((submitted / total) * 100).toFixed(1) : '0',
+      },
+      deadLettered,
+    };
+  });
+
+  /**
+   * Add a company to the exclusion list.
+   */
+  app.post('/api/leads/exclusions', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+
+    const { companyName, reason } = z
+      .object({
+        companyName: z.string().min(1).max(200),
+        reason: z.string().max(500).optional(),
+      })
+      .parse(req.body ?? {});
+
+    await excludeCompany(profile.id, companyName, reason);
+    return { ok: true, message: `Added ${companyName} to exclusion list` };
+  });
+
+  /**
+   * Remove a company from the exclusion list.
+   */
+  app.delete<{ Params: { companyName: string } }>('/api/leads/exclusions/:companyName', async (req, reply) => {
+    const profile = await requireProfile(req, reply);
+    if (!profile) return;
+
+    await removeCompanyExclusion(profile.id, req.params.companyName);
+    return { ok: true, message: `Removed ${req.params.companyName} from exclusion list` };
   });
 }

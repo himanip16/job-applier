@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { generate, describeLlmError } from '../llm/client.js';
 import type { DiscoveredJob } from './sources/index.js';
+import { expected } from '../lib/errorHandler.js';
 
 const FitSchema = z.object({
   score: z.number().describe('0-100. How well this job fits this candidate, all things considered.'),
@@ -102,8 +103,11 @@ export async function assessFitBatch(args: {
   // For very small batches, use individual calls to avoid complexity
   if (args.jobs.length <= 3) {
     const results = await Promise.all(
-      args.jobs.map(job => 
-        assessFit({ ...args, job }).catch(() => null)
+      args.jobs.map(job =>
+        expected(
+          () => assessFit({ ...args, job }),
+          { operation: 'assessFit', metadata: { jobTitle: job.title, company: job.companyName } },
+        )
       )
     );
     return results;
@@ -158,8 +162,11 @@ Assess the fit for each job. Return an array of assessments, one for each job, w
     // Fall back to individual calls if batch fails
     console.error('Batch scoring failed, falling back to individual calls:', err);
     return await Promise.all(
-      args.jobs.map(job => 
-        assessFit({ ...args, job }).catch(() => null)
+      args.jobs.map(job =>
+        expected(
+          () => assessFit({ ...args, job }),
+          { operation: 'assessFit', metadata: { jobTitle: job.title, company: job.companyName } },
+        )
       )
     );
   }

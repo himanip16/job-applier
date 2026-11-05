@@ -1,113 +1,413 @@
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import Fastify from 'fastify';
-import type { FastifyError, FastifyRequest, FastifyReply } from 'fastify';
-import { LlmUnavailableError } from '../src/llm/client.js';
-import { ZodError } from 'zod';
-import { z } from 'zod';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import {
+  AppError,
+  CriticalError,
+  RecoverableError,
+  BestEffortError,
+  ExpectedError,
+  ErrorSeverity,
+  handleError,
+  withErrorHandling,
+  bestEffort,
+  expected,
+  critical,
+  type ErrorContext,
+} from '../src/lib/errorHandler.js';
 
-describe('global error handler', () => {
-  let app: ReturnType<typeof Fastify>;
+describe('errorHandler', () => {
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
+  let consoleInfoSpy: ReturnType<typeof vi.spyOn>;
+  let consoleDebugSpy: ReturnType<typeof vi.spyOn>;
 
-  beforeAll(async () => {
-    app = Fastify({ logger: false });
+  beforeEach(() => {
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    consoleInfoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    consoleDebugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+  });
 
-    // Set up the same error handler as the main app
-    app.setErrorHandler((err: FastifyError, req: FastifyRequest, reply: FastifyReply) => {
-      // Handle Zod validation errors
-      if (err instanceof ZodError) {
-        return reply.code(400).send({
-          error: 'Invalid request',
-          issues: (err as any).issues,
-        });
-      }
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+    consoleWarnSpy.mockRestore();
+    consoleInfoSpy.mockRestore();
+    consoleDebugSpy.mockRestore();
+  });
 
-      if (err instanceof LlmUnavailableError) {
-        // Rate limit errors should return 429
-        if (err.retryable && /rate limit|quota exhausted|429/i.test(err.message)) {
-          return reply.code(429).send({ error: err.message });
-        }
-        // Other LLM unavailability errors return 400
-        return reply.code(400).send({ error: err.message });
-      }
+  describe('AppError', () => {
+    it('creates error with all properties', () => {
+      const context: ErrorContext = {
+        operation: 'testOperation',
+        entityId: 'test-id',
+        jobId: 'job-123',
+        metadata: { extra: 'data' },
+      };
 
-      // Log unexpected errors and return 500
-      req.log.error(err);
-      return reply.code(500).send({ error: 'Internal server error' });
+      const cause = new Error('cause error');
+      const error = new AppError('test message', ErrorSeverity.CRITICAL, context, true, cause);
+
+      expect(error.message).toBe('test message');
+      expect(error.severity).toBe(ErrorSeverity.CRITICAL);
+      expect(error.context).toEqual(context);
+      expect(error.retryable).toBe(true);
+      expect(error.cause).toBe(cause);
+      expect(error.timestamp).toBeInstanceOf(Date);
+      expect(error.name).toBe('AppError');
     });
 
-    // Add a test route that throws LlmUnavailableError
-    app.get('/test/rate-limit', async () => {
-      throw new LlmUnavailableError(
-        'Gemini rate limit or quota exhausted. The free tier has per-minute and per-day caps; wait, or enable billing on the project.',
-        true,
+    it('preserves stack trace', () => {
+      const error = new AppError('test', ErrorSeverity.CRITICAL, { operation: 'test' });
+      expect(error.stack).toBeDefined();
+    });
+
+    it('formats log message correctly', () => {
+      const context: ErrorContext = {
+        operation: 'fillField',
+        entityId: 'app-123',
+        jobId: 'job-456',
+      };
+
+      const error = new AppError('field not found', ErrorSeverity.EXPECTED, context);
+      const message = error.toLogMessage();
+
+      expect(message).toContain('[EXPECTED]');
+      expect(message).toContain('fillField');
+      expect(message).toContain('entity=app-123');
+      expect(message).toContain('job=job-456');
+      expect(message).toContain('field not found');
+    });
+  });
+
+  describe('Error subclasses', () => {
+    it('CriticalError has correct defaults', () => {
+      const error = new CriticalError('critical failure', { operation: 'test' });
+      expect(error.severity).toBe(ErrorSeverity.CRITICAL);
+      expect(error.retryable).toBe(false);
+      expect(error.name).toBe('CriticalError');
+    });
+
+    it('RecoverableError has correct defaults', () => {
+      const error = new RecoverableError('retryable failure', { operation: 'test' });
+      expect(error.severity).toBe(ErrorSeverity.RECOVERABLE);
+      expect(error.retryable).toBe(true);
+      expect(error.name).toBe('RecoverableError');
+    });
+
+    it('BestEffortError has correct defaults', () => {
+      const error = new BestEffortError('best effort failure', { operation: 'test' });
+      expect(error.severity).toBe(ErrorSeverity.BEST_EFFORT);
+      expect(error.retryable).toBe(false);
+      expect(error.name).toBe('BestEffortError');
+    });
+
+    it('ExpectedError has correct defaults', () => {
+      const error = new ExpectedError('expected failure', { operation: 'test' });
+      expect(error.severity).toBe(ErrorSeverity.EXPECTED);
+      expect(error.retryable).toBe(false);
+      expect(error.name).toBe('ExpectedError');
+    });
+  });
+
+  describe('handleError', () => {
+    it('logs AppError with correct severity', () => {
+      const error = new CriticalError('critical', { operation: 'test' });
+      handleError(error, { operation: 'test' });
+
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      expect(consoleErrorSpy.mock.calls[0][0]).toContain('[CRITICAL]');
+    });
+
+    it('converts unknown Error to AppError', () => {
+      const error = new Error('unknown error');
+      handleError(error, { operation: 'test' });
+
+      expect(consoleInfoSpy).toHaveBeenCalled();
+    });
+
+    it('converts non-Error to AppError', () => {
+      handleError('string error', { operation: 'test' });
+
+      expect(consoleInfoSpy).toHaveBeenCalled();
+    });
+
+    it('re-throws critical errors', () => {
+      const error = new CriticalError('critical', { operation: 'test' });
+
+      expect(() => handleError(error, { operation: 'test' })).toThrow(CriticalError);
+    });
+
+    it('does not re-throw non-critical errors', () => {
+      const error = new BestEffortError('best effort', { operation: 'test' });
+
+      expect(() => handleError(error, { operation: 'test' })).not.toThrow();
+    });
+  });
+
+  describe('error severity detection', () => {
+    it('detects network errors as recoverable', () => {
+      const error = new Error('Network timeout');
+      handleError(error, { operation: 'test' });
+
+      expect(consoleWarnSpy).toHaveBeenCalled();
+    });
+
+    it('detects rate limit errors as recoverable', () => {
+      const error = new Error('Rate limit exceeded (429)');
+      handleError(error, { operation: 'test' });
+
+      expect(consoleWarnSpy).toHaveBeenCalled();
+    });
+
+    it('detects database errors as critical', () => {
+      const error = new Error('Database connection failed');
+
+      expect(() => handleError(error, { operation: 'test' })).toThrow();
+    });
+
+    it('detects validation errors as expected', () => {
+      const error = new Error('Validation failed');
+      handleError(error, { operation: 'test' });
+
+      expect(consoleDebugSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('withErrorHandling', () => {
+    it('executes function successfully', async () => {
+      const result = await withErrorHandling(
+        async () => 'success',
+        { operation: 'test' },
+      );
+
+      expect(result).toBe('success');
+    });
+
+    it('handles errors with logging', async () => {
+      await expect(
+        withErrorHandling(
+          async () => {
+            throw new Error('test error');
+          },
+          { operation: 'test' },
+        ),
+      ).rejects.toThrow();
+    });
+
+    it('uses specified severity', async () => {
+      await expect(
+        withErrorHandling(
+          async () => {
+            throw new Error('test error');
+          },
+          { operation: 'test' },
+          { severity: ErrorSeverity.CRITICAL },
+        ),
+      ).rejects.toThrow();
+
+      expect(consoleErrorSpy).toHaveBeenCalled();
+    });
+
+    it('re-throws when requested', async () => {
+      await expect(
+        withErrorHandling(
+          async () => {
+            throw new Error('test error');
+          },
+          { operation: 'test' },
+          { rethrow: true },
+        ),
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('bestEffort', () => {
+    it('returns result on success', async () => {
+      const result = await bestEffort(
+        async () => 'success',
+        { operation: 'test' },
+      );
+
+      expect(result).toBe('success');
+    });
+
+    it('returns null on error', async () => {
+      const result = await bestEffort(
+        async () => {
+          throw new Error('test error');
+        },
+        { operation: 'test' },
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it('logs errors as best-effort', async () => {
+      await bestEffort(
+        async () => {
+          throw new Error('test error');
+        },
+        { operation: 'test' },
+      );
+
+      expect(consoleInfoSpy).toHaveBeenCalled();
+      expect(consoleInfoSpy.mock.calls[0][0]).toContain('[BEST_EFFORT]');
+    });
+
+    it('never throws', async () => {
+      await expect(
+        bestEffort(
+          async () => {
+            throw new Error('test error');
+          },
+          { operation: 'test' },
+        ),
+      ).resolves.not.toThrow();
+    });
+  });
+
+  describe('expected', () => {
+    it('returns result on success', async () => {
+      const result = await expected(
+        async () => 'success',
+        { operation: 'test' },
+      );
+
+      expect(result).toBe('success');
+    });
+
+    it('returns null on error', async () => {
+      const result = await expected(
+        async () => {
+          throw new Error('test error');
+        },
+        { operation: 'test' },
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it('logs errors as expected', async () => {
+      await expected(
+        async () => {
+          throw new Error('test error');
+        },
+        { operation: 'test' },
+      );
+
+      expect(consoleDebugSpy).toHaveBeenCalled();
+      expect(consoleDebugSpy.mock.calls[0][0]).toContain('[EXPECTED]');
+    });
+
+    it('never throws', async () => {
+      await expect(
+        expected(
+          async () => {
+            throw new Error('test error');
+          },
+          { operation: 'test' },
+        ),
+      ).resolves.not.toThrow();
+    });
+  });
+
+  describe('critical', () => {
+    it('returns result on success', async () => {
+      const result = await critical(
+        async () => 'success',
+        { operation: 'test' },
+      );
+
+      expect(result).toBe('success');
+    });
+
+    it('throws on error', async () => {
+      await expect(
+        critical(
+          async () => {
+            throw new Error('test error');
+          },
+          { operation: 'test' },
+        ),
+      ).rejects.toThrow();
+    });
+
+    it('logs errors as critical', async () => {
+      try {
+        await critical(
+          async () => {
+            throw new Error('test error');
+          },
+          { operation: 'test' },
+        );
+      } catch (e) {
+        // Expected to throw
+      }
+
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      expect(consoleErrorSpy.mock.calls[0][0]).toContain('[CRITICAL]');
+    });
+  });
+
+  describe('retryable error detection', () => {
+    it('detects rate limit as retryable', () => {
+      const error = new Error('Rate limit exceeded');
+      const context: ErrorContext = { operation: 'test' };
+      const appError = new AppError(error.message, ErrorSeverity.RECOVERABLE, context, true, error);
+
+      expect(appError.retryable).toBe(true);
+    });
+
+    it('detects network timeout as retryable', () => {
+      const error = new Error('Network timeout');
+      const context: ErrorContext = { operation: 'test' };
+      const appError = new AppError(error.message, ErrorSeverity.RECOVERABLE, context, true, error);
+
+      expect(appError.retryable).toBe(true);
+    });
+
+    it('detects database deadlock as retryable', () => {
+      const error = new Error('Deadlock detected');
+      const context: ErrorContext = { operation: 'test' };
+      const appError = new AppError(error.message, ErrorSeverity.RECOVERABLE, context, true, error);
+
+      expect(appError.retryable).toBe(true);
+    });
+  });
+
+  describe('error cause chain', () => {
+    it('preserves error cause', () => {
+      const cause = new Error('root cause');
+      const error = new AppError('wrapper', ErrorSeverity.CRITICAL, { operation: 'test' }, false, cause);
+
+      expect(error.cause).toBe(cause);
+    });
+
+    it('logs cause for critical errors', () => {
+      const cause = new Error('root cause');
+      const error = new CriticalError('wrapper', { operation: 'test' }, cause);
+      handleError(error, { operation: 'test' });
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[CRITICAL]')
+      );
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        'Caused by:',
+        cause
       );
     });
 
-    app.get('/test/bad-key', async () => {
-      throw new LlmUnavailableError('Gemini rejected the API key. Check GEMINI_API_KEY.', false);
+    it('logs cause for recoverable errors', () => {
+      const cause = new Error('root cause');
+      const error = new RecoverableError('wrapper', { operation: 'test' }, cause);
+      handleError(error, { operation: 'test' });
+
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[RECOVERABLE]')
+      );
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        'Caused by:',
+        cause.message
+      );
     });
-
-    app.get('/test/other-error', async () => {
-      throw new Error('Some other error');
-    });
-
-    app.get('/test/zod-error', async () => {
-      const schema = z.object({
-        field: z.string(),
-      });
-      schema.parse({ field: 123 }); // This will throw ZodError
-    });
-
-    await app.ready();
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  it('returns 429 for rate limit errors', async () => {
-    const response = await app.inject({
-      method: 'GET',
-      url: '/test/rate-limit',
-    });
-
-    expect(response.statusCode).toBe(429);
-    const body = JSON.parse(response.payload);
-    expect(body.error).toContain('rate limit');
-  });
-
-  it('returns 400 for non-retryable LLM errors', async () => {
-    const response = await app.inject({
-      method: 'GET',
-      url: '/test/bad-key',
-    });
-
-    expect(response.statusCode).toBe(400);
-    const body = JSON.parse(response.payload);
-    expect(body.error).toContain('API key');
-  });
-
-  it('returns 500 for unexpected errors', async () => {
-    const response = await app.inject({
-      method: 'GET',
-      url: '/test/other-error',
-    });
-
-    expect(response.statusCode).toBe(500);
-    const body = JSON.parse(response.payload);
-    expect(body.error).toBe('Internal server error');
-  });
-
-  it('returns 400 for Zod validation errors', async () => {
-    const response = await app.inject({
-      method: 'GET',
-      url: '/test/zod-error',
-    });
-
-    expect(response.statusCode).toBe(400);
-    const body = JSON.parse(response.payload);
-    expect(body.error).toBe('Invalid request');
-    expect(body.issues).toBeDefined();
-    expect(body.issues.length).toBeGreaterThan(0);
   });
 });

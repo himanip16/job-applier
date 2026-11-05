@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { mkdir } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
@@ -39,8 +40,9 @@ import { registerStreamRoutes } from './routes/stream.js';
 import { registerResumeUploadRoutes } from './routes/resumeUpload.js';
 import { registerOverviewRoutes } from './routes/overview.js';
 import { registerAdminRoutes } from './routes/admin.js';
+import { logger, createRequestLogger } from './lib/logger.js';
 
-const app = Fastify({ logger: { level: 'warn' } });
+const app = Fastify({ logger: false });
 /**
  * Reflect the caller's origin, and allow credentials.
  *
@@ -60,6 +62,23 @@ await app.register(cors, {
 });
 
 await app.register(multipart, { limits: { fileSize: 15 * 1024 * 1024 } });
+
+/**
+ * Add request ID and correlation ID to all requests for tracing.
+ *
+ * Each request gets a unique requestId. If the client provides a
+ * correlation-id header, it's preserved for distributed tracing.
+ */
+app.addHook('onRequest', async (req, reply) => {
+  const requestId = randomUUID();
+  const correlationId = (req.headers['correlation-id'] as string) || requestId;
+
+  req.id = requestId;
+  (req as any).correlationId = correlationId;
+
+  // Attach a request-scoped logger to the request object
+  (req as any).log = createRequestLogger(requestId, correlationId);
+});
 
 /**
  * Static files also require authentication.
@@ -209,26 +228,31 @@ app.get('/api/health', async () => ({
 // serving, and /api/overview puts the same sentence at the top of the setup
 // checklist with the command in it.
 const bootProblem = await schemaProblem();
-if (bootProblem) process.stderr.write(`\n${bootProblem}\n\n`);
+if (bootProblem) logger.error({ bootProblem }, 'Schema problem detected');
 
 // Before anything reads a key. Keys saved from the settings page live in the
 // database, and config.ts reads them through an in-memory cache that this
 // fills - so a server that skipped this would quietly behave as though every
 // key you saved had been forgotten.
 const savedSettings = await loadSettings();
-if (savedSettings) process.stdout.write(`Loaded ${savedSettings} setting(s) saved from the UI.\n`);
+if (savedSettings) logger.info({ count: savedSettings }, 'Loaded settings saved from UI');
 
 const recovered = await recoverInterruptedRuns();
 if (recovered) {
-  process.stdout.write(`Requeued ${recovered} run(s) interrupted by a restart.\n`);
+  logger.info({ count: recovered }, 'Requeued runs interrupted by restart');
 }
 
 // Cards a run moved before Applied meant submitted go where their run says now.
 const moved = Object.entries(await reconcileLeads().catch(() => ({})));
-if (moved.length) process.stdout.write(`Re-sorted job cards: ${moved.map(([tab, n]) => `${n} to ${tab}`).join(', ')}.\n`);
+if (moved.length) {
+  logger.info(
+    { moved: Object.fromEntries(moved) },
+    'Re-sorted job cards after run status changes',
+  );
+}
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
-process.stdout.write(`API on http://localhost:${config.port}\n`);
+logger.info({ port: config.port }, 'API server listening');
 
 // Start the scheduler for periodic job discovery
 startScheduler();
@@ -240,6 +264,6 @@ startScheduler();
 void (async () => {
   for (const { id } of await prisma.profile.findMany({ select: { id: true } })) {
     const n = await rescoreLexically(id);
-    if (n) process.stdout.write(`Rescored ${n} quick-match lead(s) with the current rules.\n`);
+    if (n) logger.info({ profileId: id, count: n }, 'Rescored quick-match leads with current rules');
   }
-})().catch((err) => process.stderr.write(`Quick rescore on start failed: ${(err as Error).message}\n`));
+})().catch((err) => logger.error({ err }, 'Quick rescore on start failed'));

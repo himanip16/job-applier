@@ -11,8 +11,6 @@
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
-    "sourceMap": true,
-    "downlevelIteration": true,
-    "ignoreDeprecations": "6.0"
+    "sourceMap": true
   }
 }

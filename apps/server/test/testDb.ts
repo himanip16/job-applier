@@ -6,6 +6,7 @@
  * name ends in _test.
  */
 const { config } = await import('../src/lib/config.js');
+const { prisma } = await import('../src/lib/db.js');
 
 export function requireTestDatabase(): string {
   const url = process.env.TEST_DATABASE_URL || config.testDatabaseUrl || config.databaseUrl || '';
@@ -21,4 +22,23 @@ export function requireTestDatabase(): string {
   // is about to be constructed.
   process.env.DATABASE_URL = url;
   return url;
+}
+
+/**
+ * Reset the test database by truncating all tables.
+ *
+ * This is used by tests that need a clean slate between test runs.
+ */
+export async function resetTestDb(): Promise<void> {
+  const tables = await prisma.$queryRaw<Array<{ tablename: string }>>`
+    SELECT tablename
+    FROM pg_tables
+    WHERE schemaname = 'public'
+  `;
+
+  for (const { tablename } of tables) {
+    if (tablename !== '_prisma_migrations') {
+      await prisma.$executeRawUnsafe(`TRUNCATE TABLE "public"."${tablename}" CASCADE;`);
+    }
+  }
 }

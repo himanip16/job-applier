@@ -80,6 +80,16 @@ model PasswordReset {
   @@map("password_resets")
 }
 
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum WorkMode {
+  ON_SITE
+  HYBRID
+  REMOTE
+}
+
 model Profile {
   id          String  @id @default(cuid())
   /// Null only for the single profile that predates sign-in; the adopt script
@@ -99,6 +109,13 @@ model Profile {
   citizenship String? // Citizenship country for visa sponsorship determination
   currentCTC  String? // Current salary/CTC
   expectedCTC String? // Expected salary/CTC
+  yearsOfExperience Float? // Total years of work experience
+  // Work mode preferences (nullable = any)
+  preferredWorkMode WorkMode?
+  // Location preferences (nullable = any location)
+  preferredLocation String? // City, region, or "remote"
+  // Whether willing to relocate
+  willingToRelocate Boolean @default(false)
   linkedin    String?
   github      String?
   website     String?
@@ -126,6 +143,10 @@ model Profile {
   linkedinSyncs LinkedInSync[]
   conversations LinkedInConversation[]
   outreachItems OutreachItem[]
+  companyExclusions CompanyExclusion[]
+  applicationBudgets ApplicationBudget[]
+  validationResults ValidationResult[]
+  autoApplyDecisions AutoApplyDecision[]
 
   @@map("profiles")
 }
@@ -258,8 +279,18 @@ model Job {
   descriptionText String?  @db.Text
   discoveredAt    DateTime @default(now())
 
+  /// Extracted job metadata
+  workMode        WorkMode?
+  salaryMin       Int?      // Minimum salary in USD (or null if not specified)
+  salaryMax       Int?      // Maximum salary in USD (or null if not specified)
+  experienceMin   Float?    // Minimum years of experience required
+  experienceMax   Float?    // Maximum years of experience required
+
   applications    Application[]
   tailoredResumes TailoredResume[] @relation("TailoredResumeJob")
+  validationResults ValidationResult[]
+  autoApplyDecisions AutoApplyDecision[]
+  llmUsage        LLMUsage[] @relation("LLMUsageJob")
 
   @@map("jobs")
 }
@@ -274,6 +305,8 @@ model Application {
   status        AppStatus @default(QUEUED)
   /// Set when status = NEEDS_INPUT / BLOCKED so the UI can explain itself.
   blockedReason String?   @db.Text
+  /// Whether this was a dry-run (simulated without actual submission)
+  dryRun        Boolean   @default(false)
 
   /// Snapshot of every field we discovered plus what we filled. This is the
   /// audit trail — you can prove exactly what was submitted on your behalf.
@@ -294,6 +327,15 @@ model Application {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// Retry tracking
+  lastRetryAt    DateTime?
+  retryCount     Int      @default(0)
+  /// When to attempt next retry (exponential backoff)
+  nextRetryAt    DateTime?
+  /// Whether this is in the dead-letter queue (permanently failed)
+  deadLettered   Boolean  @default(false)
+  deadLetterReason String? @db.Text
+
   // ---- tracker -----------------------------------------------------------
   /// Where this stands with the employer, as opposed to `status`, which is
   /// where the automation got to. A run can be SUBMITTED and the outcome
@@ -312,6 +354,10 @@ model Application {
   artifacts Artifact[]
   rounds    InterviewRound[]
   lessons   Lesson[]
+  deadLetterRecords DeadLetterRecord[]
+  validationResults ValidationResult[]
+  autoApplyDecisions AutoApplyDecision[]
+  llmUsage LLMUsage[]
 
   @@unique([profileId, jobId])
   @@index([status])
@@ -431,6 +477,8 @@ model JobLead {
   remote          Boolean   @default(false)
   descriptionText String?   @db.Text
   postedAt        DateTime?
+  /// When the job posting expires/closes (estimated or actual)
+  expiresAt       DateTime?
 
   /// 0-100. Lexical prior blended with the model's read of the description.
   score        Float     @default(0)
@@ -450,11 +498,14 @@ model JobLead {
 
   /// Set once this lead turns into a real application.
   applicationId String?
+  /// Version for optimistic concurrency control when claiming leads
+  version        Int       @default(0)
 
   discoveredAt DateTime @default(now())
 
   @@unique([profileId, url])
   @@index([profileId, status, score])
+  @@index([profileId, status, expiresAt])
   @@map("job_leads")
 }
 
@@ -615,6 +666,69 @@ model Setting {
   updatedAt DateTime @updatedAt
 
   @@map("settings")
+}
+
+// ---------------------------------------------------------------------------
+// Application reliability & rate limiting
+// ---------------------------------------------------------------------------
+
+/// Transactional outbox for reliable event delivery.
+///
+/// Events are written here in the same transaction as the state change that
+/// produced them, then a background worker reads and delivers them. This
+/// guarantees that no event is lost if the process crashes between the state
+/// change and the event delivery.
+model OutboxEvent {
+  id        String   @id @default(cuid())
+  /// The event type (e.g., 'application.queued', 'application.submitted')
+  eventType String
+  /// Event payload as JSON
+  payload   Json
+  /// Which entity this event is about (for idempotency)
+  entityId  String
+  /// Entity type (e.g., 'application', 'lead')
+  entityType String
+  /// When this event was created
+  createdAt DateTime @default(now())
+  /// When this event was successfully delivered
+  deliveredAt DateTime?
+  /// Number of delivery attempts
+  attempts   Int      @default(0)
+  /// Error message from last failed delivery attempt
+  lastError  String?  @db.Text
+  /// When to attempt next retry (exponential backoff)
+  nextRetryAt DateTime?
+  /// Whether this event is in the dead-letter queue (permanently failed)
+  deadLettered Boolean @default(false)
+  /// Reason for dead-lettering
+  deadLetterReason String? @db.Text
+
+  @@index([deliveredAt, createdAt])
+  @@index([entityId, entityType])
+  @@index([nextRetryAt])
+  @@index([deadLettered])
+  @@map("outbox_events")
+}
+
+/// Company exclusion list per profile.
+///
+/// Companies that the user has opted out of applying to automatically.
+model CompanyExclusion {
+  id        String   @id @default(cuid())
+  profileId String
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  /// Normalized company name (lowercased, punctuation stripped)
+  companyKey String
+  /// Original company name as it appeared
+  companyName String
+  /// Reason for exclusion
+  reason    String?  @db.Text
+  createdAt DateTime @default(now())
+
+  @@unique([profileId, companyKey])
+  @@index([profileId, companyKey])
+  @@map("company_exclusions")
 }
 
 // ---------------------------------------------------------------------------
@@ -892,4 +1006,406 @@ enum OutreachType {
   COLD
   REPLY
   FOLLOW_UP
+}
+
+// ---------------------------------------------------------------------------
+// Distributed locking
+// ---------------------------------------------------------------------------
+
+/// Database-backed lease for distributed locks with expiration.
+///
+/// This table provides lease expiration and stale-lock recovery for distributed
+/// locks. Works in combination with PostgreSQL advisory locks for fast acquisition
+/// and reliable crash handling.
+model SchedulerLease {
+  id           String   @id @default(cuid())
+  /// Lease key (e.g., 'job-discovery' for the scheduler)
+  leaseKey     String   @unique
+  /// Instance identifier (hostname:pid) to track which instance holds the lease
+  instanceId   String
+  /// When the lease was acquired
+  acquiredAt   DateTime @default(now())
+  /// When the lease expires (must be refreshed via heartbeat)
+  expiresAt    DateTime
+  /// Last heartbeat timestamp
+  heartbeatAt  DateTime @default(now())
+  /// Lease status
+  status       LeaseStatus @default(ACTIVE)
+
+  @@index([leaseKey, status])
+  @@index([expiresAt])
+  @@map("scheduler_leases")
+}
+
+enum LeaseStatus {
+  ACTIVE
+  EXPIRED
+  RELEASED
+}
+
+// ---------------------------------------------------------------------------
+// Dead-Letter Queue (DLQ) for failed applications
+// ---------------------------------------------------------------------------
+
+/// Detailed failure attempt records for the dead-letter queue.
+///
+/// Each failed application gets one or more DLQ records documenting every
+/// failure attempt. This enables inspection, filtering, and manual retry
+/// with full attempt history.
+model DeadLetterRecord {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  /// When this failure occurred
+  failedAt DateTime @default(now())
+  /// Error type/category (e.g., 'NETWORK_ERROR', 'CAPTCHA', 'ATS_TIMEOUT')
+  errorType String
+  /// Detailed error message
+  errorMessage String @db.Text
+  /// Stack trace if available
+  stackTrace String? @db.Text
+  /// Application status at time of failure
+  statusAtFailure AppStatus
+  /// Additional context about the failure (e.g., step in the process)
+  failureContext Json?
+  /// Whether this record has been retried
+  retried Boolean @default(false)
+  /// When this record was retried
+  retriedAt DateTime?
+  /// Result of retry (SUCCESS, FAILED, SKIPPED)
+  retryResult String?
+  /// Error message from retry attempt
+  retryError String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([applicationId, failedAt])
+  @@index([errorType])
+  @@index([retried])
+  @@map("dead_letter_records")
+}
+
+// ---------------------------------------------------------------------------
+// Application budget & rate limiting
+// ---------------------------------------------------------------------------
+
+/// Application budget tracking per profile.
+///
+/// Tracks application counts and limits over different time windows (daily, weekly, monthly).
+/// Prevents exceeding configured application limits.
+model ApplicationBudget {
+  id        String   @id @default(cuid())
+  profileId String
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  /// Budget window: DAILY | WEEKLY | MONTHLY
+  window      BudgetWindow
+  /// The start of the current budget window
+  windowStart DateTime
+  /// The end of the current budget window
+  windowEnd   DateTime
+  /// Number of applications submitted in this window
+  count       Int      @default(0)
+  /// Configured limit for this window (null = no limit)
+  limit       Int?
+  /// When this budget record was last updated
+  updatedAt   DateTime @updatedAt
+
+  @@unique([profileId, window, windowStart])
+  @@index([profileId, window, windowStart])
+  @@index([profileId, window, windowEnd])
+  @@map("application_budgets")
+}
+
+enum BudgetWindow {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+/// Validation results for job applications.
+///
+/// Records every validation check performed before an application is created or submitted.
+/// Provides a complete audit trail of why an application was allowed or blocked.
+model ValidationResult {
+  id            String      @id @default(cuid())
+  profileId     String
+  profile       Profile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  /// The job being validated (if applicable)
+  jobId         String?
+  job           Job?       @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  /// The lead being validated (if applicable)
+  leadId        String?
+
+  /// The application being validated (if applicable)
+  applicationId String?
+  application   Application? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+
+  /// The validation category: LOCATION | SALARY | EXPERIENCE | BUDGET | DUPLICATE | COMPANY_BLACKLIST
+  category      ValidationCategory
+  /// Whether this validation passed
+  passed        Boolean
+  /// The reason for the result
+  reason        String      @db.Text
+  /// Additional context (JSON)
+  context       Json?
+  /// When this validation was performed
+  createdAt     DateTime    @default(now())
+
+  @@index([profileId, createdAt])
+  @@index([applicationId, category])
+  @@index([leadId, category])
+  @@index([createdAt])
+  @@map("validation_results")
+}
+
+enum ValidationCategory {
+  LOCATION
+  SALARY
+  EXPERIENCE
+  BUDGET
+  DUPLICATE
+  COMPANY_BLACKLIST
+  JOB_EXPIRY
+  PROFILE_COMPLETENESS
+}
+
+/// Auto-apply decision audit log.
+///
+/// Records every automatic application decision made by the scheduler or auto-apply logic.
+/// Critical for understanding why jobs were auto-applied to or skipped.
+model AutoApplyDecision {
+  id        String   @id @default(cuid())
+  profileId String
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  /// The lead that was considered for auto-apply
+  leadId    String?
+  /// The job being applied to
+  jobId     String?
+  job       Job?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  /// The application that was created (if approved)
+  applicationId String?
+  application   Application? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+
+  /// Whether auto-apply was approved
+  approved  Boolean
+  /// The job score
+  score     Float?
+  /// The decision reason
+  reason    String   @db.Text
+  /// Any validation failures that blocked this
+  failures  Json?    // Array of {category, reason}
+  /// Source of the auto-apply: SCHEDULER | BULK_APPLY | API
+  source    String   @default("SCHEDULER")
+  /// Whether this was a dry-run (simulated without actual application)
+  dryRun    Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([profileId, createdAt])
+  @@index([leadId])
+  @@index([applicationId])
+  @@index([approved, createdAt])
+  @@map("auto_apply_decisions")
+}
+
+/// LLM token usage and cost tracking.
+///
+/// Tracks all LLM API calls with token counts and estimated costs.
+/// Enables cost monitoring and budgeting for AI usage.
+model LLMUsage {
+  id        String   @id @default(cuid())
+  profileId String?
+
+  /// The LLM provider: anthropic | gemini
+  provider  String
+  /// The model used
+  model     String
+  /// The operation that triggered the call: RESOLVE_FIELD | GENERATE_COVER_LETTER | SCORE_JOB | TAILOR_RESUME
+  operation String
+
+  /// Associated application (if applicable)
+  applicationId String?
+  application   Application? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+
+  /// Associated job (if applicable)
+  jobId String?
+  job           Job? @relation("LLMUsageJob", fields: [jobId], references: [id], onDelete: SetNull)
+
+  /// Associated lead (if applicable)
+  leadId String?
+
+  /// Token counts
+  inputTokens     Int
+  outputTokens    Int
+  totalTokens     Int
+
+  /// Estimated cost in USD
+  estimatedCost   Float
+
+  /// The request ID (for debugging)
+  requestId String?
+
+  /// When this call was made
+  createdAt DateTime @default(now())
+
+  @@index([profileId, createdAt])
+  @@index([applicationId])
+  @@index([provider, model])
+  @@index([createdAt])
+  @@map("llm_usage")
+}
+
+/// Global emergency kill switch.
+///
+/// When enabled, prevents all new applications from being created or started.
+/// Allows immediate halt of auto-apply operations in case of issues.
+model EmergencyKillSwitch {
+  id        String   @id @default(cuid())
+  /// Whether the kill switch is currently active
+  enabled   Boolean  @default(false)
+  /// Who enabled it (user ID or 'SYSTEM')
+  enabledBy String?
+  /// When it was enabled
+  enabledAt DateTime?
+  /// Reason for enabling
+  reason    String?  @db.Text
+  /// When it was last updated
+  updatedAt DateTime @updatedAt
+
+  @@map("emergency_kill_switch")
+}
+
+// ---------------------------------------------------------------------------
+// Job discovery rate limiting & source health
+// ---------------------------------------------------------------------------
+
+/// Per-source health tracking for job discovery.
+///
+/// Tracks success/failure rates, error patterns, and circuit breaker state
+/// for each job discovery source (ATS boards, career sites, etc.).
+model SourceHealth {
+  id        String   @id @default(cuid())
+  /// Source identifier (e.g., 'greenhouse', 'lever', 'workday', 'google')
+  sourceId  String   @unique
+
+  /// Circuit breaker state: CLOSED | OPEN | HALF_OPEN
+  circuitState     CircuitState @default(CLOSED)
+  /// When the circuit breaker opened (if OPEN)
+  openedAt         DateTime?
+  /// When to attempt recovery (if OPEN)
+  nextAttemptAt    DateTime?
+  /// Number of consecutive failures that triggered the circuit
+  failureCount     Int      @default(0)
+  /// Threshold of consecutive failures to open the circuit
+  failureThreshold Int      @default(5)
+  /// Success count since last failure (for HALF_OPEN recovery)
+  successCount     Int      @default(0)
+  /// Success count threshold to close the circuit from HALF_OPEN
+  successThreshold Int      @default(3)
+
+  /// Total requests made to this source
+  totalRequests    Int      @default(0)
+  /// Total successful requests
+  successfulRequests Int    @default(0)
+  /// Total failed requests
+  failedRequests   Int      @default(0)
+  /// Total requests that hit rate limits (429)
+  rateLimitedRequests Int   @default(0)
+
+  /// Average response time in milliseconds
+  avgResponseTime  Float?
+  /// Response time samples (for calculating average)
+  responseTimeSamples Int   @default(0)
+
+  /// Last successful request timestamp
+  lastSuccessAt    DateTime?
+  /// Last failure timestamp
+  lastFailureAt    DateTime?
+  /// Last error message
+  lastError        String?  @db.Text
+
+  /// When this record was last updated
+  updatedAt        DateTime @updatedAt
+  /// When this record was created
+  createdAt        DateTime @default(now())
+
+  @@index([circuitState])
+  @@index([nextAttemptAt])
+  @@map("source_health")
+}
+
+enum CircuitState {
+  CLOSED  /// Normal operation, requests allowed
+  OPEN    /// Circuit tripped, requests blocked
+  HALF_OPEN /// Testing recovery, limited requests allowed
+}
+
+/// Rate limit tracking using token bucket algorithm.
+///
+/// Tracks request quotas per source to respect API limits and prevent blocking.
+model RateLimitBucket {
+  id        String   @id @default(cuid())
+  /// Source identifier
+  sourceId  String
+  /// Rate limit type: REQUESTS_PER_MINUTE | REQUESTS_PER_HOUR | REQUESTS_PER_DAY
+  limitType RateLimitType
+
+  /// Maximum tokens (the rate limit)
+  maxTokens Int
+  /// Current token count
+  tokens    Int      @default(0)
+  /// When tokens were last refilled
+  lastRefillAt DateTime @default(now())
+  /// Token refill interval in milliseconds
+  refillIntervalMs Int
+
+  /// Timestamp of last request
+  lastRequestAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sourceId, limitType])
+  @@index([sourceId])
+  @@map("rate_limit_buckets")
+}
+
+enum RateLimitType {
+  REQUESTS_PER_MINUTE
+  REQUESTS_PER_HOUR
+  REQUESTS_PER_DAY
+}
+
+/// Job fingerprinting for incremental discovery.
+///
+/// Tracks discovered jobs by their content hash to avoid re-processing
+/// unchanged jobs and support incremental discovery.
+model JobFingerprint {
+  id        String   @id @default(cuid())
+  /// Stable job identifier (URL or unique key from the source)
+  jobKey    String   @unique
+  /// SHA-256 hash of job content (title + description + location)
+  contentHash String
+  /// When this job was first discovered
+  firstSeenAt DateTime @default(now())
+  /// When this job's content last changed
+  lastChangedAt DateTime @default(now())
+  /// Number of times content has changed
+  changeCount Int @default(0)
+  /// Previous content hash (if changed)
+  previousHash String?
+
+  /// When this record was last updated
+  updatedAt DateTime @updatedAt
+
+  @@index([contentHash])
+  @@index([lastChangedAt])
+  @@map("job_fingerprints")
 }

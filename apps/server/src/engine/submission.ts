@@ -15,6 +15,8 @@ import { whileWaitingOnHuman } from './slots.js';
 import type { FieldPlanEntry } from './fieldPlan.js';
 import { recordManualSubmit, watchForManualSubmit } from './manualSubmit.js';
 import { thisApplicationOnly, type BrowserEdits } from './browserEdits.js';
+import { writeOutboxEvent } from './outbox.js';
+import { bestEffort, expected } from '../lib/errorHandler.js';
 
 /**
  * The last few feet, which are the ones that matter.
@@ -173,7 +175,12 @@ export async function finishApplication(args: {
       `${detail} Solve it in the browser window; this carries on by itself once the site confirms.`,
       { handoff: 'CAPTCHA_ON_SUBMIT' },
     );
-    if (!config.headless) await page.bringToFront().catch(() => {});
+    if (!config.headless) {
+      await bestEffort(
+        () => page.bringToFront(),
+        { operation: 'bringToFront', entityId: applicationId },
+      );
+    }
     process.stdout.write(`\x07[needs you] CAPTCHA on submit\n`);
     outcome = await whileWaitingOnHuman(
       applicationId,
@@ -190,6 +197,14 @@ export async function finishApplication(args: {
     await bus.emitEvent(applicationId, 'STATUS', 'Submitted.', { status: 'SUBMITTED' });
     await markLeadApplied(applicationId);
     await persistLearnedAnswers(applicationId, app.profileId, fillable, answers, companyKey);
+    // Write outbox event for reliable delivery
+    await bestEffort(
+      () => writeOutboxEvent('application.submitted', applicationId, 'application', {
+        confirmation: outcome.detail,
+        timestamp: new Date().toISOString(),
+      }),
+      { operation: 'writeOutboxEvent', entityId: applicationId },
+    );
     return;
   }
 
