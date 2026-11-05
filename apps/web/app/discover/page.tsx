@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { countryByCode, countryFromText } from '@ja/shared/countries';
-import { api, needsProfile } from '../../lib/api';
+import { api, ApiError, needsProfile } from '../../lib/api';
 import { Icon, type IconName } from '../../components/Icon';
 import { ApplyPreferences, useApplyPrefs } from './components/ApplyPreferences';
 import { CleanupDialog } from './components/CleanupDialog';
@@ -141,7 +141,7 @@ export default function DiscoverPage() {
   // than showing nothing until every company has been read.
   const [progress, setProgress] = useState<SearchProgress | null>(null);
   useEffect(() => {
-    if (busy !== 'find') {
+    if (busy !== 'find' && busy !== 'company') {
       setProgress(null);
       return;
     }
@@ -194,6 +194,10 @@ export default function DiscoverPage() {
   // asked for each time and remembered.
   const [asking, setAsking] = useState<CountryAction | null>(null);
   const [country, setCountry] = useState('');
+  const [companyName, setCompanyName] = useState('');
+  // Which way "Find new jobs" opens: every company, or the one company last asked for.
+  const [findScope, setFindScope] = useState<'find' | 'company'>('find');
+  const [fullRefresh, setFullRefresh] = useState(false);
   useEffect(() => {
     let saved = '';
     try { saved = window.localStorage.getItem('ja.searchCountry') ?? ''; } catch { /* default below */ }
@@ -205,47 +209,66 @@ export default function DiscoverPage() {
 
   async function run(action: CountryAction) {
     setAsking(null);
+    setFullRefresh(false);
     try { window.localStorage.setItem('ja.searchCountry', country); } catch { /* still used */ }
     const worldwide = country === WORLDWIDE;
     const name = worldwide ? 'worldwide' : countryByCode(country)?.name ?? country;
-    // No country means no location filter on the server.
+    // No country: the server searches everywhere and keeps jobs open to India.
     const target = worldwide ? undefined : country;
     setBusy(action);
     setError(null);
     setFlash(null);
-    if (action === 'find') setReport(null);
+    if (action === 'find' || action === 'company') setReport(null);
     try {
+      if (action === 'company') {
+        const r = await api<{ report: SearchReport; company: { company: string; source: string; via: string } }>(
+          '/api/discovery/company',
+          { method: 'POST', body: JSON.stringify({ company: companyName.trim(), country: target }) },
+        );
+        setReport(r.report);
+        const board = r.report.boards[0];
+        const found = board?.error
+          ? `Found ${r.company.company} (${r.company.source}) but could not read its openings: ${board.error}`
+          : `Read ${board?.openings ?? 0} opening${board?.openings === 1 ? '' : 's'} at ${r.company.company} (${r.company.source}${r.company.via === 'linkedin' ? ', via LinkedIn' : ''}): ` +
+            `${r.report.jobsSeen} relevant to your roles${worldwide ? '' : ` in ${name}`}, ${r.report.newLeads} new. Showing every job from ${r.company.company} below.`;
+        setFlash(found);
+        // Everything at that company, including ones already found, saved or applied to.
+        change({ company: r.company.company, status: 'ALL' });
+        return;
+      }
       if (action === 'find') {
         const r = await api<{ report: SearchReport }>('/api/discovery/find', {
           method: 'POST',
-          body: JSON.stringify({ deepScoreTop: 15, country: target }),
+          body: JSON.stringify({ country: target, mode: fullRefresh ? 'full' : 'incremental' }),
         });
         setReport(r.report);
       } else if (action === 'crawl') {
         const { report: r } = await api<{ report: Record<string, number> & { errors: { company: string }[] } }>(
           '/api/discovery/crawl',
-          { method: 'POST', body: JSON.stringify({ deepScoreTop: 15, country: target }) },
+          { method: 'POST', body: JSON.stringify({ country: target }) },
         );
         setFlash(
           `Searched ${r.companiesCrawled} watch-list companies${worldwide ? '' : ` for ${name}`}: ${r.newLeads} new job${r.newLeads === 1 ? '' : 's'}. ` +
-            (worldwide ? 'Skipped ' : `Skipped ${r.skippedOtherCountry ?? 0} outside ${name} and `) +
+            `Skipped ${r.skippedOtherCountry ?? 0} ${worldwide ? 'not open to India' : `outside ${name}`} and ` +
             `${r.skippedTooOld ?? 0} older than 3 months.` +
             (r.errors.length ? ` ${r.errors.length} board(s) failed.` : ''),
         );
       } else {
         const { report: r } = await api<{
-          report: { checked: number; removed: number; removedBy: Record<string, number>; unreachable: string[] };
+          report: { checked: number; removed: number; removedBy: Record<string, number>; unreachable: string[]; unknown?: number; maxPerCompany?: number };
         }>('/api/discovery/recheck-leads', { method: 'POST', body: JSON.stringify({ country: target }) });
         const b = r.removedBy;
+        const unknown = r.unknown ?? 0;
         setFlash(
-          r.removed === 0
-            ? `Checked ${r.checked} jobs — all still fit${worldwide ? '' : ` ${name}`}.`
+          (r.removed === 0
+            ? `Checked ${r.checked} jobs — none were closed, too old, off-target ${worldwide ? 'or not open to India' : `for ${name}`} or over the per-company limit.`
             : `Checked ${r.checked} jobs and removed ${r.removed}: ${b.wrongDomain} not engineering roles, ` +
-                (worldwide ? '' : `${b.otherCountry} outside ${name}, `) +
+                `${b.otherCountry} ${worldwide ? 'not open to India' : `outside ${name}`}, ` +
                 `${b.closed} closed, ${b.tooOld} older than 3 months, ${b.tooSenior} too senior` +
                 (b.tooJunior ? `, ${b.tooJunior} internship or new-grad` : '') +
-                '.' +
-                (r.unreachable.length ? ` Could not reach ${r.unreachable.length} board(s), so their jobs were left alone.` : ''),
+                (b.overCap ? `, ${b.overCap} beyond the best ${r.maxPerCompany ?? 3} per company` : '') +
+                '.') +
+            (unknown ? ` ${unknown} posting page${unknown === 1 ? '' : 's'} gave no clear answer, so ${unknown === 1 ? 'it was' : 'they were'} kept.` : ''),
         );
       }
       await load();
@@ -338,9 +361,8 @@ export default function DiscoverPage() {
   /**
    * Autopilot: apply to every ticked job and submit each without asking.
    *
-   * The server queues them and runs one at a time, so this only has to hand
-   * them over. A few at once, because each request can spend up to a minute
-   * tailoring the resume before it returns.
+   * The server queues the lot in one request and works through them a few at
+   * a time (five by default), so nothing here has to stay open once it returns.
    */
   async function autoApplyPicked() {
     await autoApply([...picked], (n) => `${n} ticked job${n === 1 ? '' : 's'}`);
@@ -392,21 +414,50 @@ export default function DiscoverPage() {
     setError(null);
     setFlash(null);
     setLeadErrors({});
+    const options = {
+      requiresReview: false,
+      writeCoverLetter: prefs.writeCoverLetter,
+      autoTailorResume: prefs.tailorResume,
+    };
+    let failed: Record<string, string> = {};
+    let atOnce: number | null = null;
+    setApplying(`Queuing ${ids.length} job${ids.length === 1 ? '' : 's'}…`);
+    try {
+      const r = await api<{ failed: Array<{ id: string; error: string }>; concurrency: number }>(
+        '/api/leads/apply-bulk',
+        { method: 'POST', body: JSON.stringify({ ...options, ids }) },
+      );
+      failed = Object.fromEntries(r.failed.map((f) => [f.id, f.error]));
+      atOnce = r.concurrency;
+    } catch (e) {
+      // A server without the bulk route: hand them over one by one instead.
+      if (!(e instanceof ApiError && e.status === 404)) {
+        setApplying(null);
+        setError((e as Error).message);
+        return;
+      }
+      failed = await queueOneByOne(ids, options);
+    }
+    setApplying(null);
+    const failedIds = Object.keys(failed);
+    setLeadErrors(failed);
+    setPicked(failedIds);
+    const ok = ids.length - failedIds.length;
+    setFlash(
+      `Queued ${ok} job${ok === 1 ? '' : 's'} for auto-apply. ${atOnce ? `${atOnce} run at a time` : 'They run a few at a time'} and submit by themselves; you can leave this page. Follow along on Runs.` +
+        (failedIds.length ? ` ${failedIds.length} could not be queued — see the rows below.` : ''),
+    );
+    await load();
+  }
+
+  async function queueOneByOne(ids: string[], options: object): Promise<Record<string, string>> {
     const failed: Record<string, string> = {};
     let done = 0;
-    setApplying(`Queuing 0 of ${ids.length}…`);
     const next = [...ids];
     const worker = async () => {
       for (let id = next.shift(); id; id = next.shift()) {
         try {
-          await api(`/api/leads/${id}/apply`, {
-            method: 'POST',
-            body: JSON.stringify({
-              requiresReview: false,
-              writeCoverLetter: prefs.writeCoverLetter,
-              autoTailorResume: prefs.tailorResume,
-            }),
-          });
+          await api(`/api/leads/${id}/apply`, { method: 'POST', body: JSON.stringify(options) });
         } catch (e) {
           failed[id] = (e as Error).message;
         }
@@ -415,16 +466,7 @@ export default function DiscoverPage() {
       }
     };
     await Promise.all(Array.from({ length: Math.min(3, ids.length) }, worker));
-    setApplying(null);
-    const failedIds = Object.keys(failed);
-    setLeadErrors(failed);
-    setPicked(failedIds);
-    const ok = ids.length - failedIds.length;
-    setFlash(
-      `Auto-applying to ${ok} job${ok === 1 ? '' : 's'}. They run one after another and submit by themselves; follow along on Runs.` +
-        (failedIds.length ? ` ${failedIds.length} could not be started — see the rows below.` : ''),
-    );
-    await load();
+    return failed;
   }
 
   const pageIds = leads.map((l) => l.id);
@@ -445,15 +487,22 @@ export default function DiscoverPage() {
             </p>
           </div>
           <div className={styles.actions}>
-            <button className="primary" disabled={busy !== null} onClick={() => setAsking('find')}>
-              <Icon name="sparkles" className={busy === 'find' ? 'spin' : undefined} />
-              {busy === 'find'
-                ? progress?.phase === 'reading'
-                  ? `Searching… ${progress.companiesDone}/${progress.companiesTotal}`
-                  : progress?.phase === 'scoring'
-                    ? 'Ranking…'
-                    : 'Searching…'
-                : 'Search top companies'}
+            <button
+              className="primary"
+              disabled={busy !== null}
+              onClick={() => setAsking(findScope)}
+              title="Search every top-paying company in a country, or just one company you name."
+            >
+              <Icon name="sparkles" className={busy === 'find' || busy === 'company' ? 'spin' : undefined} />
+              {busy === 'company'
+                ? `Searching ${companyName.trim()}…`
+                : busy === 'find'
+                  ? progress?.phase === 'reading'
+                    ? `Searching… ${progress.companiesDone}/${progress.companiesTotal}`
+                    : progress?.phase === 'scoring'
+                      ? 'Ranking…'
+                      : 'Searching…'
+                  : 'Find new jobs'}
             </button>
             <button
               disabled={busy !== null || applying !== null}
@@ -463,9 +512,9 @@ export default function DiscoverPage() {
               <Icon name="send" className={busy === 'collect' ? 'spin' : undefined} />
               {applying ?? (busy === 'collect' ? 'Finding matches…' : `Apply to all ${AUTO_APPLY_MIN_MATCH}%+ matches`)}
             </button>
-            <button disabled={busy !== null} onClick={() => setAsking('recheck')} title="Remove jobs in For you that are closed, too old, too senior, or in the wrong country. Never adds jobs.">
+            <button disabled={busy !== null} onClick={() => setAsking('recheck')} title="Re-check every job in For you and Saved: remove the ones no longer available, too old, too senior or junior, or in the wrong country, and keep only the best few per company. Never adds jobs.">
               <Icon name="checkCircle" className={busy === 'recheck' ? 'spin' : undefined} />
-              {busy === 'recheck' ? 'Removing…' : 'Remove stale jobs'}
+              {busy === 'recheck' ? 'Cleaning up…' : 'Clean up'}
             </button>
             <details className={styles.menu}>
               <summary>More <Icon name="chevron" size={14} /></summary>
@@ -491,6 +540,15 @@ export default function DiscoverPage() {
           </div>
         </div>
 
+        {busy === 'company' && (
+          <div className="notice" role="status" aria-live="polite" style={{ marginTop: '.9rem' }}>
+            {!progress
+              ? `Finding where ${companyName.trim()} posts its jobs…`
+              : progress.phase === 'reading'
+                ? `Reading ${companyName.trim()}'s openings…`
+                : `${progress.newLeads} new job${progress.newLeads === 1 ? '' : 's'} added · ranking the best matches`}
+          </div>
+        )}
         {busy === 'find' && progress && (
           <div className="notice" role="status" aria-live="polite" style={{ marginTop: '.9rem' }}>
             {progress.phase === 'reading'
@@ -501,7 +559,7 @@ export default function DiscoverPage() {
         )}
         {flash && <div className="notice good" style={{ marginTop: '.9rem' }}>{flash}</div>}
         {error && <div className="notice bad" style={{ marginTop: '.9rem' }}>{error}</div>}
-        {report && <SearchReportPanel report={report} />}
+        {report && <SearchReportPanel report={report} onClose={() => setReport(null)} />}
       </div>
 
       <div className={styles.tabsRow}>
@@ -551,7 +609,7 @@ export default function DiscoverPage() {
                     ? 'Save a job to keep it here for later.'
                     : view.status === 'PROCESSING'
                       ? 'Jobs you hit Apply on wait here until they are submitted.'
-                    : 'No jobs here yet. Search top companies to get started.'}
+                    : 'No jobs here yet. Use Find new jobs to get started.'}
             </p>
             {error ? (
               <button onClick={() => { setError(null); load().catch((e) => setError(e.message)); }}>Try again</button>
@@ -601,7 +659,18 @@ export default function DiscoverPage() {
         />
       )}
       {asking && (
-        <CountryDialog value={country} action={asking} onChange={setCountry} onCancel={() => setAsking(null)} onConfirm={() => run(asking)} />
+        <CountryDialog
+          value={country}
+          action={asking}
+          onChange={setCountry}
+          company={companyName}
+          onCompanyChange={setCompanyName}
+          onActionChange={(a) => { setAsking(a); if (a === 'find' || a === 'company') setFindScope(a); }}
+          fullRefresh={fullRefresh}
+          onFullRefreshChange={setFullRefresh}
+          onCancel={() => setAsking(null)}
+          onConfirm={() => run(asking)}
+        />
       )}
       {confirmAuto && (
         <div className="modal-backdrop" onClick={() => setConfirmAuto(null)}>

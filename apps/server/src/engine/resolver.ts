@@ -11,7 +11,8 @@ import { findAnswer, noteAnswerUsed } from './answerBank.js';
 import { matchOption, findDeclineOption } from './optionMatch.js';
 import { inferAnswers, type Inference } from '../llm/inferAnswer.js';
 import { generateEssayAnswer } from '../llm/coverLetter.js';
-import { answerFromHistory, degreeLevel } from './repeatableSections.js';
+import { answerFromHistory, answerFromSavedHistory, degreeLevel } from './repeatableSections.js';
+import { convertSalaries } from './salaryCurrency.js';
 
 export type Resolution =
   | { kind: 'answer'; answer: ResolvedAnswer }
@@ -62,8 +63,53 @@ export async function resolveFields(
       out.set(field.id, fromInference(field, inferences.get(field.id)!, pending.get(field.id)!));
     }
   }
+  splitCountryCode(fields, out, ctx.profile.countryCode);
+  await convertSalaries(fields, out, { jobDescription: ctx.jobDescription, profileCountry: ctx.profile.country });
   // Callers read the plan in form order.
   return new Map(fields.map((f) => [f.id, out.get(f.id)!]));
+}
+
+/** "Country Phone Code" (Workday), "Dialing code", "Phone country". */
+const COUNTRY_CODE_LABEL = /country\s*(phone\s*)?code|(dial(l)?ing|calling)\s*code|phone\s*country/i;
+
+/** Calling codes for numbers saved without a separator ("+917029294010"). */
+const CALLING_CODES: Record<string, string> = {
+  IN: '91', US: '1', CA: '1', GB: '44', SG: '65', AE: '971', DE: '49', AU: '61', IE: '353', NL: '31',
+};
+
+/**
+ * A form that asks for the country code in its own field wants only the
+ * national number in the phone box. Workday rejected "+91-7029294010" next to
+ * "India (+91)" as "The number isn't recognized" (Deutsche Bank, October 2026).
+ */
+function splitCountryCode(fields: FormField[], out: Map<string, Resolution>, countryCode?: string | null): void {
+  if (!fields.some((f) => COUNTRY_CODE_LABEL.test(f.label))) return;
+  for (const field of fields) {
+    const res = out.get(field.id);
+    if (res?.kind !== 'answer' || res.answer.canonicalKey !== 'contact.phone') continue;
+    if (COUNTRY_CODE_LABEL.test(field.label) || typeof res.answer.value !== 'string') continue;
+    const national = nationalNumber(res.answer.value, countryCode);
+    if (national === res.answer.value) continue;
+    res.answer = {
+      ...res.answer,
+      value: national,
+      displayValue: national,
+      rationale: `${res.answer.rationale} Country code left to the form's own country code field.`,
+    };
+  }
+}
+
+/** "+91-7029294010", "(+91) 70292 94010", "0091 7029294010" → the number after the code. */
+export function nationalNumber(phone: string, countryCode?: string | null): string {
+  const t = phone.trim();
+  const separated = t.match(/^\(?(?:\+|00)\d{1,3}\)?[\s.\-]+(\d.*)$/);
+  if (separated) return separated[1]!.trim();
+  const code = countryCode ? CALLING_CODES[countryCode.toUpperCase()] : undefined;
+  if (code) {
+    const joined = t.match(new RegExp(`^(?:\\+|00)${code}(\\d{6,})$`));
+    if (joined) return joined[1]!;
+  }
+  return t;
 }
 
 export async function resolveField(field: FormField, ctx: ResolveContext): Promise<Resolution> {
@@ -206,6 +252,64 @@ async function resolveWithoutModel(field: FormField, ctx: ResolveContext): Promi
     }
   }
 
+  // 3a. The expected CTC saved on the profile page, when no fact says otherwise.
+  if (key === 'compensation.expectation' && ctx.profile.expectedCTC?.trim()) {
+    const shaped = shapeForField(ctx.profile.expectedCTC, field);
+    if (shaped) {
+      return {
+        kind: 'answer',
+        answer: {
+          fieldId: field.id,
+          value: shaped.value,
+          displayValue: shaped.display,
+          source: 'PROFILE',
+          confidence: 1,
+          rationale: `From your profile (expected CTC: ${ctx.profile.expectedCTC}).`,
+          remember: false,
+          canonicalKey: key,
+        },
+      };
+    }
+  }
+
+  // 3a'. The current CTC saved on the profile page, likewise.
+  if (key === 'compensation.current' && ctx.profile.currentCTC?.trim()) {
+    const shaped = shapeForField(ctx.profile.currentCTC, field);
+    if (shaped) {
+      return {
+        kind: 'answer',
+        answer: {
+          fieldId: field.id,
+          value: shaped.value,
+          displayValue: shaped.display,
+          source: 'PROFILE',
+          confidence: 1,
+          rationale: `From your profile (current CTC: ${ctx.profile.currentCTC}).`,
+          remember: false,
+          canonicalKey: key,
+        },
+      };
+    }
+  }
+
+  // 3b. A phone extension nobody saved. Blank, not the "NA" the model or the
+  //     answer bank would offer.
+  if (key === 'contact.phone_extension' && !field.required) {
+    return {
+      kind: 'answer',
+      answer: {
+        fieldId: field.id,
+        value: null,
+        displayValue: '',
+        source: 'SKIPPED',
+        confidence: 1,
+        rationale: 'No phone extension saved; left blank.',
+        remember: false,
+        canonicalKey: key,
+      },
+    };
+  }
+
   // 4. Company-specific free text. Generated fresh every time, never recycled
   //    across employers - a "why do you want to work here" answer written for
   //    one company is worse than useless at the next one. Only when the form
@@ -237,7 +341,7 @@ async function resolveWithoutModel(field: FormField, ctx: ResolveContext): Promi
         jobTitle: ctx.jobTitle,
         jobDescription: ctx.jobDescription,
         question: field.label,
-        maxChars: field.kind === 'TEXTAREA' ? 1400 : 400,
+        maxChars: Math.min(field.kind === 'TEXTAREA' ? 1400 : 400, statedLimit(field) ?? Infinity),
       });
     } catch (err) {
       essayError = (err as Error).message;
@@ -355,8 +459,26 @@ function fromInference(field: FormField, inference: Inference, pending: NeedsMod
 function isEssayField(field: FormField): boolean {
   return (
     field.kind === 'TEXTAREA' &&
-    /\bwhy\b|motivat|interest|excite|tell us|describe|what (makes|draws)/i.test(field.label)
+    /\bwhy\b|motivat|interest|excite|tell us|describe|what (makes|draws)|\bwrite\b|feedback|explain|elaborate|\bshare\b|comment|summar/i.test(
+      field.label,
+    )
   );
+}
+
+/**
+ * The length the form says an answer may be, in characters: "200 characters
+ * or less", "maximum 500 characters", "in 100 words or fewer". Words count as
+ * six characters each, which leaves room for a long one.
+ */
+function statedLimit(field: FormField): number | null {
+  const text = `${field.label} ${field.helpText ?? ''}`;
+  const m =
+    text.match(/(\d[\d,]*)\s*(characters?|chars?|words?)\s*(or (less|fewer)|max(imum)?|limit)/i) ??
+    text.match(/(?:max(?:imum)?|up to|limit(?: of)?|no more than)\s*(?:of\s*)?(\d[\d,]*)\s*(characters?|chars?|words?)/i);
+  if (!m) return null;
+  const n = Number(m[1]!.replace(/,/g, ''));
+  if (!n) return null;
+  return /^w/i.test(m[2]!) ? n * 6 : n;
 }
 
 /** Pull an answer straight off the structured profile record. */
@@ -405,7 +527,7 @@ function shapeForField(
 
   const picked: string[] = [];
   for (const want of list) {
-    const m = matchOption(want, field.options);
+    const m = matchOption(want, field.options, field.label);
     // 0.7 is the point below which the match is a guess rather than a mapping.
     if (!m || m.score < 0.7) return null;
     picked.push(m.option.label);
@@ -421,6 +543,26 @@ function shapeForField(
  * own saved work history. Null sends the field down the ordinary path.
  */
 function fromHistory(field: FormField, ctx: ResolveContext): Resolution | null {
+  const saved = answerFromSavedHistory(field, ctx.profile.facts);
+  if (saved !== null) {
+    const shaped =
+      shapeForField(saved, field) ??
+      (/degree|qualification/i.test(field.label) && degreeLevel(saved) ? shapeForField(degreeLevel(saved), field) : null);
+    if (shaped) {
+      return {
+        kind: 'answer',
+        answer: {
+          fieldId: field.id,
+          value: shaped.value,
+          displayValue: shaped.display,
+          source: 'PROFILE',
+          confidence: 1,
+          rationale: 'From your saved work and education history.',
+          remember: false,
+        },
+      };
+    }
+  }
   const raw = answerFromHistory(field, ctx.profile.facts);
   if (raw === null) return null;
   const answer = (value: string | string[] | null, display: string, rationale: string): Resolution => ({
@@ -449,7 +591,9 @@ function fromHistory(field: FormField, ctx: ResolveContext): Resolution | null {
   const shaped =
     shapeForField(raw, field) ??
     (/degree/i.test(field.label) && degreeLevel(raw) ? shapeForField(degreeLevel(raw), field) : null);
-  if (shaped) return answer(shaped.value, shaped.display, `From your saved ${row}.`);
+  // A day-month-year box gets the 1st when only the month is on record.
+  const day = /^01[/-]\d{2}[/-]\d{4}$/.test(raw) ? ' The day is not on record, so it is the 1st of the month.' : '';
+  if (shaped) return answer(shaped.value, shaped.display, `From your saved ${row}.${day}`);
   // A searchable dropdown (Greenhouse's School) only shows a slice of its
   // options until you type, so a miss in the harvested list is not a miss.
   // Typing the name either finds it or fails the fill, which then asks you.

@@ -144,7 +144,7 @@ export const config = {
   storageDir: rooted(process.env.STORAGE_DIR ?? './storage'),
   repoRoot: REPO_ROOT,
   /** Base URL for the web app (used for password reset links, etc.) */
-  webOrigin: process.env.WEB_ORIGIN ?? 'http://localhost:3000',
+  webOrigin: process.env.WEB_ORIGIN ?? 'http://localhost:3001',
 } as const;
 
 export const artifactsDir = path.join(config.storageDir, 'artifacts');

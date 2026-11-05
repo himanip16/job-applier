@@ -95,7 +95,13 @@ export async function rescoreLeads(profileId: string, leads: Lead[]): Promise<Re
     };
 
     try {
-      const raw = await assessFit({ candidateContext, preferences, rejectionHistory, job });
+      const raw = await assessFit({
+        candidateContext,
+        preferences,
+        rejectionHistory,
+        candidateYears: constraints.candidateYears,
+        job,
+      });
       if (!raw) {
         outcomes.push({ id: lead.id, ok: false, reason: 'declined', error: DECLINED_MESSAGE });
         continue;
@@ -349,7 +355,7 @@ export async function rescoreLexically(profileId: string): Promise<number> {
     await prisma.jobLead.update({
       where: { id: lead.id },
       data: {
-        score: lex.score,
+        score: lex.unreadScore,
         scoreReasons: serialiseReasons(lex, null),
         deepScored: false,
         scoredAt: new Date(),

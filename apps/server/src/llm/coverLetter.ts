@@ -84,7 +84,7 @@ export async function generateEssayAnswer(args: {
     task: 'essay',
     system: `${SYSTEM}
 
-You are answering one short application question, not writing a full letter. Answer the question directly in ${Math.max(60, Math.floor(cap / 8))} words or fewer. No greeting, no sign-off.`,
+You are answering one short application question, not writing a full letter. Answer the question directly in ${Math.max(20, Math.floor(cap / 7))} words or fewer, and never more than ${cap} characters. No greeting, no sign-off.`,
     prompt: `${args.candidateContext}
 
 <job>
@@ -99,5 +99,9 @@ ${args.jobDescription.slice(0, 12000)}
     maxTokens: 4000,
   });
   const answer = parsed?.answer ?? '';
-  return answer.length > cap ? `${answer.slice(0, cap - 1).trimEnd()}…` : answer;
+  if (answer.length <= cap) return answer;
+  // Over budget anyway: end on the last full sentence that fits.
+  const cut = answer.slice(0, cap);
+  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  return end > cap / 2 ? cut.slice(0, end + 1) : `${answer.slice(0, cap - 1).trimEnd()}…`;
 }

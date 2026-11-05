@@ -5,8 +5,8 @@ import { prisma, type Prisma } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { bus } from '../lib/events.js';
 import { PageClosedError, screenshot } from '../browser/session.js';
-import { attachFile } from '../browser/fill.js';
-import { detectBlockers } from '../browser/blockers.js';
+import { attachFile, fileBoxShowsFile, inspectControl, readShown } from '../browser/fill.js';
+import { detectBlockers, inlineAccountPending } from '../browser/blockers.js';
 import {
   detectAutofillPrompt,
   findAdvanceControl,
@@ -102,6 +102,10 @@ interface WalkState {
   allFields: FormField[];
   answers: Map<string, ResolvedAnswer>;
   resumeAttached: boolean;
+  // The step the resume last went on. Workday's "Autofill with Resume" takes
+  // it on step 1, and some tenants (F5) ask again on My Experience with an
+  // empty, required box of their own.
+  resumeStep: number | null;
   coverAttached: boolean;
   submitControl: AdvanceControl | null;
   step: number;
@@ -112,6 +116,8 @@ interface WalkState {
   handledPrompts: Set<string>;
   // The screen whose "Add another" rows were held back until its files went on.
   rowsDeferredOn: string | null;
+  // The screen read again for dependent picklists' choices.
+  cascadeRereadOn: string | null;
 }
 
 type StepOutcome = 'CONTINUE' | 'ABANDONED' | 'REACHED_END';
@@ -120,9 +126,10 @@ export async function walkApplication(args: WalkArgs): Promise<WalkOutcome> {
   const context = await createWalkContext(args);
   const state: WalkState = {
     plan: [], allFields: [], answers: new Map(),
-    resumeAttached: false, coverAttached: false, submitControl: null,
+    resumeAttached: false, resumeStep: null, coverAttached: false, submitControl: null,
     step: 0, stuckSignature: null, afterHumanPause: false,
     navigationRetries: 0, handledPrompts: new Set(), rowsDeferredOn: null,
+    cascadeRereadOn: null,
   };
 
   context.edits.attach({ answers: state.answers, sessionAnswers: context.ctx.sessionAnswers, plan: state.plan });
@@ -202,7 +209,27 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
   if (wall) {
     if (!(await pauseForHuman(applicationId, page, wall))) return 'ABANDONED';
     await adapter.afterWall?.(page, context.formUrl);
+    // A wall clears back onto the start page more often than not: Workday's
+    // afterWall reopens `<posting>/apply`, the same "Autofill with Resume /
+    // Apply Manually" screen answered before the sign-in. Still marked as
+    // handled, it was read as an empty step with no button, taken for the end
+    // of the form, and every Workday run went to review on the start page.
+    state.handledPrompts.clear();
     return 'CONTINUE';
+  }
+  // The account is made by the application itself (SuccessFactors quick
+  // apply): its boxes take the saved email and password - asking for the
+  // password first if none is saved - and the rest of the form is read below.
+  if (await inlineAccountPending(page)) {
+    const account = {
+      kind: 'ACCOUNT_CREATION' as const,
+      detail: 'This application creates an account on the site as part of the form; it needs a password.',
+      humanCanClear: true,
+      // detectBlockers does not report these boxes as a wall, so it would call
+      // this cleared at once; it is cleared when the password boxes are filled.
+      clearedWhen: async () => !(await inlineAccountPending(page)),
+    };
+    if (!(await pauseForHuman(applicationId, page, account))) return 'ABANDONED';
   }
   if (await handleAutofillPrompt(context, state, signature)) return 'CONTINUE';
 
@@ -226,11 +253,34 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
     return 'CONTINUE';
   }
   const fillable = fields.filter((f) => f.kind !== 'FILE');
-  await resolveStepAnswers(context, state, fillable);
-  const unfilledRequired = await fillApplicationFields(fillable, {
+  const gaps = await resolveStepAnswers(context, state, fillable);
+  const fillContext = {
     applicationId, page, adapter, answers: state.answers, plan: state.plan,
     afterHumanPause: state.afterHumanPause,
-  });
+  };
+  // Fill everything we can answer before asking about the rest. Asking first
+  // left the whole form blank while the run waited on you: ServiceNow's
+  // SmartRecruiters form has a required "To" date in every experience
+  // editor, and the current job has none to give it.
+  const unanswered = new Set(gaps.map((g) => g.fieldId));
+  const unfilledRequired = await fillApplicationFields(
+    fillable.filter((f) => !unanswered.has(f.id)),
+    fillContext,
+  );
+  // SuccessFactors lists a dependent picklist's choices only once its parent
+  // is picked: PayU's required "Details" under "How did you hear" had none
+  // when the step was read, could not be answered, and stayed empty. Read the
+  // step once more now the parents are set; boxes already filled are kept.
+  if (state.cascadeRereadOn !== signature && (await awaitingParentPick(page, fillable))) {
+    state.cascadeRereadOn = signature;
+    await bus.emitEvent(applicationId, 'LOG', 'Some dropdowns depend on earlier answers; reading the page again for their choices.');
+    state.step--;
+    return 'CONTINUE';
+  }
+  if (gaps.length) {
+    const asked = await askAboutGaps(context, state, fillable, gaps);
+    unfilledRequired.push(...(await fillApplicationFields(asked, fillContext)));
+  }
   // What the run put there; anything different later is you.
   await context.edits.baseline(fillable);
   // Only the page just worked on; later pages start fresh.
@@ -247,6 +297,25 @@ async function walkStep(context: WalkContext, state: WalkState): Promise<StepOut
     return advanceStep(context, state, await pageSignature(page));
   }
   return advanceStep(context, state, signature);
+}
+
+/**
+ * A required SuccessFactors picklist that was read with no choices and can be
+ * opened now - its parent was picked by this pass.
+ */
+async function awaitingParentPick(page: Page, fields: FormField[]): Promise<boolean> {
+  for (const f of fields) {
+    if (!f.required || f.widget !== 'react-select' || f.options?.length) continue;
+    const ready = await page
+      .locator(f.selector)
+      .first()
+      .evaluate((el) => !!el.closest('.sfCascadingPicklist') && !(el as HTMLInputElement).disabled, undefined, {
+        timeout: 2_000,
+      })
+      .catch(() => false);
+    if (ready) return true;
+  }
+  return false;
 }
 
 /** True only when answering the prompt moved to another screen. */
@@ -330,7 +399,10 @@ async function readStepFields(
     );
   }
 
-  if (gate && state.step === 1) {
+  // Once the resume is in, Workday's "Autofill with Resume" step swaps its drop
+  // zone for a file card and has no inputs left - that is the step done, not a
+  // wall. Fall through to Continue so its parser fills the next steps.
+  if (gate && state.step === 1 && !state.resumeAttached) {
     throw new Error(
       'No form fields found on the page. The posting may be closed, or the form behind a wall.',
     );
@@ -376,12 +448,12 @@ async function prepareCoverLetter(
   }
 }
 
+/** Resolve what we can; returns the required fields nothing answered. */
 async function resolveStepAnswers(
-  { applicationId, page, ctx }: WalkContext,
+  { applicationId, ctx }: WalkContext,
   state: WalkState,
   fillable: FormField[],
-): Promise<void> {
-  const { sessionAnswers } = ctx;
+): Promise<AnswerGap[]> {
   const gaps: AnswerGap[] = [];
   const resolved = await resolveFields(fillable, ctx);
   // Keep what the model worked out before anything can go wrong, so a
@@ -401,7 +473,7 @@ async function resolveStepAnswers(
         `${field.label}: ${truncate(res.answer.displayValue)} [${res.answer.source}]`,
         { fieldId: field.id, source: res.answer.source, confidence: res.answer.confidence },
       );
-    } else if (!field.required) {
+    } else if (!field.required || followsANo(field, fillable, state.answers)) {
       // Questions are asked before anything is filled, so one optional box we
       // cannot answer (ServiceNow's Facebook, X and "Message to the Hiring
       // Team") left the whole form blank while the run waited on you. Blank
@@ -412,11 +484,14 @@ async function resolveStepAnswers(
         displayValue: '',
         source: 'SKIPPED',
         confidence: 1,
-        rationale: 'Optional, and nothing in your profile answers it, so it is left blank.',
+        rationale: field.required
+          ? 'Follow-up to a question answered No, so it does not apply and is left blank.'
+          : 'Optional, and nothing in your profile answers it, so it is left blank.',
         remember: false,
         canonicalKey: field.canonicalKey,
       });
-      await bus.emitEvent(applicationId, 'FIELD_RESOLVED', `${field.label}: left blank (optional) [SKIPPED]`, {
+      const why = field.required ? 'follow-up to a No' : 'optional';
+      await bus.emitEvent(applicationId, 'FIELD_RESOLVED', `${field.label}: left blank (${why}) [SKIPPED]`, {
         fieldId: field.id,
         source: 'SKIPPED',
         confidence: 1,
@@ -426,19 +501,83 @@ async function resolveStepAnswers(
     }
   }
 
-  if (gaps.length) {
-    const supplied = await askHuman(applicationId, page, fillable, gaps);
-    for (const [fieldId, answer] of supplied) {
-      state.answers.set(fieldId, answer);
-      sessionAnswers.set(fieldId, answer);
-    }
-    const stillMissing = fillable.filter((f) => f.required && !state.answers.has(f.id));
-    if (stillMissing.length) {
-      throw new Error(
-        `Required field(s) left unanswered: ${stillMissing.map((f) => f.label).join(', ')}`,
-      );
-    }
+  return gaps;
+}
+
+/**
+ * Ask about the required fields nothing answered, once the rest is filled,
+ * and return the ones that now have an answer.
+ *
+ * Filling can settle a question by itself: ticking "I currently work here"
+ * removes or disables the "To" date it was asked about. Those are dropped
+ * rather than put to you.
+ */
+async function askAboutGaps(
+  { applicationId, page, ctx }: WalkContext,
+  state: WalkState,
+  fillable: FormField[],
+  gaps: AnswerGap[],
+): Promise<FormField[]> {
+  const byId = new Map(fillable.map((f) => [f.id, f]));
+  const open: AnswerGap[] = [];
+  for (const gap of gaps) {
+    const field = byId.get(gap.fieldId);
+    if (!field) continue;
+    const control = await inspectControl(page, field);
+    if (!control.exists || control.locked) continue;
+    // What the page shows, not input.value: every radio carries a value
+    // whether or not it is picked. A site default that is already selected
+    // (Okta's "Upload PDF") stands, rather than being put to you.
+    const shown = await readShown(page, field);
+    if (shown && !shown.length) open.push(gap);
   }
+  if (!open.length) return [];
+  const supplied = await askHuman(applicationId, page, fillable, open);
+  for (const [fieldId, answer] of supplied) {
+    state.answers.set(fieldId, answer);
+    ctx.sessionAnswers.set(fieldId, answer);
+  }
+  const asked = open.map((g) => byId.get(g.fieldId)!);
+  const stillMissing = asked.filter((f) => !state.answers.has(f.id));
+  if (stillMissing.length) {
+    throw new Error(
+      `Required field(s) left unanswered: ${stillMissing.map((f) => f.label).join(', ')}`,
+    );
+  }
+  return asked;
+}
+
+/**
+ * "If yes, please describe..." under a question this run answered No.
+ *
+ * Forms mark these required even though they only apply to a Yes, so they
+ * were put to you after you (or your profile) had already said No.
+ */
+// Starts with the condition. "Do you have a non-compete? If yes, describe" is
+// a question of its own, and is still asked.
+const FOLLOW_UP =
+  /^\W*(if (yes|so)\b|if you (answered|selected|chose|said) \W?yes\b)|^(please )?(describe|explain|specify|provide details|list|give details)\b[^?]{0,60}\bif (yes|so)\b/i;
+export function followsANo(
+  field: FormField,
+  fields: FormField[],
+  answers: Map<string, ResolvedAnswer>,
+): boolean {
+  if (!FOLLOW_UP.test(field.label.trim())) return false;
+  // The question it hangs off is a yes/no-shaped one just before it.
+  const at = fields.indexOf(field);
+  for (let i = at - 1; i >= 0 && i >= at - 2; i--) {
+    const prev = fields[i]!;
+    const answer = answers.get(prev.id);
+    const yesNo =
+      prev.options?.some((o) => /^no\b/i.test(o.label.trim())) ||
+      prev.kind === 'CHECKBOX' ||
+      answer?.value === false;
+    if (!yesNo) continue;
+    if (!answer) return false;
+    const shown = normalizeLabel(answer.displayValue);
+    return answer.value === false || /^(no|false)\b/.test(shown);
+  }
+  return false;
 }
 
 async function pauseForRequiredFields(
@@ -480,12 +619,20 @@ async function attachStepFiles(
 ): Promise<boolean> {
   const { coverLetter } = ctx;
   let attached = false;
-  if (resumeInput && !state.resumeAttached) {
+  // Once per step, and on a later step only if its box does not already show
+  // the file - Workday carries it over on some tenants and not on others.
+  const resumeWanted =
+    resumeInput &&
+    (!state.resumeAttached ||
+      (state.resumeStep !== state.step &&
+        !(await fileBoxShowsFile(page, resumeInput.selector, resume?.filename ?? ''))));
+  if (resumeInput && resumeWanted) {
     if (!resume) throw new Error('This form wants a resume and none is uploaded to your profile.');
     // Some boards (Okta's) hide the real input behind their own uploader.
     if (adapter.attachFile) await adapter.attachFile(page, resumeInput, path.resolve(resume.path));
     else await attachFile(page, resumeInput.selector, path.resolve(resume.path));
     state.resumeAttached = true;
+    state.resumeStep = state.step;
     attached = true;
     await bus.emitEvent(applicationId, 'FILE_ATTACHED', `Attached ${resume.filename}.`);
     state.plan.push({
@@ -512,7 +659,17 @@ async function advanceStep(
   const { applicationId, page, adapter, edits } = context;
   // An upload or save can hold the continue button disabled for a moment.
   await adapter.settle?.(page);
-  const advance = await findAdvanceControl(page);
+  let advance = await findAdvanceControl(page);
+  // "Submit" on a step that is not the last one only moves the form along.
+  if (advance?.kind === 'SUBMIT' && adapter.isFinalStep && !(await adapter.isFinalStep(page).catch(() => true))) {
+    advance = { ...advance, kind: 'NEXT' };
+  }
+  if (!advance && (await detectAutofillPrompt(page))) {
+    // Never the end of a form: it is the screen before the first step.
+    throw new Error(
+      'Stuck on the site\'s "Autofill with Resume / Apply Manually" screen: choosing did not open the form.',
+    );
+  }
   if (!advance) {
     // Nothing to press. On a one-page form that is normal - the adapter
     // knows how to submit it. Mid-wizard it means the markup changed.

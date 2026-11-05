@@ -1,11 +1,13 @@
 import { countryByCode, type Country } from '@ja/shared';
 import { newPage } from '../browser/session.js';
+import { type Page } from 'playwright';
 import { crawlCareersPage, sourceById, type DiscoveredJob, type FetchHints } from './sources/index.js';
-import { admit, emptyTally, openIntake, screen } from './leadIntake.js';
+import { admit, emptyTally, openIntake } from './leadIntake.js';
+import { screen } from './screening.js';
 import { buildSearchPlan, jobMatchesPlan, type SearchPlan } from './searchQueries.js';
 import { rescoreLexically } from './rescoreLeads.js';
 import { loadScoringContext } from './scoring.js';
-import { deepScoreLeads } from './deepScore.js';
+import { DEFAULT_DEEP_SCORE_TOP, deepScoreLeads } from './deepScore.js';
 import { registerCompany } from './companyRegistration.js';
 import { topCompanies, type TargetCompany } from './topCompanies.js';
 import { isFirecrawlConfigured } from './firecrawl.js';
@@ -61,6 +63,7 @@ export interface JobSearchReport {
   newLeads: number;
   skippedAlreadySeen: number;
   skippedTooSenior: number;
+  skippedTooJunior: number;
   /** Posted more than MAX_POSTING_AGE_DAYS ago. */
   skippedTooOld: number;
   /** Outside the country you chose to search in, and not remote. */
@@ -70,7 +73,7 @@ export interface JobSearchReport {
   /** Sales, recruiting, legal and the like - not engineering, whatever the keywords. */
   skippedWrongDomain: number;
   /** A few titles behind each of those two counts, so a filter that is too strict is visible. */
-  droppedExamples: { offPlan: string[]; wrongDomain: string[]; tooOld: string[]; tooSenior: string[]; otherCountry: string[] };
+  droppedExamples: { offPlan: string[]; wrongDomain: string[]; tooOld: string[]; tooSenior: string[]; tooJunior: string[]; otherCountry: string[] };
   /** Kept postings that did not say where they are: in the queue as "Location unknown". */
   keptUnknownLocation: number;
   /**
@@ -90,34 +93,19 @@ export interface JobSearchReport {
 
 /** Seams, so the whole flow is testable without a network. */
 export interface FindJobsDeps {
-  plan: (profileId: string, opts: { maxQueries: number; country?: Country }) => Promise<SearchPlan>;
+  plan: (profileId: string, opts: { maxQueries: number; country?: Country; openToIndia?: boolean }) => Promise<SearchPlan>;
   companies: (limit: number) => TargetCompany[];
   fetchCompany: (company: TargetCompany, hints: FetchHints) => Promise<DiscoveredJob[]>;
   /** Sites read within RECRAWL_AFTER_MS, keyed by crawlKey(source, handle). */
   recentCrawls: (refs: { source: string; handle: string }[]) => Promise<Map<string, Date>>;
 }
 
-/**
- * The careers-page crawls share one browser page and run one at a time; the
- * API sources are plain HTTP and need none.
- */
-let sharedPage: Awaited<ReturnType<typeof newPage>> | null = null;
-let pageQueue: Promise<unknown> = Promise.resolve();
 
-async function crawlWithBrowser(url: string): Promise<DiscoveredJob[]> {
-  const run = pageQueue.then(async () => {
-    sharedPage ??= await newPage();
-    return crawlCareersPage(sharedPage, url, { maxPages: 25 });
-  });
-  pageQueue = run.catch(() => {});
-  return run;
-}
 
 const defaultDeps: FindJobsDeps = {
   plan: (profileId, opts) => buildSearchPlan(profileId, opts),
   companies: (limit) => topCompanies(limit),
   fetchCompany: async (company, hints) => {
-    if (company.source === 'careers-page') return crawlWithBrowser(company.handle);
     const source = sourceById(company.source);
     if (!source) throw new Error(`No crawler registered for "${company.source}"`);
     return source.fetchJobs(company.handle, hints);
@@ -129,12 +117,20 @@ export interface FindJobsOptions {
   /** Work out what it would search for and stop, without reading any site. */
   dryRun?: boolean;
   maxQueries?: number;
-  /** How many of the best-paying companies to read. */
+  /** Maximum number of top-ranked companies to consider. Defaults to all. */
   maxBoards?: number;
   deepScoreTop?: number;
   /** Where to look, as an ISO code. Asked for before every search. */
   country?: string;
-  /** Read every site, even ones read within the last RECRAWL_AFTER_MS. */
+  /** With no country: keep only jobs someone in India could take. */
+  openToIndia?: boolean;
+  /**
+   * Discovery mode: 'incremental' (default) or 'full'.
+   * - incremental: Only crawl companies whose cooldown has expired.
+   * - full: Recheck all companies, ignoring the cooldown, with reduced concurrency.
+   */
+  mode?: 'incremental' | 'full';
+  /** @deprecated Use mode: 'full' instead. Read every site, even ones read within the last RECRAWL_AFTER_MS. */
   force?: boolean;
   deps?: Partial<FindJobsDeps>;
 }
@@ -148,6 +144,11 @@ const hasSource = (c: TargetCompany): boolean => c.source !== 'careers-page' || 
 
 /** Companies read at once. Each site is still read politely, one request at a time. */
 const CONCURRENCY = 6;
+
+/** Reduced concurrency for full refresh to implement rate limiting. */
+const FULL_REFRESH_CONCURRENCY = 3;
+/** Minimum gap between starting company reads during a full refresh. */
+const FULL_REFRESH_START_INTERVAL_MS = 500;
 
 /**
  * How far a running search has got, so the page can show jobs as they are
@@ -190,7 +191,9 @@ async function runSearch(
   const maxQueries = opts.maxQueries ?? 6;
   // The whole list: the API sources answer in a second or two each.
   const maxCompanies = opts.maxBoards ?? Number.POSITIVE_INFINITY;
-  const deepScoreTop = opts.deepScoreTop ?? 15;
+  const deepScoreTop = opts.deepScoreTop ?? DEFAULT_DEEP_SCORE_TOP;
+  const mode = opts.mode ?? 'incremental';
+  const forceFullRefresh = opts.force || mode === 'full';
 
   const report: JobSearchReport = {
     planSource: 'profile',
@@ -204,11 +207,12 @@ async function runSearch(
     newLeads: 0,
     skippedAlreadySeen: 0,
     skippedTooSenior: 0,
+    skippedTooJunior: 0,
     skippedTooOld: 0,
     skippedOtherCountry: 0,
     skippedOffPlan: 0,
     skippedWrongDomain: 0,
-    droppedExamples: { offPlan: [], wrongDomain: [], tooOld: [], tooSenior: [], otherCountry: [] },
+    droppedExamples: { offPlan: [], wrongDomain: [], tooOld: [], tooSenior: [], tooJunior: [], otherCountry: [] },
     keptUnknownLocation: 0,
     noSource: [],
     recentlyCrawled: [],
@@ -219,7 +223,7 @@ async function runSearch(
   };
 
   const target = countryByCode(opts.country);
-  const plan = await deps.plan(profileId, { maxQueries, country: target });
+  const plan = await deps.plan(profileId, { maxQueries, country: target, openToIndia: !target && opts.openToIndia });
   report.planSource = plan.source;
   report.roleTitles = plan.roleTitles;
   report.notes.push(...plan.notes);
@@ -231,7 +235,7 @@ async function runSearch(
 
   // Sites read in the last few hours have nothing new to say; their postings
   // are already in the queue from that read.
-  const recent = opts.force
+  const recent = forceFullRefresh
     ? new Map<string, Date>()
     : await deps.recentCrawls(withSource.map((c) => ({ source: c.source, handle: c.handle })));
   const companies = withSource.filter((c) => !recent.has(crawlKey(c.source, c.handle)));
@@ -246,6 +250,15 @@ async function runSearch(
       `Skipped ${n} compan${n === 1 ? 'y' : 'ies'} already read in the last ${hours} hours (${sample.join('; ')}${n > 5 ? '; ...' : ''}).`,
     );
     log(`skipping ${n} compan(ies) read in the last ${hours}h`);
+  }
+
+  // Log the discovery mode
+  const concurrency = forceFullRefresh ? FULL_REFRESH_CONCURRENCY : CONCURRENCY;
+  if (forceFullRefresh) {
+    report.notes.push(`Full refresh: rechecking all ${companies.length} companies with reduced concurrency (${concurrency}).`);
+    log(`full refresh mode: reading ${companies.length} companies with concurrency ${concurrency}`);
+  } else {
+    log(`incremental mode: reading ${companies.length} companies whose cooldown has expired`);
   }
 
   if (opts.dryRun) {
@@ -268,7 +281,7 @@ async function runSearch(
   // answers and show up in the queue while the rest are still being read.
   const intake = await openIntake(
     profileId,
-    { country: target, roleTitles: plan.roleTitles },
+    { country: target, openToIndia: !target && opts.openToIndia, roleTitles: plan.roleTitles },
     await loadScoringContext(profileId),
   );
   const tally = emptyTally();
@@ -287,7 +300,46 @@ async function runSearch(
   // ---- 1. read every company ------------------------------------------------
   const fetched: { company: TargetCompany; outcome: BoardOutcome; jobs: DiscoveredJob[] }[] = [];
 
+  /**
+   * Browser lifecycle for this search. Scoped to this search so concurrent
+   * searches don't interfere with each other's browser pages.
+   */
+  let searchPage: Page | null = null;
+  let pageQueue: Promise<unknown> = Promise.resolve();
+
+  const crawlWithBrowser = async (url: string): Promise<DiscoveredJob[]> => {
+    const run = pageQueue.then(async () => {
+      searchPage ??= await newPage();
+      return crawlCareersPage(searchPage, url, { maxPages: 25 });
+    });
+    pageQueue = run.catch(() => {});
+    return run;
+  };
+
+  // Patch the fetchCompany dep to use the search-scoped browser
+  const fetchCompany = async (company: TargetCompany, hints: FetchHints): Promise<DiscoveredJob[]> => {
+    if (company.source === 'careers-page') return crawlWithBrowser(company.handle);
+    const source = sourceById(company.source);
+    if (!source) throw new Error(`No crawler registered for "${company.source}"`);
+    return source.fetchJobs(company.handle, hints);
+  };
+
+  const searchDeps: FindJobsDeps = { ...deps, fetchCompany };
+
   let next = 0;
+  let nextFullRefreshStart = 0;
+  let fullRefreshStartQueue: Promise<void> = Promise.resolve();
+  const paceFullRefresh = async () => {
+    const scheduled = fullRefreshStartQueue.then(async () => {
+      const now = Date.now();
+      const delay = Math.max(0, nextFullRefreshStart - now);
+      nextFullRefreshStart = Math.max(now, nextFullRefreshStart) + FULL_REFRESH_START_INTERVAL_MS;
+      if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    });
+    fullRefreshStartQueue = scheduled.catch(() => {});
+    await scheduled;
+  };
+
   const worker = async () => {
     while (next < companies.length) {
       const company = companies[next++]!;
@@ -303,14 +355,15 @@ async function runSearch(
             if (!outcome.warnings.includes(message)) outcome.warnings.push(message);
           },
         };
-        const jobs = await deps.fetchCompany(company, hints);
+        if (forceFullRefresh) await paceFullRefresh();
+        const jobs = await searchDeps.fetchCompany(company, hints);
         outcome.openings = jobs.length;
         const missingDescriptions = jobs.filter((j) => !j.descriptionText.trim()).length;
         if (missingDescriptions) hints.onWarning?.(`${missingDescriptions} posting(s) have no description; matching and scoring have less evidence.`);
         fetched.push({ company, outcome, jobs });
         const registered = await registerCompany({ ats: company.source, slug: company.handle }, company.company);
         if (registered.created) report.companiesRegistered++;
-        else await markCrawled(registered.id, `${jobs.length} postings`);
+        await markCrawled(registered.id, `${jobs.length} postings`);
         outcome.kept = await admit(intake, { id: registered.id, name: company.company }, jobs, tally);
         log(`  ${company.company} (${company.source}): ${jobs.length} opening(s), ${outcome.kept} new`);
       } catch (err) {
@@ -325,10 +378,12 @@ async function runSearch(
     }
   };
   try {
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, companies.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(concurrency, companies.length) }, worker));
   } finally {
-    await sharedPage?.close().catch(() => {});
-    sharedPage = null;
+    if (searchPage) {
+      await (searchPage as Page).close().catch(() => {});
+      searchPage = null;
+    }
   }
   // Report in pay order, not in whichever order the sites happened to answer.
   const rank = new Map(companies.map((c, i) => [c.company, i]));
@@ -353,13 +408,14 @@ async function runSearch(
   report.keptUnknownLocation = tally.unknownLocation;
   report.skippedAlreadySeen = tally.rejected.alreadySeen;
   report.skippedTooSenior = tally.rejected.tooSenior;
+  report.skippedTooJunior = tally.rejected.tooJunior;
   report.skippedTooOld = tally.rejected.tooOld;
   report.skippedOtherCountry = tally.rejected.otherCountry;
   report.skippedOffPlan = tally.rejected.offPlan;
   report.skippedWrongDomain = tally.rejected.wrongDomain;
   report.droppedExamples = {
     offPlan: tally.examples.offPlan, wrongDomain: tally.examples.wrongDomain,
-    tooOld: tally.examples.tooOld, tooSenior: tally.examples.tooSenior, otherCountry: tally.examples.otherCountry,
+    tooOld: tally.examples.tooOld, tooSenior: tally.examples.tooSenior, tooJunior: tally.examples.tooJunior, otherCountry: tally.examples.otherCountry,
   };
   report.errors.push(...tally.errors);
   const fresh = tally.fresh;
@@ -380,8 +436,17 @@ async function runSearch(
 
   // ---- 4. read the most promising in full ----------------------------------
   progress.phase = 'scoring';
-  if (fresh.length && deepScoreTop > 0) {
-    const deepScoreResult = await deepScoreLeads(profileId, fresh, deepScoreTop);
+  if (deepScoreTop > 0) {
+    // A search of one company reads that company's new jobs; a full search
+    // reads the best of everything still waiting, old leads included.
+    // Use companies.length (actual companies read) not listed.length (intended)
+    // so a single-company search that was skipped due to recent crawl doesn't
+    // incorrectly trigger single-company deep-scoring.
+    const deepScoreResult = await deepScoreLeads(
+      profileId,
+      deepScoreTop,
+      companies.length === 1 ? { only: fresh.map((f) => f.id) } : {},
+    );
     report.deepScored = deepScoreResult.deepScored;
     report.errors.push(...deepScoreResult.errors.map(e => ({ where: `scoring ${e.company}`, error: e.error })));
   }

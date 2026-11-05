@@ -112,8 +112,27 @@ export default function SettingsPage() {
       {byKey.get('JOB_SITE_PASSWORD') && (
         <JobSiteAccount setting={byKey.get('JOB_SITE_PASSWORD')!} onChange={load} />
       )}
+      {byKey.get('EMAIL_APP_PASSWORD') && (
+        <InboxCodes setting={byKey.get('EMAIL_APP_PASSWORD')!} onChange={load} />
+      )}
       {byKey.get('SSO_PROVIDER') && (
         <SignInProvider setting={byKey.get('SSO_PROVIDER')!} onChange={load} />
+      )}
+      {byKey.get('APPLE_ID_PASSWORD') && (
+        <SavedSignIn
+          copy={APPLE_COPY}
+          accountId={byKey.get('APPLE_ID')}
+          password={byKey.get('APPLE_ID_PASSWORD')!}
+          onChange={load}
+        />
+      )}
+      {byKey.get('MICROSOFT_ACCOUNT_PASSWORD') && (
+        <SavedSignIn
+          copy={MICROSOFT_COPY}
+          accountId={byKey.get('MICROSOFT_ACCOUNT')}
+          password={byKey.get('MICROSOFT_ACCOUNT_PASSWORD')!}
+          onChange={load}
+        />
       )}
       <p className={s.foot}>
         Keys are stored in plain text in the <code>settings</code> table of your own Postgres
@@ -739,6 +758,313 @@ function JobSiteAccount({ setting, onChange }: { setting: Setting; onChange: () 
         <p className={s.hint} style={{ marginTop: '.5rem' }}>
           Most sites want 8+ characters with upper and lower case, a number and a symbol.
         </p>
+      )}
+
+      {result && (
+        <div className={`notice ${result.ok ? 'good' : 'bad'} ${s.message}`} role="status">
+          {result.detail}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * A Gmail app password, so "we sent a code to your email" walls clear by
+ * themselves. Saving it logs in to Gmail once to prove it works.
+ */
+function InboxCodes({ setting, onChange }: { setting: Setting; onChange: () => Promise<void> }) {
+  const [value, setValue] = useState('');
+  const [editing, setEditing] = useState(!setting.set);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; detail: string } | null>(null);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await api<{ check: { ok: boolean; detail: string } | null }>('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ key: setting.key, value }),
+      });
+      setValue('');
+      setEditing(false);
+      setResult(r.check ?? { ok: true, detail: 'Saved.' });
+      await onChange();
+    } catch (err) {
+      setResult({ ok: false, detail: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clear() {
+    if (!confirm('Remove the Gmail app password? Emailed codes will wait for you again.')) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      await api(`/api/settings/${setting.key}`, { method: 'DELETE' });
+      await onChange();
+      setEditing(true);
+    } catch (err) {
+      setResult({ ok: false, detail: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className={s.card}>
+      <div className={s.cardHead}>
+        <div>
+          <h2>Email verification codes</h2>
+          <p>
+            When a job site emails you a code or a verify link, the run reads it from your Gmail
+            (the email on your profile) and puts it in. It only looks at mail from the last few
+            minutes that is from that company or its job board, and never marks anything read. If
+            no clear code arrives within two minutes it waits for you as before.
+          </p>
+        </div>
+      </div>
+
+      {setting.set && !editing ? (
+        <div className={`${s.row} ${s.rowActive}`}>
+          <span className={`${s.dot} ${s.dotFirecrawl}`} aria-hidden />
+          <div className={s.rowMain}>
+            <span className={s.rowName}>Gmail app password</span>
+            <span className={s.rowMeta}>
+              <code>••••••••</code>
+              {setting.origin === 'env' && ' · from .env'}
+            </span>
+          </div>
+          <span className={s.inUse}>
+            <Check /> Saved
+          </span>
+          <button className={s.pill} disabled={busy} onClick={() => setEditing(true)}>
+            Replace
+          </button>
+          {setting.origin === 'saved' && (
+            <button className={s.quiet} disabled={busy} onClick={clear}>
+              Remove
+            </button>
+          )}
+        </div>
+      ) : (
+        <form className={s.inline} onSubmit={save}>
+          <input
+            type="password"
+            placeholder="xxxx xxxx xxxx xxxx"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            aria-label="Gmail app password"
+          />
+          {setting.set && (
+            <button type="button" className={`ghost ${s.pill}`} onClick={() => setEditing(false)} disabled={busy}>
+              Cancel
+            </button>
+          )}
+          <button type="submit" className={`primary ${s.pill}`} disabled={busy || !value.trim()}>
+            {busy ? 'Checking…' : 'Save'}
+          </button>
+        </form>
+      )}
+      {!setting.set && (
+        <p className={s.hint} style={{ marginTop: '.5rem' }}>
+          Not your Gmail password. Turn on 2-Step Verification, then make one at{' '}
+          <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">
+            myaccount.google.com/apppasswords
+          </a>
+          . It can only read mail, and you can revoke it there any time.
+        </p>
+      )}
+
+      {result && (
+        <div className={`notice ${result.ok ? 'good' : 'bad'} ${s.message}`} role="status">
+          {result.detail}
+        </div>
+      )}
+    </section>
+  );
+}
+
+interface SignInCopy {
+  title: string;
+  body: React.ReactNode;
+  idLabel: string;
+  passwordLabel: string;
+  saved: string;
+  removeConfirm: string;
+}
+
+/**
+ * The Apple Account that Apple Careers makes every application sign in with.
+ * Filled by plain DOM code (browser/appleId.ts); the six-digit code Apple
+ * pushes to your devices still waits for you.
+ */
+const APPLE_COPY: SignInCopy = {
+  title: 'Apple Account',
+  body: (
+    <>
+      Apple Careers sends every application through an Apple Account sign-in. The run fills in this
+      Apple ID and password, then stops for the six-digit code Apple sends to your iPhone or Mac: type
+      it in the open window and choose <strong>Trust</strong>, and later Apple applications skip the
+      sign-in altogether.
+    </>
+  ),
+  idLabel: 'Apple ID',
+  passwordLabel: 'Apple Account password',
+  saved: 'Saved. Apple sign-ins are filled in automatically from now on.',
+  removeConfirm: 'Remove the Apple Account password? Apple sign-ins will wait for you again.',
+};
+
+/**
+ * The Microsoft account behind Microsoft Careers' "Sign in using Microsoft".
+ * Filled by plain DOM code (browser/microsoftAccount.ts); a code or an
+ * Authenticator approval still waits for you.
+ */
+const MICROSOFT_COPY: SignInCopy = {
+  title: 'Microsoft account',
+  body: (
+    <>
+      Microsoft Careers asks you to sign in before every application. The run picks{' '}
+      <strong>Sign in using Microsoft</strong>, fills in this account and password, and answers{' '}
+      <strong>Stay signed in</strong> with Yes, so later Microsoft applications skip the sign-in. If
+      Microsoft asks for a code or an Authenticator approval, the run waits for you in the open
+      window.
+    </>
+  ),
+  idLabel: 'Microsoft account email',
+  passwordLabel: 'Microsoft account password',
+  saved: 'Saved. Microsoft Careers sign-ins are filled in automatically from now on.',
+  removeConfirm: 'Remove the Microsoft account password? Microsoft Careers sign-ins will wait for you again.',
+};
+
+/** One saved account for a careers site that signs in through its own identity provider. */
+function SavedSignIn({
+  copy,
+  accountId,
+  password,
+  onChange,
+}: {
+  copy: SignInCopy;
+  accountId?: Setting;
+  password: Setting;
+  onChange: () => Promise<void>;
+}) {
+  const [id, setId] = useState(accountId?.preview ?? '');
+  const [value, setValue] = useState('');
+  const [editing, setEditing] = useState(!password.set);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; detail: string } | null>(null);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setResult(null);
+    try {
+      if (accountId) {
+        await api('/api/settings', {
+          method: 'PUT',
+          body: JSON.stringify({ key: accountId.key, value: id, verify: false }),
+        });
+      }
+      await api('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ key: password.key, value, verify: false }),
+      });
+      setValue('');
+      setEditing(false);
+      setResult({ ok: true, detail: copy.saved });
+      await onChange();
+    } catch (err) {
+      setResult({ ok: false, detail: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clear() {
+    if (!confirm(copy.removeConfirm)) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      await api(`/api/settings/${password.key}`, { method: 'DELETE' });
+      if (accountId?.origin === 'saved') await api(`/api/settings/${accountId.key}`, { method: 'DELETE' });
+      setId('');
+      await onChange();
+      setEditing(true);
+    } catch (err) {
+      setResult({ ok: false, detail: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className={s.card}>
+      <div className={s.cardHead}>
+        <div>
+          <h2>{copy.title}</h2>
+          <p>{copy.body}</p>
+        </div>
+      </div>
+
+      {password.set && !editing ? (
+        <div className={`${s.row} ${s.rowActive}`}>
+          <span className={`${s.dot} ${s.dotFirecrawl}`} aria-hidden />
+          <div className={s.rowMain}>
+            <span className={s.rowName}>{accountId?.preview || 'Profile email'}</span>
+            <span className={s.rowMeta}>
+              <code>••••••••</code>
+              {password.origin === 'env' && ' · from .env'}
+            </span>
+          </div>
+          <span className={s.inUse}>
+            <Check /> Saved
+          </span>
+          <button className={s.pill} disabled={busy} onClick={() => setEditing(true)}>
+            Replace
+          </button>
+          {password.origin === 'saved' && (
+            <button className={s.quiet} disabled={busy} onClick={clear}>
+              Remove
+            </button>
+          )}
+        </div>
+      ) : (
+        <form className={s.inline} onSubmit={save}>
+          {accountId && (
+            <input
+              type="email"
+              placeholder={`${copy.idLabel} (blank: profile email)`}
+              value={id}
+              onChange={(e) => setId(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              aria-label={copy.idLabel}
+            />
+          )}
+          <input
+            type="password"
+            placeholder={copy.passwordLabel}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            autoComplete="new-password"
+            spellCheck={false}
+            aria-label={copy.passwordLabel}
+          />
+          {password.set && (
+            <button type="button" className={`ghost ${s.pill}`} onClick={() => setEditing(false)} disabled={busy}>
+              Cancel
+            </button>
+          )}
+          <button type="submit" className={`primary ${s.pill}`} disabled={busy || !value.trim()}>
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+        </form>
       )}
 
       {result && (

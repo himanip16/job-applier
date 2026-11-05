@@ -20,7 +20,6 @@ export interface TargetCompany {
   tier: string;
   /** SDE2 CTC band in lakhs per annum, as written: "70-150", "100+". */
   sde2_ctc_lpa: string;
-  india_locations: string;
 }
 
 const LIST_URL = new URL('../../../../companies_50lpa.json', import.meta.url);

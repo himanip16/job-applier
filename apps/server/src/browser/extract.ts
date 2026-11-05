@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import { matchCanonical, type FieldOption, type FormField } from '@ja/shared';
 import { evaluatePage } from './evaluate.js';
+import { controlledListId, openUi5ValueHelp, optionText, slottedOptionRoot } from './fill.js';
 
 /**
  * Raw, DOM-level description of one control, produced inside the page.
@@ -51,13 +52,60 @@ const EXTRACTOR = () => {
   const byId = (el: Element, id: string): HTMLElement | null =>
     (el.getRootNode() as Document | ShadowRoot).getElementById?.(id) ?? document.getElementById(id);
 
+  /** The `ui5-*` web component whose shadow root holds this control, if any. */
+  const ui5HostOf = (el: Element): Element | null => {
+    const host = (el.getRootNode() as ShadowRoot).host;
+    return host && /^UI5-(INPUT|DATETIME-INPUT|DATE-PICKER|FILE-UPLOADER)/.test(host.tagName) ? host : null;
+  };
+
+  /**
+   * UI5's date picker types its date as words ("Jan 5, 1998"), and says so
+   * only in its placeholder. Passed on as help so the answer is typed that way.
+   */
+  const dateFormatHint = (el: Element): string => {
+    if (el.getAttribute('aria-roledescription') !== 'Date Input') return '';
+    const pattern = el.getAttribute('placeholder')?.trim();
+    return pattern ? `A date, typed in the format ${pattern} (for example ${pattern.replace(/MMMM/, 'January').replace(/MMM/, 'Jan').replace(/\bd{1,2}\b/, '5').replace(/y{2,4}/, '1998')}).` : '';
+  };
+
+  /**
+   * The caption of a UI5 form item, for a control that has none of its own.
+   * SuccessFactors' resume and cover letter uploaders are an <input
+   * type=file> deep in a `ui5-file-uploader`, in a form item of their own;
+   * the words ("Resume/CV", "Cover Letter") sit one or two items above, after
+   * a long "Supported formats" note. Read as unlabelled, both came out as
+   * "Resume".
+   */
+  const ui5ItemCaption = (el: Element): string => {
+    let node: Element | null = el;
+    while (node && !node.hasAttribute('ui5-form-item')) {
+      node = node.parentElement ?? ((node.getRootNode() as ShadowRoot).host || null);
+    }
+    for (let item: Element | null = node, hops = 0; item && hops < 3; item = item.previousElementSibling, hops++) {
+      const label = item.querySelector(':scope > [slot="labelContent"]');
+      const text = textOf(label) || (hops ? textOf(item) : '');
+      if (text && text.length <= 60) return text;
+    }
+    return '';
+  };
+
   // Clear any handles from a previous extraction on this page.
   deepAll(document, `[${ATTR}]`).forEach((n) => n.removeAttribute(ATTR));
   deepAll(document, '[data-ja-group]').forEach((n) => n.removeAttribute('data-ja-group'));
 
+  /** A radio's drawn `<label for>`, which is what a person sees and clicks. */
+  const radioLabelShows = (el: Element): boolean => {
+    if ((el as HTMLInputElement).type !== 'radio' || !el.id) return false;
+    const label = (el.getRootNode() as Document | ShadowRoot).querySelector(`label[for="${CSS.escape(el.id)}"]`);
+    const lr = label?.getBoundingClientRect();
+    return !!lr && lr.width > 0 && lr.height > 0 && getComputedStyle(label!).visibility !== 'hidden';
+  };
+
   const visible = (el: Element): boolean => {
     const s = getComputedStyle(el as HTMLElement);
-    if (s.display === 'none' || s.visibility === 'hidden') return false;
+    if (s.display === 'none') return false;
+    // Jobvite's radios are `visibility: hidden` inside a drawn label.
+    if (s.visibility === 'hidden') return radioLabelShows(el);
     const r = (el as HTMLElement).getBoundingClientRect();
     // File inputs are routinely 0x0 behind a styled button; they still count
     // - but only when something has deliberately styled them that way, not
@@ -69,6 +117,9 @@ const EXTRACTOR = () => {
     // resume field inside a not-yet-revealed "Apply" section could be read as
     // present before it actually is.
     if (r.width === 0 && r.height === 0) {
+      // Oracle's yes/no questions are 0x0 radios (`input-row__hidden-control`)
+      // under a drawn <label for>; the label is what a person sees and clicks.
+      if ((el as HTMLInputElement).type === 'radio' && el.id) return radioLabelShows(el);
       if ((el as HTMLInputElement).type !== 'file') return false;
       const he = el as HTMLElement;
       return typeof he.checkVisibility === 'function' ? he.checkVisibility() : he.offsetParent !== null;
@@ -120,8 +171,25 @@ const EXTRACTOR = () => {
    */
   const CAPTION_SELECTOR = 'label, legend, [class*="label"]';
 
+  /**
+   * textContent, but reading a <slot> as what is slotted into it. The `spl-*`
+   * components draw `<label for>` in a shadow root with the question projected
+   * in through `<slot name="label-content">`, so the label's own textContent
+   * is just its "*" - and SmartRecruiters' screening questions all came out
+   * nameless.
+   */
+  const flatText = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
+    if (node instanceof HTMLSlotElement) {
+      const assigned = node.assignedNodes({ flatten: true });
+      if (assigned.length) return assigned.map(flatText).join('');
+    }
+    if (node instanceof Element && /^(STYLE|SCRIPT)$/.test(node.tagName)) return '';
+    return Array.from(node.childNodes).map(flatText).join('');
+  };
+
   const textOf = (el: Element | null): string =>
-    (el?.textContent ?? '')
+    (el ? flatText(el) : '')
       .replace(/\s+/g, ' ')
       .trim()
       .replace(REQUIRED_MARK, '')
@@ -138,7 +206,15 @@ const EXTRACTOR = () => {
    * Lever's "Years of Exp" came out as "Less than 2 yrs".
    */
   const labelFor = (el: HTMLElement, grouped = false): string => {
-    const aria = el.getAttribute('aria-label');
+    // Workday's dropdown buttons append their placeholder and required flag to
+    // the aria-label ("Phone Device Type Select One Required"); on application
+    // questions that is the *whole* aria-label, and the question lives in a
+    // <label for>. Morningstar's three screening questions all reached you as
+    // "Select One Required". Strip the suffix and, if nothing is left, look
+    // further.
+    const rawAria = el.getAttribute('aria-label');
+    const aria = rawAria?.replace(/\s*\bselect one\b(\s+required)?\s*$/i, '').trim() || null;
+    const placeholderAria = !!rawAria?.trim() && !aria;
     // Rippling labels every dropdown "Search", "Select..." or "textbox" and
     // names the actual question ("Gender", "Location") via aria-labelledby.
     // Read aria-label first and those questions reached you as "Search".
@@ -204,7 +280,12 @@ const EXTRACTOR = () => {
    * that points at the real question with aria-labelledby. Read on its own
    * label, every one of them came out as a required question called "Yes".
    */
-  const BARE_ANSWER = /^(yes|i agree|agree|i accept|accept|i acknowledge|acknowledge|i confirm|confirm|ok)\.?$/i;
+  //
+  // Okta's are the same idea without the ARIA: a box captioned "Yes" or
+  // "Yes, I acknowledge" under a plain heading that holds the question. So a
+  // bare answer also looks for the nearest heading before the box.
+  const BARE_ANSWER =
+    /^((yes|no|ok|okay|true)\b[,.!]?\s*)?((i\s+)?(agree|accept|acknowledge|confirm|understand|consent|certify|do|have read and (agree|understand|accept)))?[.!]?$/i;
   const loneCheckboxLabel = (el: HTMLElement): string => {
     const own = labelFor(el);
     if (own && !BARE_ANSWER.test(own)) return own;
@@ -216,7 +297,20 @@ const EXTRACTOR = () => {
           .filter(Boolean)
           .join(' ')
       : '';
-    return named || textOf(el.closest('fieldset')?.querySelector('legend') ?? null) || own;
+    if (named) return named;
+    const legend = textOf(el.closest('fieldset')?.querySelector('legend') ?? null);
+    if (legend) return legend;
+    // The heading just before the box, or before one of its wrappers - as
+    // long as that wrapper holds this box and no other control.
+    let node: HTMLElement | null = el.closest('label') ?? el;
+    for (let depth = 0; node && depth < 4; depth++, node = node.parentElement) {
+      if (depth && node.querySelectorAll('input:not([type="hidden"]), select, textarea').length > 1) break;
+      const before = questionBefore(node);
+      const text = before ? textOf(before) : '';
+      if (text && !BARE_ANSWER.test(text)) return text;
+    }
+    const wrapper = (el.closest('label') ?? el).parentElement;
+    return (wrapper && captionAbove(wrapper, [el])) || own;
   };
 
   const helpFor = (el: HTMLElement): string => {
@@ -229,8 +323,10 @@ const EXTRACTOR = () => {
         .filter((t) => t && !/error/i.test(t) && !/^\d+ items? selected\b/i.test(t));
       if (parts.length) return parts.join(' ');
     }
-    const wrapper = el.closest('.field-wrapper, fieldset, .field, .form-group');
-    const hint = wrapper?.querySelector('.description, .help-text, .hint, small');
+    // SuccessFactors puts a question's limit ("Answer size should be 200
+    // characters or less.") in a span beside its textarea.
+    const wrapper = el.closest('.field-wrapper, fieldset, .field, .form-group, .checkbox_column_wrapper');
+    const hint = wrapper?.querySelector('.description, .help-text, .hint, small, .questionAnswerMsg');
     return hint ? textOf(hint) : '';
   };
 
@@ -284,11 +380,18 @@ const EXTRACTOR = () => {
     // the text at all - its consent radios and yes/no buttons were read as
     // optional and left blank.
     const wrapper = el.closest(
-      '.field-wrapper, fieldset, .field, .form-group, [class*="fieldEntry"], [class*="field-entry"]',
+      '.field-wrapper, fieldset, .field, .form-group, [class*="fieldEntry"], [class*="field-entry"], .input-row',
     );
     const caption = wrapper?.querySelector('label, legend');
     if (/[*\u2731\uFF0A\u2020\u271A]/.test(caption?.textContent ?? '')) return true;
-    return /(^|[\s_-])required([\s_-]|$)/i.test(caption?.getAttribute('class') ?? '');
+    // RippleHire (7-Eleven) has no glyph or attribute either: the flag is
+    // `data-required="Y"` and a `required` class on the control and on its
+    // `.form-group`. Read as optional, Salutation was left on "Select..." and
+    // Continue came back with "Please select title".
+    if (/^(y|yes|true)$/i.test(el.dataset.required ?? '')) return true;
+    const flagged = (node: Element | null | undefined) =>
+      /(^|[\s_-])required([\s_-]|$)/i.test(node?.getAttribute('class') ?? '');
+    return flagged(caption) || flagged(el) || (!!wrapper?.matches('.form-group') && flagged(wrapper));
   };
 
   const mark = (el: Element): string => {
@@ -297,7 +400,7 @@ const EXTRACTOR = () => {
     return h;
   };
 
-  const CAPTCHA_NAMES = /recaptcha|captcha|hcaptcha|cf-turnstile|honeypot/i;
+  const CAPTCHA_NAMES = /recaptcha|captcha|hcaptcha|cf-turnstile|honey-?pot/i;
 
   const forms = Array.from(document.querySelectorAll('form'));
   // One form, or none at all (Ashby renders bare React with no <form>
@@ -390,6 +493,78 @@ const EXTRACTOR = () => {
       });
     }
 
+    // Oracle Recruiting Cloud draws its yes/no questions (and "Title") as pill
+    // buttons: `ul[role=radiogroup] > li > button[role=radio][aria-checked]`.
+    // They are not inputs either, so the required work-authorisation and
+    // sponsorship questions were never read and Next failed validation.
+    root.querySelectorAll<HTMLElement>('[role="radiogroup"]').forEach((group) => {
+      const buttons = Array.from(group.querySelectorAll<HTMLElement>(':scope > li > button[role="radio"]'));
+      if (buttons.length < 2 || !buttons.some(visible)) return;
+      const handle = mark(group);
+      group.setAttribute('data-ja-group', handle);
+      results.push({
+        handle,
+        name: group.closest('[data-qa]')?.getAttribute('data-qa') ?? '',
+        tag: 'ul', type: 'button-group',
+        kind: 'RADIO',
+        widget: 'button-group',
+        label: group.getAttribute('aria-label')?.trim() || captionAbove(group),
+        helpText: '',
+        required: isRequired(group),
+        options: buttons.map((b) => ({ label: textOf(b) })).filter((o) => o.label),
+        groupHandle: handle,
+      });
+    });
+
+    // SmartRecruiters' screening questions draw yes/no as `spl-radio-group >
+    // spl-radio[role=radio]`: custom elements with no input behind them, so
+    // the sweep below never saw the work-authorisation and sponsorship
+    // questions and Submit was refused. The option text is each radio's
+    // `label` attribute; the question is the group's slotted <label>.
+    deepAll(root, 'spl-radio-group').forEach((group) => {
+      const radios = Array.from(group.querySelectorAll<HTMLElement>(':scope > spl-radio'));
+      const r = group.getBoundingClientRect();
+      if (radios.length < 2 || (r.width === 0 && r.height === 0)) return;
+      const handle = mark(group);
+      group.setAttribute('data-ja-group', handle);
+      results.push({
+        handle,
+        name: group.getAttribute('name') || group.id || '',
+        tag: 'spl-radio-group', type: 'button-group',
+        kind: 'RADIO',
+        widget: 'button-group',
+        label: textOf(group.shadowRoot?.querySelector('label') ?? null) || captionAbove(group),
+        helpText: '',
+        required: group.hasAttribute('required') || isRequired(group),
+        options: radios
+          .map((b) => ({ label: (b.getAttribute('label') ?? '').trim() || textOf(b) }))
+          .filter((o) => o.label),
+        groupHandle: handle,
+      });
+    });
+
+    // ---- SuccessFactors attachments -----------------------------------------
+    // "Resume / CV" and "Cover Letter" are a "+" icon that opens an upload
+    // dialog; there is no file input on the page until it is pressed, so the
+    // sweep below never saw a resume field and the CV went unattached. The
+    // field points at the icon, and attachFile knows to press it.
+    root.querySelectorAll<HTMLElement>('.RCMFormField.attachmentField').forEach((box) => {
+      const icon = box.querySelector<HTMLElement>('.addAttachments');
+      if (!icon || !visible(icon)) return;
+      const label = textOf(box.querySelector('.rcmFormFieldLabel') ?? box).replace(/^\*\s*/, '');
+      results.push({
+        handle: mark(icon),
+        name: '',
+        tag: 'span', type: 'sf-attachment',
+        kind: 'FILE',
+        widget: 'file',
+        label: label || 'Resume',
+        helpText: '',
+        required: !!box.querySelector('.requiredField'),
+        options: [],
+      });
+    });
+
     // ---- Workday dropdown ---------------------------------------------------
     // "Phone Device Type": a <button aria-haspopup="listbox"> showing the
     // choice, with the real value in a text input beside it. Neither looks
@@ -419,6 +594,9 @@ const EXTRACTOR = () => {
       const id = el.getAttribute('id') ?? '';
 
       if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'image') continue;
+      // A site account's password is never a question for the model or for
+      // you to answer per job: the account wall fills it from the saved one.
+      if (type === 'password') continue;
 
       // ---- select2 (Amazon's applicant forms, jQuery-era boards) ----------
       // The real <select> is aria-hidden and clipped to 1px; the box a person
@@ -532,7 +710,7 @@ const EXTRACTOR = () => {
           tag, type,
           kind: 'FILE',
           widget: 'file',
-          label: labelFor(el) || (id.includes('cover') ? 'Cover Letter' : 'Resume'),
+          label: labelFor(el) || ui5ItemCaption(el) || (id.includes('cover') ? 'Cover Letter' : 'Resume'),
           helpText: helpFor(el),
           required: isRequired(el),
           options: [],
@@ -571,7 +749,10 @@ const EXTRACTOR = () => {
           kind: 'TEXTAREA',
           widget: 'native',
           label: labelFor(el),
-          helpText: helpFor(el),
+          // A maxlength is a limit the answer must fit; the resolver reads it here.
+          helpText: [helpFor(el), (el as HTMLTextAreaElement).maxLength > 0 ? `Maximum ${(el as HTMLTextAreaElement).maxLength} characters.` : '']
+            .filter(Boolean)
+            .join(' '),
           required: isRequired(el),
           options: [],
         });
@@ -586,14 +767,23 @@ const EXTRACTOR = () => {
       // harvested: many are trees ("Job Board" > "LinkedIn"), and the top
       // level would limit the answer to a category, which is not selectable.
       if (el.getAttribute('data-uxi-widget-type') === 'selectinput') {
+        // "Type to Add Skills" (Cisco, October 2026) is the same box but takes
+        // many picks. Read as a single choice it was given one skill and left
+        // there. Every prompt sits in a `multiSelectContainer`, so the
+        // container proves nothing; the Skills field is told by its name.
+        const label = labelFor(el);
+        const skills =
+          !!el.closest('[data-automation-id="formField-skills"]') || /\bskills\b/i.test(label);
         results.push({
           handle: mark(el),
           name: el.getAttribute('name') || el.getAttribute('id') || '',
           tag, type,
-          kind: 'SELECT',
+          kind: skills ? 'MULTISELECT' : 'SELECT',
           widget: 'workday-prompt',
-          label: labelFor(el),
-          helpText: helpFor(el),
+          label,
+          helpText: skills
+            ? [helpFor(el), 'A search box: list each skill from the resume as its own item.'].filter(Boolean).join(' ')
+            : helpFor(el),
           required: isRequired(el),
           options: [],
         });
@@ -602,8 +792,29 @@ const EXTRACTOR = () => {
 
       // ---- combobox (react-select and friends) -----------------------------
       const role = el.getAttribute('role');
-      if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox') {
-        const multi = !!el.closest('.select__value-container--is-multi, [class*="is-multi"]');
+      // SuccessFactors' picklists are a text box over a listbox it owns. One
+      // that depends on another (State under Country, Details under "How did
+      // you hear") starts disabled with no role at all, and read as a plain
+      // text box it was typed into: the box showed the words and the hidden
+      // value the form submits stayed empty.
+      const sfPicklist = !!el.closest('.sfCascadingPicklist');
+      // Juspay's "sdd" dropdowns put role="combobox" on a wrapper div and leave
+      // the input inside it bare, so they read as text boxes and the typed
+      // words never picked anything. The choices sit in a display:none
+      // <select> beside the wrapper, which is what the form submits.
+      const comboWrapper = tag === 'input' ? el.parentElement?.closest('[role="combobox"]') : null;
+      // SuccessFactors' new application wizard (Nomura, October 2026) is SAP
+      // UI5 web components: Country, Currency and the diversity questions are
+      // a `ui5-input` with suggestions, its <input> in the shadow root with
+      // aria-haspopup="dialog". Read as text boxes, the words were typed and
+      // nothing was picked.
+      const ui5Suggest = ui5HostOf(el)?.hasAttribute('show-suggestions') ?? false;
+      if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox' || sfPicklist || comboWrapper || ui5Suggest) {
+        const multi = !!el.closest(
+          // SmartRecruiters' "select all that apply" is spl-multiselect-autocomplete.
+          '.select__value-container--is-multi, [class*="is-multi"], .cx-multi-select-container, .c-spl-multiselect-autocomplete-input',
+        );
+        const shadowSelect = el.closest('.sdd-root')?.parentElement?.querySelector<HTMLSelectElement>(':scope > select');
         results.push({
           handle: mark(el),
           name: el.getAttribute('name') || el.getAttribute('id') || '',
@@ -614,8 +825,12 @@ const EXTRACTOR = () => {
           helpText: helpFor(el),
           required: isRequired(el),
           // Filled in from Node by opening the menu; the options do not exist
-          // in the DOM until then.
-          options: [],
+          // in the DOM until then - unless a hidden <select> already lists them.
+          options: shadowSelect
+            ? Array.from(shadowSelect.options)
+                .map((o) => ({ label: (o.textContent ?? '').trim(), value: o.value }))
+                .filter((o) => o.value !== '' && o.label)
+            : [],
         });
         continue;
       }
@@ -636,7 +851,7 @@ const EXTRACTOR = () => {
         kind,
         widget: 'native',
         label: labelFor(el),
-        helpText: helpFor(el),
+        helpText: [helpFor(el), dateFormatHint(el)].filter(Boolean).join(' '),
         required: isRequired(el),
         options: [],
       });
@@ -673,6 +888,7 @@ export async function extractFields(
     let options = r.options;
     if (
       (r.widget === 'react-select' || r.widget === 'workday-dropdown') &&
+      !options.length &&
       (opts.harvestComboboxOptions ?? true)
     ) {
       options = await harvestOptions(page, `[data-ja-field="${r.handle}"]`, opts.maxOptions ?? 400);
@@ -707,14 +923,19 @@ async function harvestOptions(page: Page, selector: string, max: number): Promis
     await input.click({ timeout: 3000 });
     // A click focuses Greenhouse's dropdowns without opening them; ArrowDown does.
     if ((await input.getAttribute('aria-expanded')) !== 'true') await input.press('ArrowDown');
+    await openUi5ValueHelp(input);
 
     // Only this dropdown's own menu. Reading every [role=option] on the page
     // picked up the phone field's always-rendered, hidden country list first,
     // waited for it to become visible, timed out - and the question reached
     // you as a text box with no choices.
-    const controls = await input.getAttribute('aria-controls');
-    const scoped = controls
-      ? page.locator(`[id="${controls}"] [role="option"]`)
+    // SuccessFactors links its listbox with aria-owns instead.
+    const controls = await controlledListId(input);
+    const projected = controls ? await slottedOptionRoot(input) : null;
+    const scoped = projected
+      ? page.locator(`${projected} [role="option"]`)
+      : controls
+      ? page.locator(`[id="${controls}"] :is([role="option"], [role="gridcell"])`)
       : input
           .locator('xpath=ancestor::*[contains(@class,"select-shell") or contains(@class,"select__container")][1]')
           .locator('[role="option"], .select__option');
@@ -723,7 +944,7 @@ async function harvestOptions(page: Page, selector: string, max: number): Promis
     const count = Math.min(await options.count(), max);
     const out: FieldOption[] = [];
     for (let i = 0; i < count; i++) {
-      const label = (await options.nth(i).innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+      const label = (await optionText(options.nth(i))).replace(/\s+/g, ' ').trim();
       if (label) out.push({ label });
     }
     return out;
@@ -731,5 +952,17 @@ async function harvestOptions(page: Page, selector: string, max: number): Promis
     return [];
   } finally {
     await page.keyboard.press('Escape').catch(() => {});
+    await closeOwnedList(page, input);
   }
+}
+
+/**
+ * SuccessFactors' picklists ignore Escape and Tab; a second click on the box
+ * is what closes one. Left open, its list sat over the next question.
+ */
+export async function closeOwnedList(page: Page, input: ReturnType<Page['locator']>): Promise<void> {
+  const owns = await input.getAttribute('aria-owns', { timeout: 1000 }).catch(() => null);
+  if (!owns) return;
+  const open = () => page.locator(`[id="${owns}"] [role="option"]:visible`).count().catch(() => 0);
+  if (await open()) await input.click({ timeout: 2000 }).catch(() => {});
 }

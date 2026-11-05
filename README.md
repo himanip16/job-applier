@@ -53,8 +53,12 @@ its description names backend or server-side work. Explicitly different roles
 still have to pass the title gate. Existing country, age and seniority filters
 continue to apply.
 
-Every admitted posting gets a lexical score; the top 15 new leads receive a
-model assessment by default. Scores rank jobs without dismissing them or
+Every admitted posting gets a lexical score. After each search, the top 25
+unread leads in the queue, old and new, get a model assessment by default. A
+company gets at most 3 of those reads, and titles already capped as off-role
+are skipped. A keyword-only score is pulled toward the middle so it stays under
+70: only a model read can rank a job as a strong match or above one the model
+read. Scores rank jobs without dismissing them or
 changing your saved, applied or rejected decisions. Older automatically dismissed
 jobs remain in Dismissed, but their recorded automatic reasons are excluded from
 both search-planning and fit-assessment preference history.

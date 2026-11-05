@@ -1,7 +1,8 @@
 import { citiesIn, countryByCode, locatedIn } from '@ja/shared';
 import { prisma, type Prisma } from '../lib/db.js';
+import { decidedPostings, isDecided } from './alreadyDecided.js';
 import { isSeniorLevel, requiredExperience, requiresMoreThan5YearsExperience } from './jobFilters.js';
-import { screen } from './leadIntake.js';
+import { screen } from './screening.js';
 import { API_SOURCES } from './sources/index.js';
 import { companyDirectory } from './topCompanies.js';
 import { leetcodeReports, type CompanyReport } from './leetcode/store.js';
@@ -74,6 +75,27 @@ export function recommendedRank(score: number, report: CompanyReport | undefined
   return score * pay * fresh;
 }
 
+/** How many leads one company gets in each pass down the list. */
+const PER_COMPANY_ROUND = 2;
+
+/**
+ * Reorder so no company gets more than PER_COMPANY_ROUND leads before every
+ * other company has had its turn: each company's first two, in the given
+ * order, then each one's next two, and so on. Stable, so within a round the
+ * sort the person chose still decides.
+ */
+export function spreadByCompany<T extends { companyName: string }>(rows: T[]): T[] {
+  const seen = new Map<string, number>();
+  const round = new Map<T, number>();
+  for (const r of rows) {
+    const key = r.companyName.trim().toLowerCase();
+    const n = seen.get(key) ?? 0;
+    seen.set(key, n + 1);
+    round.set(r, Math.floor(n / PER_COMPANY_ROUND));
+  }
+  return [...rows].sort((a, b) => round.get(a)! - round.get(b)!);
+}
+
 export async function listLeads(profileId: string, query: LeadListQuery) {
   // ---- the SQL-expressible part ---------------------------------------------
   const tab: Prisma.JobLeadWhereInput = { profileId };
@@ -97,14 +119,17 @@ export async function listLeads(profileId: string, query: LeadListQuery) {
   }
 
   const waiting = query.status === 'NEW';
-  const rows = await prisma.jobLead.findMany({
-    where,
-    orderBy: [{ score: 'desc' }, { discoveredAt: 'desc' }, { id: 'asc' }],
-    select: {
-      id: true, title: true, companyName: true, location: true, remote: true, score: true,
-      postedAt: true, discoveredAt: true, descriptionText: waiting || query.excludeSenior || query.maxYears !== undefined,
-    },
-  });
+  const [rows, decided] = await Promise.all([
+    prisma.jobLead.findMany({
+      where,
+      orderBy: [{ score: 'desc' }, { discoveredAt: 'desc' }, { id: 'asc' }],
+      select: {
+        id: true, url: true, title: true, companyName: true, location: true, remote: true, score: true,
+        postedAt: true, discoveredAt: true, descriptionText: waiting || query.excludeSenior || query.maxYears !== undefined,
+      },
+    }),
+    waiting ? decidedPostings(profileId) : null,
+  ]);
 
   // ---- the rest ----------------------------------------------------------------
   const directory = companyDirectory();
@@ -118,6 +143,9 @@ export async function listLeads(profileId: string, query: LeadListQuery) {
     // engineering, asking for more than five years, or past three months are
     // hidden, including leads saved before a rule existed. Nothing is deleted
     // here; "Re-check listed jobs" removes them for good.
+    // Already dismissed, saved or applied to under another link (or saved
+    // before intake checked for that): not something waiting on a decision.
+    if (decided && isDecided(decided, r)) return false;
     if (waiting && screen({ ...r, url: '', ats: '', location: r.location ?? undefined, descriptionText: r.descriptionText ?? '', postedAt: r.postedAt ?? undefined }, {})) return false;
     if (query.maxYears !== undefined && (requiredExperience(r.descriptionText)?.min ?? 0) > query.maxYears) return false;
     const f = facts(r.companyName);
@@ -143,13 +171,17 @@ export async function listLeads(profileId: string, query: LeadListQuery) {
     discovered: (a, b) => time(b.discoveredAt) - time(a.discoveredAt),
   };
   kept.sort(rank[query.sort]);
+  // A company that posts thirty roles in a day used to fill the first page on
+  // its own. Spread it out, keeping the chosen order otherwise; picking that
+  // company in the filter still shows all of them in plain order.
+  const listed = query.company ? kept : spreadByCompany(kept);
 
   // Clamp rather than 404: deciding on the last lead of the last page would
   // otherwise land you on an empty one, which reads as "everything is gone".
   const total = kept.length;
   const pages = Math.max(1, Math.ceil(total / query.limit));
   const page = Math.min(query.page, pages);
-  const pageIds = kept.slice((page - 1) * query.limit, page * query.limit).map((r) => r.id);
+  const pageIds = listed.slice((page - 1) * query.limit, page * query.limit).map((r) => r.id);
   const leads = (await prisma.jobLead.findMany({ where: { id: { in: pageIds } } })).sort(
     (a, b) => pageIds.indexOf(a.id) - pageIds.indexOf(b.id),
   );

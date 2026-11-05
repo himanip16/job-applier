@@ -12,13 +12,78 @@ export interface Country {
   name: string;
   /** Other ways a posting's location says the same thing. */
   aliases: string[];
+  /** Administrative subdivision codes (ISO 3166-2) for UI5 value-help matching. */
+  states?: State[];
+}
+
+export interface State {
+  /** ISO 3166-2 subdivision code (e.g., "KA" for Karnataka). */
+  code: string;
+  /** Full state/province name. */
+  name: string;
+  /** Common variants and aliases. */
+  aliases: string[];
 }
 
 export const COUNTRIES: Country[] = [
-  { code: 'IN', name: 'India', aliases: ['bengaluru', 'bangalore', 'mumbai', 'pune', 'hyderabad', 'chennai', 'delhi', 'new delhi', 'gurugram', 'gurgaon', 'noida', 'kolkata', 'ahmedabad', 'mohali', 'karnataka', 'maharashtra', 'telangana', 'haryana', 'tamil nadu', 'ind'] },
-  { code: 'GB', name: 'United Kingdom', aliases: ['uk', 'u.k.', 'england', 'scotland', 'wales', 'london', 'manchester', 'edinburgh', 'cambridge', 'bristol', 'leeds', 'birmingham', 'great britain'] },
-  { code: 'US', name: 'United States', aliases: ['usa', 'u.s.', 'us', 'new york', 'san francisco', 'seattle', 'austin', 'boston', 'chicago', 'los angeles', 'denver', 'california', 'texas', 'washington', 'nyc'] },
-  { code: 'CA', name: 'Canada', aliases: ['toronto', 'vancouver', 'montreal', 'ottawa', 'calgary', 'ontario', 'british columbia', 'quebec'] },
+  {
+    code: 'IN',
+    name: 'India',
+    aliases: ['bengaluru', 'bangalore', 'mumbai', 'pune', 'hyderabad', 'chennai', 'delhi', 'new delhi', 'gurugram', 'gurgaon', 'noida', 'kolkata', 'ahmedabad', 'mohali', 'karnataka', 'maharashtra', 'telangana', 'haryana', 'tamil nadu', 'ind'],
+    states: [
+      { code: 'KA', name: 'Karnataka', aliases: ['karnataka'] },
+      { code: 'MH', name: 'Maharashtra', aliases: ['maharashtra'] },
+      { code: 'TN', name: 'Tamil Nadu', aliases: ['tamil nadu'] },
+      { code: 'DL', name: 'Delhi', aliases: ['delhi', 'new delhi'] },
+      { code: 'TS', name: 'Telangana', aliases: ['telangana'] },
+      { code: 'HR', name: 'Haryana', aliases: ['haryana'] },
+      { code: 'UP', name: 'Uttar Pradesh', aliases: ['uttar pradesh', 'up'] },
+      { code: 'GJ', name: 'Gujarat', aliases: ['gujarat'] },
+      { code: 'WB', name: 'West Bengal', aliases: ['west bengal'] },
+      { code: 'KL', name: 'Kerala', aliases: ['kerala'] },
+      { code: 'AP', name: 'Andhra Pradesh', aliases: ['andhra pradesh', 'ap'] },
+      { code: 'PB', name: 'Punjab', aliases: ['punjab'] },
+      { code: 'RJ', name: 'Rajasthan', aliases: ['rajasthan'] },
+      { code: 'MP', name: 'Madhya Pradesh', aliases: ['madhya pradesh', 'mp'] },
+    ],
+  },
+  {
+    code: 'GB',
+    name: 'United Kingdom',
+    aliases: ['uk', 'u.k.', 'england', 'scotland', 'wales', 'london', 'manchester', 'edinburgh', 'cambridge', 'bristol', 'leeds', 'birmingham', 'great britain'],
+    states: [
+      { code: 'ENG', name: 'England', aliases: ['england'] },
+      { code: 'SCT', name: 'Scotland', aliases: ['scotland'] },
+      { code: 'WLS', name: 'Wales', aliases: ['wales'] },
+      { code: 'NIR', name: 'Northern Ireland', aliases: ['northern ireland'] },
+    ],
+  },
+  {
+    code: 'US',
+    name: 'United States',
+    aliases: ['usa', 'u.s.', 'us', 'new york', 'san francisco', 'seattle', 'austin', 'boston', 'chicago', 'los angeles', 'denver', 'california', 'texas', 'washington', 'nyc'],
+    states: [
+      { code: 'CA', name: 'California', aliases: ['california', 'ca'] },
+      { code: 'NY', name: 'New York', aliases: ['new york', 'ny'] },
+      { code: 'TX', name: 'Texas', aliases: ['texas', 'tx'] },
+      { code: 'WA', name: 'Washington', aliases: ['washington', 'wa'] },
+      { code: 'MA', name: 'Massachusetts', aliases: ['massachusetts', 'ma'] },
+      { code: 'IL', name: 'Illinois', aliases: ['illinois', 'il'] },
+      { code: 'CO', name: 'Colorado', aliases: ['colorado', 'co'] },
+      { code: 'FL', name: 'Florida', aliases: ['florida', 'fl'] },
+    ],
+  },
+  {
+    code: 'CA',
+    name: 'Canada',
+    aliases: ['toronto', 'vancouver', 'montreal', 'ottawa', 'calgary', 'ontario', 'british columbia', 'quebec'],
+    states: [
+      { code: 'ON', name: 'Ontario', aliases: ['ontario'] },
+      { code: 'BC', name: 'British Columbia', aliases: ['british columbia', 'bc'] },
+      { code: 'QC', name: 'Quebec', aliases: ['quebec'] },
+      { code: 'AB', name: 'Alberta', aliases: ['alberta'] },
+    ],
+  },
   { code: 'IE', name: 'Ireland', aliases: ['dublin', 'cork', 'galway'] },
   { code: 'DE', name: 'Germany', aliases: ['berlin', 'munich', 'münchen', 'hamburg', 'frankfurt', 'cologne', 'deutschland'] },
   { code: 'NL', name: 'Netherlands', aliases: ['amsterdam', 'rotterdam', 'utrecht', 'the hague', 'eindhoven'] },
@@ -109,4 +174,94 @@ export function citiesIn(location: string | null | undefined): string[] {
   const loc = (location ?? '').toLowerCase();
   if (!loc) return [];
   return CITIES.filter((c) => c.variants.some((v) => mentionsWord(loc, v))).map((c) => c.name);
+}
+
+/**
+ * Normalize a city name to its canonical form for UI5 value-help matching.
+ * "Bangalore" → "Bengaluru", "Gurgaon" → "Gurugram", etc.
+ */
+export function normalizeCityName(text: string | null | undefined): string | null {
+  const t = (text ?? '').trim();
+  if (!t) return null;
+  const lower = t.toLowerCase();
+  const city = CITIES.find((c) => c.variants.includes(lower) || c.name.toLowerCase() === lower);
+  return city ? city.name : t;
+}
+
+/**
+ * Normalize a state/province name to its ISO code for UI5 value-help matching.
+ * "Karnataka" → "KA", "Maharashtra" → "MH", etc.
+ */
+export function normalizeStateCode(text: string | null | undefined, countryCode?: string | null): string | null {
+  const t = (text ?? '').trim();
+  if (!t) return null;
+  const lower = t.toLowerCase();
+  const country = countryCode ? countryByCode(countryCode) : undefined;
+
+  // First check if it's already a code
+  if (/^[A-Z]{2}$/i.test(t) && country?.states?.some((s) => s.code.toUpperCase() === t.toUpperCase())) {
+    return t.toUpperCase();
+  }
+
+  // Find by name or alias
+  if (country?.states) {
+    const state = country.states.find(
+      (s) => s.name.toLowerCase() === lower || s.aliases.some((a) => a.toLowerCase() === lower),
+    );
+    return state ? state.code : null;
+  }
+
+  // Search across all countries if no country specified
+  for (const c of COUNTRIES) {
+    if (c.states) {
+      const state = c.states.find(
+        (s) => s.name.toLowerCase() === lower || s.aliases.some((a) => a.toLowerCase() === lower),
+      );
+      if (state) return state.code;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Normalize currency names to ISO codes for UI5 value-help matching.
+ * "Indian Rupee" → "INR", "US Dollar" → "USD", etc.
+ */
+export function normalizeCurrencyCode(text: string | null | undefined): string | null {
+  const t = (text ?? '').trim().toLowerCase();
+  if (!t) return null;
+
+  const CURRENCY_MAP: Record<string, string> = {
+    'indian rupee': 'INR',
+    'rupee': 'INR',
+    'inr': 'INR',
+    '₹': 'INR',
+    'us dollar': 'USD',
+    'dollar': 'USD',
+    'usd': 'USD',
+    '$': 'USD',
+    'euro': 'EUR',
+    'eur': 'EUR',
+    '€': 'EUR',
+    'british pound': 'GBP',
+    'pound': 'GBP',
+    'gbp': 'GBP',
+    '£': 'GBP',
+    'japanese yen': 'JPY',
+    'yen': 'JPY',
+    'jpy': 'JPY',
+    '¥': 'JPY',
+    'canadian dollar': 'CAD',
+    'cad': 'CAD',
+    'australian dollar': 'AUD',
+    'aud': 'AUD',
+    'singapore dollar': 'SGD',
+    'sgd': 'SGD',
+    'united arab emirates dirham': 'AED',
+    'aed': 'AED',
+    'dirham': 'AED',
+  };
+
+  return CURRENCY_MAP[t] || null;
 }

@@ -937,7 +937,7 @@ const COMPANY_ATS_MAPPING: Record<string, { source: string; handle: string }> = 
   // Additional mappings for new companies
   'glean.com': { source: 'greenhouse', handle: 'glean' },
   'exotel.com': { source: 'greenhouse', handle: 'exotel' },
-  'payu.com': { source: 'greenhouse', handle: 'payu' },
+  'payu.com': { source: 'successfactors', handle: 'careers.payu.in' },
   'hiver.com': { source: 'greenhouse', handle: 'hiver' },
   'recro.io': { source: 'greenhouse', handle: 'recro' },
   'foxcorp.com': { source: 'greenhouse', handle: 'fox' },

@@ -51,6 +51,14 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     patterns: [/^full\s*name/i, /^name$/i, /^your name/i],
   },
   {
+    key: 'identity.legal_name_matches_id',
+    prompt: 'Does the legal name you give on applications match the name on your government ID?',
+    kind: 'BOOLEAN',
+    // Walmart (Workday): "Does the Legal Name you provided on the "My
+    // Information" page match the name on your legal ID?"
+    patterns: [/legal name.*match/i, /name.*(match|same as).*(legal|government|official|photo)\s*id/i],
+  },
+  {
     key: 'identity.pronouns',
     prompt: 'Pronouns',
     kind: 'TEXT',
@@ -68,6 +76,20 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     prompt: 'Phone number',
     kind: 'TEXT',
     patterns: [/^phone(?!\s*(ext|extension|type|device))/i, /mobile\s*(number|phone)/i, /telephone(?!\s*ext)/i, /contact number/i],
+  },
+  {
+    // Workday's optional "Phone Extension". Left blank unless you saved one;
+    // the model and answer bank put "NA" in it.
+    key: 'contact.phone_extension',
+    prompt: 'Phone extension',
+    kind: 'TEXT',
+    patterns: [/^(phone|telephone)\s*ext(ension|\.)?\b/i, /^ext(ension|\.)?$/i],
+  },
+  {
+    key: 'contact.sms_opt_in',
+    prompt: 'Do you want recruiting updates by text message (opt in or out)?',
+    kind: 'BOOLEAN',
+    patterns: [/text message (updates|notifications|alerts)/i, /\bsms (updates|notifications|alerts)/i, /receive (mobile )?text/i],
   },
   {
     key: 'contact.linkedin',
@@ -140,11 +162,14 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     key: 'work_auth.authorized',
     prompt: 'Are you legally authorized to work in the country this role is based in?',
     kind: 'BOOLEAN',
+    // "Do you require right to work support?" asks about sponsorship, and a
+    // No to "authorized?" reused there reads as "yes, sponsor me". Anything
+    // asking whether you need support/sponsorship/a visa goes to the
+    // sponsorship question instead - unless it asks about working *without*.
     patterns: [
       /legally\s*(authorized|authorised|entitled)\s*to\s*work/i,
-      /authorized\s*to\s*work/i,
-      /right\s*to\s*work/i,
-      /eligible\s*to\s*work/i,
+      /^(?!.*\b(require|need)s?\b(?!.*\bwithout\b).*\b(support|sponsor(ship)?|assistance|visa)\b).*\b(authori[sz]ed|eligible)\s*to\s*work/i,
+      /^(?!.*\b(require|need)s?\b(?!.*\bwithout\b).*\b(support|sponsor(ship)?|assistance|visa)\b).*\bright\s*to\s*work/i,
     ],
   },
   {
@@ -152,6 +177,7 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     prompt: 'Do you now or will you in the future require visa sponsorship?',
     kind: 'BOOLEAN',
     patterns: [
+      /\b(require|need)s?\b.*\bright\s*to\s*work\b.*\b(support|sponsor(ship)?|assistance|visa)\b/i,
       /require\s*(visa\s*)?sponsorship/i,
       /need\s*sponsorship/i,
       /sponsorship\s*(now|in the future|to work)/i,
@@ -162,7 +188,10 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     key: 'work_auth.visa_status',
     prompt: 'What is your current visa / work authorization status?',
     kind: 'TEXT',
-    patterns: [/visa\s*(status|type)/i, /(h-?1b|tn|o-?1|opt|cpt)/i, /immigration status/i],
+    // Word-bounded: unbounded, "tn" matched "partners" and "opt" matched
+    // "option" and "opt in", so Okta's family-relationships question was
+    // answered with a visa status.
+    patterns: [/visa\s*(status|type)/i, /\b(h-?1b|tn|o-?1|cpt)\b/i, /\bopt\b(?![- ]?(in|out)\b)/i, /immigration status/i],
   },
   {
     key: 'experience.years_total',
@@ -181,7 +210,8 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     patterns: [
       /salary\s*(expectation|requirement|range)/i,
       /compensation\s*(expectation|requirement)/i,
-      /expected\s*(salary|compensation|ctc)/i,
+      // "Expected CTC Currency" asks which currency, not how much.
+      /expected\s*(salary|compensation|ctc)(?!\s*currency)/i,
       /desired\s*(salary|compensation)/i,
     ],
   },
@@ -189,13 +219,19 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     key: 'compensation.current',
     prompt: 'What is your current salary?',
     kind: 'TEXT',
-    patterns: [/current\s*(salary|compensation|ctc)/i],
+    // PayU's "Current Salary Currency" is a currency list; read as the salary
+    // question it was offered the amount, which no currency matches.
+    patterns: [/current\s*(salary|compensation|ctc)(?!\s*currency)/i],
   },
   {
     key: 'availability.start_date',
     prompt: 'When could you start?',
     kind: 'TEXT',
-    patterns: [/start\s*date/i, /when (can|could) you start/i, /availability to start/i, /earliest.*start/i],
+    patterns: [
+      /start\s*date/i, /when (can|could) you start/i, /availability to start/i, /earliest.*start/i,
+      // Walmart: "What is the approximate timeline for beginning a new position with us?"
+      /timeline.*(begin|start)/i, /(begin|start)(ning)? (a |the |this )?new (position|role|job)/i,
+    ],
   },
   {
     key: 'availability.notice_period',
@@ -221,13 +257,34 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     kind: 'BOOLEAN',
     patterns: [/(have you|were you).*(ever )?(worked|employed).*(for|at) (us|this company|\w+) (before|previously)/i,
                /previously (worked|been employed)/i,
-               /former (employee|contractor)/i],
+               /former (employee|contractor)/i,
+               // Okta: "Have you been employed by Okta, Inc. or any of its subsidiaries in the past?"
+               /(worked|been employed|employed) (by|for|at) .{1,80}\b(in the past|before|previously)/i,
+               // Walmart: "Please select your Walmart Associate Status/Affiliation"
+               /associate status/i, /(current|former|previous) associate/i,
+               // F5: "Have you ever worked for or provided services to F5, Inc. ..."
+               /\bhave you ever (worked|been employed) (for|by|at)\b/i, /provided services to/i,
+               // Northern Trust: "Have you ever been an employee of either Northern Trust or any affiliates ..."
+               /\bhave you (ever )?been an? (employee|contractor|intern) (of|at|with|for)\b/i],
+  },
+  {
+    key: 'history.family_employed',
+    prompt: 'Does a direct family member or relative work at the company you are applying to?',
+    kind: 'BOOLEAN',
+    patterns: [/(family member|relative)s?\b.*(work|employ)/i, /related to (anyone|any|an?)\b.{0,20}employee/i,
+               // Okta: "do you have any family members / relatives or personal relationships at Okta ..."
+               /(family members?|relatives?)\b.{0,60}\bat [A-Z]/,
+               // Northern Trust: "Do you currently have a personal relationship (...) with any current
+               // Northern Trust employee, contractor, or vendor?"
+               /\b(personal|familial|close|romantic) relationship\b.*\b(employee|contractor)s?\b/i],
   },
   {
     key: 'history.referral',
     prompt: 'Were you referred by anyone at this company?',
     kind: 'TEXT',
-    patterns: [/referr?(ed|al)/i, /who referred you/i, /know anyone (who works|at)/i],
+    // Not "referred to as": F5's "Have you ever worked for F5 (... collectively
+    // referred to as the "F5 Networks Group")?" was answered with your referral.
+    patterns: [/referr?(ed|al)\b(?!\s+to\s+as\b)/i, /who referred you/i, /know anyone (who works|at)/i],
   },
   {
     key: 'history.source',
@@ -239,7 +296,13 @@ export const CANONICAL_QUESTIONS: CanonicalQuestion[] = [
     key: 'legal.age_18',
     prompt: 'Are you at least 18 years old?',
     kind: 'BOOLEAN',
-    patterns: [/at least 18/i, /18 years( of age)? or older/i, /legal working age/i],
+    patterns: [/at least 18/i, /18 years( of age)? or older/i, /legal working age/i, /\bage (category|group|range|bracket)/i],
+  },
+  {
+    key: 'legal.meets_min_qualifications',
+    prompt: 'When you apply, do you certify you meet the posting\'s minimum qualifications?',
+    kind: 'BOOLEAN',
+    patterns: [/minimum (job )?qualifications/i, /meet (all )?(the )?(basic|minimum) (requirements|qualifications)/i],
   },
   {
     key: 'legal.non_compete',

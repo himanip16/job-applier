@@ -11,12 +11,18 @@ import { openApplicationForm } from '../../browser/openForm.js';
  *     /careers/apply?pid=<pid>, so the adapter opens that directly.
  *   - that page puts a candidate sign-in modal in front of everything ("Sign
  *     in using Microsoft / LinkedIn / Google / Facebook", "Create an account").
- *     The run pauses on it; sign in once in the open browser and the profile
- *     keeps the session for every later Microsoft application.
+ *     With a Microsoft account saved in Settings the run signs in through
+ *     "Sign in using Microsoft" itself (engine/humanGate.ts,
+ *     browser/microsoftAccount.ts); otherwise it pauses there for you. Either
+ *     way the profile keeps the session for every later Microsoft application.
  *   - reCAPTCHA is armed on the page.
  *
- * The form behind the sign-in has not been seen yet, so extraction is the
- * label-driven default and every run goes through review.
+ * Behind the sign-in is a multi-step wizard (contact page, screening answers
+ * carried over from the job page, acknowledgments). Its quirks are handled in
+ * the shared fill/wizard code rather than here: Eightfold dropdowns without a
+ * select shell, the legal-name question that rebuilds the fields around it,
+ * and locked dropdowns that show their choice beside an empty input. Fields
+ * are still matched on their labels, and every run goes through review.
  */
 export const microsoftAdapter: AtsAdapter = {
   id: 'microsoft',
@@ -69,7 +75,7 @@ export const microsoftAdapter: AtsAdapter = {
   alwaysReview: true,
 
   notes: [
-    'Needs a Microsoft careers sign-in: the run pauses on the sign-in screen the first time; sign in once in the open browser.',
-    'The form behind the sign-in has not been mapped yet, so fields are matched on their labels.',
+    'Signs in with the Microsoft account saved in Settings; without one, or when Microsoft asks for a code, the run waits for you on the sign-in screen.',
+    'Fields are matched on their labels, and every Microsoft application stops for your review before it is submitted.',
   ],
 };

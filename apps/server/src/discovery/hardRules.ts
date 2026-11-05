@@ -236,10 +236,50 @@ export function experienceVerdict(candidateYears: number | null, jobText: string
   return { against: `Slightly under the experience bar — ${gap}.` };
 }
 
+/**
+ * A title written for people who have not started work yet.
+ *
+ * Read from the title alone: "graduate" turns up in the qualifications of
+ * nearly every posting ("a graduate degree is a plus"), and nothing about the
+ * description makes a role a campus hire if its title does not say so.
+ */
+const ENTRY_LEVEL_TITLE =
+  /\b(?:new|recent|university|college|campus|fresh)[- ]grad(?:uate)?s?\b|\bgrad(?:uate)?s?\b.*\b20\d\d\b|\b20\d\d\b.*\bgrad(?:uate)?s?\b|^\s*graduate\b|\bgraduate\s+(?:engineer|developer|trainee|program(?:me)?|hire|scheme)\b|\bclass of 20\d\d\b|\bintern(?:ship)?s?\b|\bfreshers?\b|\bentry[- ]level\b|\bearly[- ]career\b|\bcampus\b|\btrainee\b|\bapprentice(?:ship)?\b/i;
+
+/** At this much experience a new-grad or intern role is a step back, not a fit. */
+const ENTRY_LEVEL_MAX_YEARS = 1.5;
+
+/** Does the title say it is a campus, intern or new-grad role? */
+export const isEntryLevelTitle = (title: string) => ENTRY_LEVEL_TITLE.test(title);
+
+/** Is this a campus, intern or new-grad role for someone who already works? */
+export function entryLevelVerdict(candidateYears: number | null, title: string): HardRuleVerdict | null {
+  if (candidateYears === null || candidateYears <= ENTRY_LEVEL_MAX_YEARS) return null;
+  if (!ENTRY_LEVEL_TITLE.test(title)) return null;
+  return {
+    dealbreaker: `An entry-level role (new grad, intern or campus hire); you have ${candidateYears} years.`,
+    against: `Written for graduates or interns, not someone with ${candidateYears} years of experience.`,
+  };
+}
+
 // ------------------------------------------------------------------ visas ---
 
+/**
+ * US places by name. Case-insensitive, so it must never contain a bare "us":
+ * that is the pronoun in "join us" and "about us", and it made every posting
+ * with a friendly first paragraph - a Grab role in Bangalore, say - a US role.
+ */
 const US_LOCATION =
-  /\b(united states|u\.?s\.?a?\b|usa|new york|san francisco|bay area|seattle|austin|boston|chicago|denver|atlanta|los angeles|washington,? d\.?c|remote[ -]*(?:us|usa|united states)|us[ -]*remote)\b/i;
+  /\b(united states|new york|san francisco|bay area|seattle|austin|boston|chicago|denver|atlanta|los angeles|washington,? d\.?c)\b/i;
+
+/** The abbreviation, matched case-sensitively so "us" the pronoun never counts. */
+const US_ABBREVIATION = /(?:^|[^A-Za-z])(?:U\.S\.A?\.?|USA|US)(?![A-Za-z])/;
+
+/** Where the posting names India, the candidate can take it without a visa. */
+const INDIA_LOCATION =
+  /\b(india|bengaluru|bangalore|mumbai|pune|hyderabad|chennai|gurgaon|gurugram|noida|delhi|ncr|kolkata|ahmedabad|kochi|jaipur|indore|chandigarh|coimbatore|thiruvananthapuram|trivandrum|mysore|mysuru|vadodara|nagpur)\b/i;
+
+const mentionsUS = (text: string) => US_LOCATION.test(text) || US_ABBREVIATION.test(text);
 
 /** Two-letter state codes, only where a city or comma makes them a location. */
 const US_STATE = /,\s*(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy|dc)\b/i;
@@ -267,9 +307,21 @@ export function sponsorshipVerdict(
 ): HardRuleVerdict | null {
   if (!needsSponsorship) return null;
 
-  const where = `${job.location ?? ''} ${job.title}`;
+  const location = (job.location ?? '').trim();
+  const where = `${location} ${job.title}`;
   const body = (job.descriptionText ?? '').slice(0, 12000);
-  const inUS = US_LOCATION.test(where) || US_STATE.test(where) || US_LOCATION.test(body.slice(0, 600));
+
+  // A role listed in India is not a US role, whatever the description says
+  // about head offices or US teams.
+  if (INDIA_LOCATION.test(where)) return null;
+
+  // The stated location decides. The description is read only when the
+  // location names no country ("Remote", or blank), and then only its
+  // opening, where a location line usually sits.
+  const placeless = !location || /^(remote|anywhere|hybrid|flexible|multiple locations?|various locations?)$/i.test(location);
+  const inUS = !placeless
+    ? mentionsUS(where) || US_STATE.test(where)
+    : mentionsUS(job.title) || mentionsUS(body.slice(0, 600));
   if (!inUS) return null;
 
   if (WELCOMES_INDIA.test(body) || WELCOMES_INDIA.test(where)) return null;
@@ -377,6 +429,7 @@ export function applyHardRules(
   const verdicts = [
     offDomainVerdict(args.job.title),
     experienceVerdict(args.candidateYears, text),
+    entryLevelVerdict(args.candidateYears, args.job.title),
     sponsorshipVerdict(args.needsSponsorship, args.job),
     salaryVerdict(args.salaryExpectations, args.currentCTC, args.job),
   ].filter(Boolean) as HardRuleVerdict[];

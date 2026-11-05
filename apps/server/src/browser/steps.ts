@@ -259,7 +259,7 @@ const SUBMIT_TEXT =
   /^(submit|submit application|submit my application|send application|finish and submit|complete application|apply now|submit and finish)$/i;
 
 const NEXT_TEXT =
-  /^(next|next step|continue|continue to .{0,30}|save and continue|save & continue|save and next|save & next|proceed|review|review and submit|go to next|start|start application|begin)$/i;
+  /^(next|next step|continue|continue to .{0,30}|save and continue|save & continue|save and next|save & next|proceed|review|review and submit|review your application|go to next|start|start application|begin)$/i;
 
 /** Never press these, however prominent they are. */
 const AVOID_TEXT =

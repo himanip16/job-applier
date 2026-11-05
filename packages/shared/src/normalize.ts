@@ -52,7 +52,7 @@ export function normalizeLabel(raw: string): string {
     .toLowerCase()
     .replace(/\(\s*(optional|required)\s*\)/g, ' ')
     .replace(/[*\u2731\uFF0A\u2020\u271A]+/g, ' ')
-    .replace(/[‘’]/g, "'")
+    .replace(/[‘’´`ʼ′]/g, "'")
     .replace(/[“”]/g, '"')
     .replace(/[^a-z0-9'/+#. -]/g, ' ')
     .replace(/\s+/g, ' ')

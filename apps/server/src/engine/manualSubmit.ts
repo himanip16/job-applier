@@ -2,7 +2,7 @@ import type { Page } from 'playwright';
 import { prisma } from '../lib/db.js';
 import { bus } from '../lib/events.js';
 import { screenshot } from '../browser/session.js';
-import { confirmationShowing } from '../browser/blockers.js';
+import { submitWatchState } from '../browser/blockers.js';
 import { artifact } from './runLog.js';
 import { markLeadApplied } from './leadSync.js';
 
@@ -16,7 +16,9 @@ import { markLeadApplied } from './leadSync.js';
  *
  * Only the site's own confirmation counts, and only once it appears: the
  * first read must not already show one, so a page that happens to say
- * "application received" somewhere is never taken as your submit.
+ * "application received" somewhere is never taken as your submit. Apple's
+ * Review & Submit is the exception: its Submit goes to your profile without
+ * saying so, and that move is the confirmation (see submitWatchState).
  */
 const POLL_MS = 3000;
 
@@ -27,10 +29,13 @@ const POLL_MS = 3000;
 export function watchForManualSubmit(page: Page, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve) => {
     let baseline: boolean | null = null;
+    let wasOnAppleReview = false;
     const tick = async () => {
       if (signal?.aborted || page.isClosed()) return;
       try {
-        const confirmed = await confirmationShowing(page);
+        const { confirmed, appleStep, appleLanding } = await submitWatchState(page);
+        if (wasOnAppleReview && appleLanding) return resolve(appleLanding);
+        if (appleStep !== 'between') wasOnAppleReview = appleStep === 'review';
         if (baseline === null) baseline = !!confirmed;
         else if (confirmed && !baseline) return resolve(confirmed);
         else if (!confirmed) baseline = false;

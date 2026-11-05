@@ -324,14 +324,18 @@ export async function openApplicationForm(
   // names neither the cause nor the one thing the person can do about it. It
   // is also the difference between a run that ends and a run that pauses,
   // because a wall is resumable and a missing form is not.
-  const wall = (await detectBlockers(page)).find(
-    (b) =>
-      b.humanCanClear &&
-      (b.kind === 'LOGIN_REQUIRED' ||
-        b.kind === 'ACCOUNT_CREATION' ||
-        b.kind === 'EMAIL_VERIFICATION' ||
-        b.kind === 'CAPTCHA'),
-  );
+  //
+  // The account wall wins over a captcha. Microsoft Careers arms reCAPTCHA
+  // behind its sign-in modal, and detectBlockers lists the captcha first: the
+  // run paused on "recaptcha is armed", never tried the saved account, and
+  // then took the Microsoft login page (no reCAPTCHA there) for the wall being
+  // cleared - reloading the apply page in the middle of the sign-in, three
+  // times over.
+  const walls = (await detectBlockers(page)).filter((b) => b.humanCanClear);
+  const wall =
+    walls.find(
+      (b) => b.kind === 'LOGIN_REQUIRED' || b.kind === 'ACCOUNT_CREATION' || b.kind === 'EMAIL_VERIFICATION',
+    ) ?? walls.find((b) => b.kind === 'CAPTCHA');
   if (wall) throw new NeedsHumanError(wall.detail, wall.kind);
 
   throw new NoFormError(

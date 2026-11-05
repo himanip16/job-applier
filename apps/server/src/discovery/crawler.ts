@@ -5,7 +5,7 @@ import { newPage } from '../browser/session.js';
 import { loadScoringContext } from './scoring.js';
 import { rescoreLeads, rescoreLexically } from './rescoreLeads.js';
 import { crawlCompany } from './crawlCompany.js';
-import { deepScoreLeads } from './deepScore.js';
+import { DEFAULT_DEEP_SCORE_TOP, deepScoreLeads } from './deepScore.js';
 import { admit, emptyTally, openIntake } from './leadIntake.js';
 import { crawledRecently } from './crawlTracker.js';
 
@@ -17,6 +17,7 @@ export interface CrawlReport {
   newLeads: number;
   skippedAlreadyDecided: number;
   skippedTooSenior: number;
+  skippedTooJunior: number;
   /** Posted more than MAX_POSTING_AGE_DAYS ago. */
   skippedTooOld: number;
   /** Outside the country you chose, and not remote. */
@@ -39,9 +40,9 @@ export interface CrawlReport {
  */
 export async function crawlAll(
   profileId: string,
-  opts: { deepScoreTop?: number; onlyCompanyId?: string; country?: Country; force?: boolean } = {},
+  opts: { deepScoreTop?: number; onlyCompanyId?: string; country?: Country; openToIndia?: boolean; force?: boolean } = {},
 ): Promise<CrawlReport> {
-  const deepScoreTop = opts.deepScoreTop ?? 15;
+  const deepScoreTop = opts.deepScoreTop ?? DEFAULT_DEEP_SCORE_TOP;
 
   const enabled = await prisma.company.findMany({
     where: { enabled: true, ...(opts.onlyCompanyId ? { id: opts.onlyCompanyId } : {}) },
@@ -55,6 +56,7 @@ export async function crawlAll(
     newLeads: 0,
     skippedAlreadyDecided: 0,
     skippedTooSenior: 0,
+    skippedTooJunior: 0,
     skippedTooOld: 0,
     skippedOtherCountry: 0,
     deepScored: 0,
@@ -62,7 +64,7 @@ export async function crawlAll(
     errors: [],
   };
 
-  const intake = await openIntake(profileId, { country: opts.country }, await loadScoringContext(profileId));
+  const intake = await openIntake(profileId, { country: opts.country, openToIndia: opts.openToIndia }, await loadScoringContext(profileId));
   const tally = emptyTally();
 
   // A page is only created if a careers-page crawl actually needs one; the API
@@ -98,12 +100,17 @@ export async function crawlAll(
   report.newLeads = tally.saved;
   report.skippedAlreadyDecided = tally.rejected.alreadySeen;
   report.skippedTooSenior = tally.rejected.tooSenior;
+  report.skippedTooJunior = tally.rejected.tooJunior;
   report.skippedTooOld = tally.rejected.tooOld;
   report.skippedOtherCountry = tally.rejected.otherCountry;
   report.errors.push(...tally.errors.map((e) => ({ company: e.where, error: e.error })));
 
   // ---- model pass over the most promising ---------------------------------
-  const deepScoreResult = await deepScoreLeads(profileId, tally.fresh, deepScoreTop);
+  const deepScoreResult = await deepScoreLeads(
+    profileId,
+    deepScoreTop,
+    opts.onlyCompanyId ? { only: tally.fresh.map((f) => f.id) } : {},
+  );
   report.deepScored = deepScoreResult.deepScored;
   report.errors.push(...deepScoreResult.errors);
 

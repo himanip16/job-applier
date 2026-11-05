@@ -23,6 +23,7 @@ import { finishApplication } from './submission.js';
 import { abandon, release, questionsKey, reviewKey, blockerKey } from './waiters.js';
 import { watchLeftOpenTab } from './manualSubmit.js';
 import { BrowserEdits } from './browserEdits.js';
+import { PostingGoneError, postingGone, removeDeadPosting } from './deadPosting.js';
 
 export { SubmissionBudgetError } from './submission.js';
 
@@ -66,8 +67,9 @@ export async function runApplication(applicationId: string): Promise<void> {
     // ---- 1. Reach the form --------------------------------------------------
     // A LinkedIn posting that is not Easy Apply hands off to the company's own
     // form - a Greenhouse board, a Google Form - in a new tab. Follow it there
-    // and pick the adapter for where it lands, rather than driving LinkedIn.
-    if (adapter.id === 'generic' && isLinkedInJob(app.job.url)) {
+    // and pick the adapter for where it lands. Otherwise it is Easy Apply, and
+    // the linkedin adapter drives LinkedIn's own modal.
+    if (isLinkedInJob(app.job.url)) {
       const offsite = await resolveApplyUrl(page, app.job.url).catch(() => null);
       if (offsite) {
         formUrl = offsite;
@@ -77,6 +79,8 @@ export async function runApplication(applicationId: string): Promise<void> {
           'LOG',
           `LinkedIn's Apply opens ${new URL(offsite).hostname} in a new tab; following it with the ${adapter.id} adapter.`,
         );
+      } else {
+        await bus.emitEvent(applicationId, 'LOG', 'No company-site hand-off on this LinkedIn posting; applying with Easy Apply.');
       }
     }
     // A careers page on the company's own domain is often a known ATS in an
@@ -147,6 +151,12 @@ export async function runApplication(applicationId: string): Promise<void> {
       // Already recorded where it stopped and why; this is not a failure.
       await bus.emitEvent(applicationId, 'LOG', err.message);
       closePage = !err.keepPage;
+      return;
+    }
+    // A failure on a posting that has since closed is not worth keeping.
+    if (err instanceof PostingGoneError || (await postingGone(page, app.job.url).catch(() => false))) {
+      await removeDeadPosting(applicationId);
+      closePage = true;
       return;
     }
     const message = explainFailure(err, page);

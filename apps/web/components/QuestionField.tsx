@@ -1,5 +1,8 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
+import { api } from '../lib/api';
+
 /**
  * One question a run would not guess at, and the input to answer it.
  *
@@ -19,12 +22,15 @@ export interface PendingQuestion {
   suggestion: string | string[] | null;
   suggestionRationale: string | null;
   answeredAt: string | null;
+  /** What you typed before, kept even when the job's answers were never sent. */
+  answerValue?: AnswerValue | null;
 }
 
 export type AnswerValue = string | string[];
 
 /** What the box starts with: the run's suggestion, if it had one. */
-export const initialValue = (q: PendingQuestion): AnswerValue => q.suggestion ?? (isMulti(q) ? [] : '');
+export const initialValue = (q: PendingQuestion): AnswerValue =>
+  q.answerValue ?? q.suggestion ?? (isMulti(q) ? [] : '');
 
 /** Policy questions (demographics and the like) are not remembered unless you say so. */
 export const initialRemember = (q: PendingQuestion): boolean => q.reason !== 'POLICY';
@@ -45,6 +51,7 @@ export function QuestionField({
   onValue: (v: AnswerValue) => void;
   onRemember: (r: boolean) => void;
 }) {
+  const saved = useDraftSave(q, value, remember);
   return (
     <div className="q">
       <strong>{q.rawLabel}{q.required && <span style={{ color: 'var(--bad)' }}> *</span>}</strong>
@@ -68,9 +75,38 @@ export function QuestionField({
           onChange={(e) => onRemember(e.target.checked)}
         />
         <span className="muted">Remember this answer for future applications</span>
+        {saved && <span className="muted" style={{ marginLeft: 'auto' }}>{saved}</span>}
       </label>
     </div>
   );
+}
+
+/**
+ * Saves each answer to your answer bank as you give it, not only when the
+ * job's answers are sent. A job you never finish answering, or never apply
+ * to, would otherwise lose everything you typed for it. Only what you change
+ * is saved: an untouched suggestion is still the run's guess, not your answer.
+ */
+function useDraftSave(q: PendingQuestion, value: AnswerValue | undefined, remember: boolean): string | null {
+  const [status, setStatus] = useState<string | null>(null);
+  const key = JSON.stringify([value, remember]);
+  // What the box opened with; leaving it as it was is not an answer.
+  const opened = useRef(key);
+  useEffect(() => {
+    if (key === opened.current || value === undefined) return;
+    const t = setTimeout(() => {
+      setStatus('Saving…');
+      api<{ saved: boolean }>(`/api/questions/${q.id}/draft`, {
+        method: 'POST',
+        body: JSON.stringify({ value, remember }),
+      })
+        .then((r) => setStatus(r.saved ? 'Saved to your answers' : null))
+        .catch(() => setStatus('Not saved yet'));
+    }, 700);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return status;
 }
 
 function isMulti(q: PendingQuestion) {

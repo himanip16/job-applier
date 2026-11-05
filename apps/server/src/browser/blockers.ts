@@ -44,6 +44,22 @@ export interface Blocker {
  * they are a straightforward violation of every one of these sites' terms.
  * Detection plus handoff keeps the whole flow defensible.
  */
+/**
+ * An application that makes the site account as part of itself, with its
+ * password boxes empty: SuccessFactors' quick apply (`fbclc_*` account boxes
+ * under the same Apply button as the application). Not a wall in front of the
+ * form - the boxes are filled, then the rest of the form is.
+ */
+export async function inlineAccountPending(page: Page): Promise<boolean> {
+  return page
+    .evaluate(() => {
+      if (!document.querySelector('#fbqa_apply')) return false;
+      const boxes = Array.from(document.querySelectorAll<HTMLInputElement>('input[name^="fbclc_pwd"]'));
+      return boxes.length > 0 && boxes.some((b) => !b.value);
+    })
+    .catch(() => false);
+}
+
 export async function detectBlockers(page: Page): Promise<Blocker[]> {
   const found: Blocker[] = [];
 
@@ -126,9 +142,17 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
       typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null,
     );
 
+    // SuccessFactors' quick apply puts "Choose Password" on the application
+    // itself, beside Country, Mobile Phone and the rest, under one Apply
+    // button. Read as a wall, the run filled the email and passwords, ticked
+    // every box on the page (the marketing opt-in too), found no Create
+    // Account button and paused with the application itself still blank.
+    // Those boxes are fields of this form; see inlineAccountPending.
+    const inlineAccount = !!document.querySelector('#fbqa_apply') && !!document.querySelector('input[name="fbclc_pwd"]');
+
     return {
       login:
-        visiblePassword ||
+        (visiblePassword && !inlineAccount) ||
         has(/sign in to (continue|apply)/) ||
         has(/log ?in to your account/) ||
         has(/(log ?in|sign ?in) or (create|register) (an )?account/) ||
@@ -150,11 +174,17 @@ export async function detectBlockers(page: Page): Promise<Blocker[]> {
       createAccount:
         has(/create (an )?account to apply/) ||
         has(/register to (continue|apply)/) ||
-        (visiblePassword && has(/confirm password/)),
+        (visiblePassword && !inlineAccount && has(/confirm password/)),
       emailVerification:
         has(/verify your email/) ||
         has(/we sent (you )?a (verification )?(code|link)/) ||
-        has(/enter the (6|four|six)[- ]digit code/),
+        has(/enter the (6|four|six)[- ]digit code/) ||
+        has(/confirm your identity/) ||
+        has(/(enter|type) the (verification |security |one[- ]time )?(code|pin) (we|that we) (just )?(sent|emailed)/) ||
+        has(/we('ve| have)? (just )?(sent|emailed) (a |an |the )?(verification |security |one[- ]time )?(code|pin) to/) ||
+        // SuccessFactors after Create Account: "We’ve sent a one-time password
+        // to your email address" over a Passcode box.
+        has(/we(['’]ve| have)? (just )?(sent|emailed) (you )?(a |an )?(one[- ]time (password|passcode)|passcode) to/),
       assessment:
         has(/coding (challenge|assessment)/) ||
         has(/complete (a|the) assessment/) ||
@@ -232,8 +262,12 @@ export async function detectSubmissionOutcome(
   // page then sees the form's last frame and calls it ambiguous. So keep
   // looking until the page says something decisive or the time runs out.
   const deadline = Date.now() + timeoutMs;
+  const fromApplyStep = APPLE_APPLY.test(formUrlBefore);
   const decisive = (st: Awaited<ReturnType<typeof readOutcomeState>>) =>
-    st.confirmed || st.errors.length > 0 || (st.url !== formUrlBefore && !st.hasForm);
+    st.confirmed ||
+    st.errors.length > 0 ||
+    (st.url !== formUrlBefore && !st.hasForm) ||
+    (fromApplyStep && st.appleProfile);
   let state = await readOutcomeState(page);
   while (!decisive(state) && Date.now() < deadline) {
     await page.waitForTimeout(750);
@@ -254,6 +288,9 @@ export async function detectSubmissionOutcome(
   }
   if (state.confirmed) {
     return { outcome: 'SUBMITTED', detail: state.snippet };
+  }
+  if (fromApplyStep && state.appleProfile) {
+    return { outcome: 'SUBMITTED', detail: appleLandingDetail(state.url) };
   }
   // Navigated away from the form and nothing is left to fill: near-certainly
   // the confirmation page, just worded in a way we do not recognise.
@@ -280,6 +317,39 @@ export async function detectSubmissionOutcome(
 export async function confirmationShowing(page: Page): Promise<string | null> {
   const state = await readOutcomeState(page);
   return state.confirmed ? state.snippet : null;
+}
+
+/**
+ * Apple Careers: Submit on Review & Submit leaves the application for your
+ * profile, /app/<locale>/profile/info. Any toast there may be gone by the next
+ * look, and the profile page has not been seen to say "submitted", so the move
+ * is the confirmation. Only a move straight from Review & Submit counts. The
+ * Profile link in Apple's header goes to the same page, so following it from
+ * Review & Submit would be read as a submit too.
+ */
+const APPLE_APPLY = /^https:\/\/jobs\.apple\.com\/app\/[^/]+\/apply\//i;
+
+function appleLandingDetail(url: string): string {
+  return `Apple moved from Review & Submit to your profile (${url}), which it does once an application is submitted.`;
+}
+
+/**
+ * For a tab watched while you act in it. `confirmed` is the site's own
+ * confirmation; `appleStep` says whether this is Apple's Review & Submit step,
+ * and `appleLanding` that this is Apple's profile page - a submit only when
+ * the last step seen before it was Review & Submit.
+ */
+export async function submitWatchState(page: Page): Promise<{
+  confirmed: string | null;
+  appleStep: 'review' | 'between' | 'other';
+  appleLanding: string | null;
+}> {
+  const state = await readOutcomeState(page);
+  return {
+    confirmed: state.confirmed ? state.snippet : null,
+    appleStep: state.appleStep,
+    appleLanding: state.appleProfile ? appleLandingDetail(state.url) : null,
+  };
 }
 
 function readOutcomeState(page: Page) {
@@ -343,6 +413,14 @@ function readOutcomeState(page: Page) {
         /we(’|')?ve received your application/i.test(text),
       errors: Array.from(new Set(errorNodes)).slice(0, 12),
       nativeInvalid,
+      // 'between' is an Apple page with no wizard step on it: a frame mid-navigation.
+      appleStep: document.querySelector('#apply-reviewAndSubmit-form')
+        ? ('review' as const)
+        : location.hostname === 'jobs.apple.com' && !document.querySelector('.apply-progress-steps')
+          ? ('between' as const)
+          : ('other' as const),
+      appleProfile:
+        location.hostname === 'jobs.apple.com' && /^\/app\/[^/]+\/profile\//i.test(location.pathname),
       snippet: text.replace(/\s+/g, ' ').slice(0, 400),
     };
   });

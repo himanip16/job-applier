@@ -2,6 +2,7 @@ import { countryByCode } from '@ja/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { crawlAll, rescore } from '../discovery/crawler.js';
+import { DEFAULT_DEEP_SCORE_TOP } from '../discovery/deepScore.js';
 import { findJobs, searchProgress } from '../discovery/findJobs.js';
 import { recheckLeads } from '../discovery/recheckLeads.js';
 import type { RequireProfile } from './types.js';
@@ -12,7 +13,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     if (!profile) return;
     const { deepScoreTop, companyId, country, force } = z
       .object({
-        deepScoreTop: z.number().min(0).max(60).default(15),
+        deepScoreTop: z.number().min(0).max(60).default(DEFAULT_DEEP_SCORE_TOP),
         companyId: z.string().optional(),
         country: z.string().length(2).optional(),
         force: z.boolean().default(false),
@@ -20,7 +21,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
       .parse(req.body ?? {});
     const target = countryByCode(country);
     if (country && !target) return reply.code(400).send({ error: `Searching in "${country}" is not supported yet.` });
-    const report = await crawlAll(profile.id, { deepScoreTop, onlyCompanyId: companyId, country: target, force });
+    const report = await crawlAll(profile.id, { deepScoreTop, onlyCompanyId: companyId, country: target, openToIndia: !target, force });
     return { report };
   });
 
@@ -40,9 +41,11 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
         dryRun: z.boolean().default(false),
         maxQueries: z.number().min(1).max(12).optional(),
         maxBoards: z.number().min(1).max(500).optional(),
-        deepScoreTop: z.number().min(0).max(60).default(15),
+        deepScoreTop: z.number().min(0).max(60).default(DEFAULT_DEEP_SCORE_TOP),
         country: z.string().length(2).optional(),
-        force: z.boolean().default(false),
+        mode: z.enum(['incremental', 'full']).default('incremental'),
+        /** Kept for older clients; new clients should send `mode`. */
+        force: z.boolean().optional(),
       })
       .parse(req.body ?? {});
 
@@ -51,7 +54,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     }
 
     try {
-      return { report: await findJobs(profile.id, body) };
+      return { report: await findJobs(profile.id, { ...body, openToIndia: !body.country }) };
     } catch (err) {
       // Everything reachable from here is a message written for a person -
       // an empty profile, a rejected key, an exhausted balance.
@@ -76,7 +79,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, requireProfile: Re
     const { country } = z.object({ country: z.string().length(2).optional() }).parse(req.body ?? {});
     const target = countryByCode(country);
     if (country && !target) return reply.code(400).send({ error: `Searching in "${country}" is not supported yet.` });
-    return { report: await recheckLeads(profile.id, { country: target }) };
+    return { report: await recheckLeads(profile.id, { country: target, openToIndia: !target }) };
   });
 
   app.post('/api/discovery/rescore', async (req, reply) => {

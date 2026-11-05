@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useParams } from 'next/navigation';
 import { api } from '../../../lib/api';
 import Header from '../components/Header';
 import { Loading } from '../../../components/Loading';
 import type { Detail } from '../components/types';
 import { useApplyPrefs } from '../../discover/components/ApplyPreferences';
+import s from '../job.module.css';
 
 /**
  * One job, everything about it.
@@ -35,31 +36,34 @@ export default function JobPage() {
     setD(await api<Detail>(`/api/jobs/${params.id}`));
   }, [params.id]);
 
+  // The URL id can be a job, a lead or an application; the lead routes need
+  // the lead's own id.
+  const leadId = d?.lead?.id;
+
   const handleRescore = useCallback(async () => {
+    if (!leadId) return;
     setRescoreError(null);
     setRescoreBusy(true);
     try {
-      await api(`/api/leads/${params.id}/rescore`, { method: 'POST' });
+      await api(`/api/leads/${leadId}/rescore`, { method: 'POST' });
       await load();
     } catch (e) {
       setRescoreError((e as Error).message);
     } finally {
       setRescoreBusy(false);
     }
-  }, [load]);
+  }, [leadId, load]);
 
+  // Throws on failure so the dialog can show the error and stay open.
   const handleReject = useCallback(async (category?: string, reason?: string) => {
-    try {
-      await api(`/api/leads/${params.id}/reject`, {
-        method: 'POST',
-        body: JSON.stringify({ category, reason }),
-      });
-      await load();
-      setRejecting(false);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, [params.id, load]);
+    if (!leadId) return;
+    await api(`/api/leads/${leadId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ category, reason }),
+    });
+    await load();
+    setRejecting(false);
+  }, [leadId, load]);
 
   // Start a run, the same way Find work and Runs do. A job reached from the
   // queue goes through its lead so the queue learns from the decision.
@@ -86,26 +90,25 @@ export default function JobPage() {
 
   useEffect(() => {
     load().catch((e) => setError((e as Error).message));
-    api('/api/sources')
-      .then((d) => {
-        const dd = d as { sources: { id: string; handleHint: string }[]; rejectCategories: string[]; searchConfigured: boolean };
-        setCategories(dd.rejectCategories);
-      })
+    api<{ rejectCategories: string[] }>('/api/sources')
+      .then((r) => setCategories(r.rejectCategories))
       .catch(() => {});
   }, [load]);
 
   if (error) {
     return (
-      <div className="panel">
-        <h2>Cannot load this job</h2>
-        <div className="notice bad">{error}</div>
+      <div className={s.page}>
+        <section className={s.card}>
+          <h2 style={{ margin: 0 }}>Cannot load this job</h2>
+          <div className={`notice bad ${s.message}`}>{error}</div>
+        </section>
       </div>
     );
   }
   if (!d) return <Loading />;
 
   return (
-    <>
+    <div className={s.page}>
       <Header
         d={d}
         onReject={() => setRejecting(true)}
@@ -113,10 +116,16 @@ export default function JobPage() {
         applying={applying}
         applyError={applyError}
       />
-      <MatchPanel d={d} busy={rescoreBusy} onRescore={handleRescore} rescoreError={rescoreError} />
+      <MatchPanel
+        d={d}
+        busy={rescoreBusy}
+        onRescore={d.lead ? handleRescore : undefined}
+        rescoreError={rescoreError}
+      />
       <ApplicationPanel d={d} />
       <InterviewPanel d={d} />
       <OutcomePanel d={d} />
+      <PostingPanel d={d} />
       {rejecting && d.lead && (
         <RejectDialog
           title={d.job.title}
@@ -126,7 +135,7 @@ export default function JobPage() {
           onDone={handleReject}
         />
       )}
-    </>
+    </div>
   );
 }
 
@@ -146,11 +155,15 @@ function RejectDialog({
   const [category, setCategory] = useState<string | undefined>();
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function submit() {
     setBusy(true);
+    setError(null);
     try {
       await onDone(category, reason.trim() || undefined);
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -158,95 +171,129 @@ function RejectDialog({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
+      <div className="modal" style={{ borderRadius: 26 }} onClick={(event) => event.stopPropagation()}>
         <h2 style={{ margin: '0 0 .2rem' }}>Not for you</h2>
         <p className="sub">{title} at {companyName}. A reason is optional and helps improve future ranking.</p>
-        <div className="row" style={{ marginBottom: '.8rem' }}>
-          {categories.map((value) => (
-            <button
-              key={value}
-              onClick={() => setCategory(category === value ? undefined : value)}
-              style={category === value ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-border)', color: 'var(--accent)' } : undefined}
-            >
-              {value}
-            </button>
-          ))}
-        </div>
+        {categories.length > 0 && (
+          <div className={s.terms} style={{ marginBottom: '.9rem' }}>
+            {categories.map((value) => (
+              <button
+                key={value}
+                className={`${s.toggle} ${category === value ? s.toggleOn : ''}`}
+                aria-pressed={category === value}
+                onClick={() => setCategory(category === value ? undefined : value)}
+              >
+                {value}
+              </button>
+            ))}
+          </div>
+        )}
         <label className="field">
           <span>Anything else? (optional)</span>
           <textarea value={reason} onChange={(event) => setReason(event.target.value)} />
         </label>
-        <div className="row">
-          <button className="primary" disabled={busy} onClick={submit}>{busy ? 'Saving…' : 'Reject'}</button>
-          <button onClick={onClose}>Cancel</button>
+        {error && <div className="notice bad" style={{ marginBottom: '.7rem' }}>{error}</div>}
+        <div className={s.actions} style={{ marginTop: 0 }}>
+          <button className={`${s.pill} primary`} disabled={busy} onClick={submit}>{busy ? 'Saving…' : 'Reject'}</button>
+          <button className={s.pill} onClick={onClose}>Cancel</button>
         </div>
       </div>
     </div>
   );
 }
 
+/* ---- match ------------------------------------------------------------------ */
 
+function ScoreRing({ score, colour }: { score: number; colour: string }) {
+  const r = 32;
+  const c = 2 * Math.PI * r;
+  const filled = (Math.max(0, Math.min(100, score)) / 100) * c;
+  return (
+    <div className={s.ring} role="img" aria-label={`${score}% match`}>
+      <svg width="76" height="76" viewBox="0 0 76 76">
+        <circle cx="38" cy="38" r={r} fill="none" stroke="var(--border)" strokeWidth="7" />
+        <circle
+          cx="38"
+          cy="38"
+          r={r}
+          fill="none"
+          stroke={colour}
+          strokeWidth="7"
+          strokeLinecap="round"
+          strokeDasharray={`${filled} ${c}`}
+        />
+      </svg>
+      <div className={s.ringValue} style={{ color: colour }}>{score}%</div>
+    </div>
+  );
+}
 
-function MatchPanel({ d, busy, onRescore, rescoreError }: { d: Detail; busy: boolean; onRescore: () => void; rescoreError?: string | null }) {
+function MatchPanel({
+  d,
+  busy,
+  onRescore,
+  rescoreError,
+}: {
+  d: Detail;
+  busy: boolean;
+  onRescore?: () => void;
+  rescoreError?: string | null;
+}) {
   if (!d.match) return null;
   const m = d.match;
   const tone = m.score >= 70 ? 'var(--good)' : m.score >= 45 ? 'var(--warn)' : 'var(--bad)';
+  const modelRead = m.scoreSource === 'MODEL' || m.deepScored;
 
   return (
-    <div className="panel">
-      <div className="spread">
-        <h2 style={{ margin: 0 }}>Match</h2>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: '2rem', fontWeight: 650, color: tone, lineHeight: 1 }}>
-            {m.score}%
+    <section className={s.card}>
+      <div className={s.matchHead}>
+        <ScoreRing score={m.score} colour={tone} />
+        <div className={s.matchMain}>
+          <h2>Match</h2>
+          <div className={s.verdict}>
+            {m.verdict ? m.verdict.replace(/_/g, ' ').toLowerCase() : 'Keyword score only'}
+            {m.seniorityFit && m.seniorityFit !== 'UNCLEAR' && (
+              <span className={s.hint} style={{ fontWeight: 400 }}> · seniority {m.seniorityFit.toLowerCase()}</span>
+            )}
           </div>
-          <div className="muted small">
-            {m.verdict ? m.verdict.replace(/_/g, ' ').toLowerCase() : 'keyword score only'}
-            {m.seniorityFit && m.seniorityFit !== 'UNCLEAR' && ` · seniority ${m.seniorityFit.toLowerCase()}`}
-            <div style={{ marginTop: '.25rem', fontSize: '.8rem' }}>
-              {m.scoreSource === 'MODEL' || m.deepScored ? (
-                <span>
-                  Model assessment{m.evaluatedAt ? ` · ${new Date(m.evaluatedAt).toLocaleString()}` : ''}
-                </span>
-              ) : (
-                <span>Preliminary keyword match</span>
-              )}
-            </div>
+          <div className={s.hint}>
+            {modelRead
+              ? `Model assessment${m.evaluatedAt ? ` · ${new Date(m.evaluatedAt).toLocaleString()}` : ''}`
+              : 'Preliminary keyword match'}
           </div>
         </div>
+        {onRescore && (
+          <button className={s.pill} disabled={busy} onClick={onRescore}>
+            {busy ? 'Rescoring…' : modelRead ? 'Rescore' : 'Have it read'}
+          </button>
+        )}
       </div>
 
       {m.dealbreaker && (
-        <div className="notice bad" style={{ marginTop: '.7rem' }}>
-          <strong>Blocker:</strong> {m.dealbreaker}
+        <div className={`${s.callout} ${s.calloutBad}`}>
+          <span><strong>Blocker:</strong> {m.dealbreaker}</span>
         </div>
       )}
 
       {!m.deepScored && (
-        <div className="notice" style={{ marginTop: '.7rem' }}>
-          <strong className="small">Counted, not read.</strong>{' '}
-          <span className="small muted">
-            A crawl only sends its most promising finds to a model, so this score comes from words
-            the posting and your profile have in common — a weak signal, and one that boilerplate
-            flatters. Rescore to have it actually read.
+        <div className={s.callout}>
+          <span>
+            <strong>Counted, not read.</strong> A crawl only sends its most promising finds to a
+            model, so this score comes from words the posting and your profile have in common — a
+            weak signal, and one that boilerplate flatters. Rescore to have it actually read.
           </span>
         </div>
       )}
 
-      <div style={{ marginTop: '.8rem' }}>
-        <button className="primary" disabled={busy} onClick={onRescore}>
-          {busy ? 'Rescoring…' : 'Rescore'}
-        </button>
-      </div>
+      {rescoreError && <div className={`notice bad ${s.message}`}>{rescoreError}</div>}
 
-      {rescoreError && <div className="notice bad" style={{ marginTop: '.6rem' }}>{rescoreError}</div>}
-
-      <div className="grid2" style={{ marginTop: '.8rem' }}>
+      <div className={s.columns}>
         <Points
           title="Why it fits"
           items={m.forIt}
           marker="✓"
           colour="var(--good)"
+          fallbackTitle="Words in common"
           fallbackTerms={m.sharedTerms?.length ? m.sharedTerms : m.likedTerms}
         />
         <Points
@@ -254,10 +301,11 @@ function MatchPanel({ d, busy, onRescore, rescoreError }: { d: Detail; busy: boo
           items={m.againstIt}
           marker="△"
           colour="var(--warn)"
+          fallbackTitle="Words counting against"
           fallbackTerms={m.missingTerms?.length ? m.missingTerms : m.dislikedTerms}
         />
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -266,42 +314,42 @@ function Points({
   items,
   marker,
   colour,
+  fallbackTitle,
   fallbackTerms,
 }: {
   title: string;
   items: string[];
   marker: string;
   colour: string;
+  fallbackTitle: string;
   fallbackTerms: string[];
 }) {
   // Reasons and keywords are different things and must not look the same.
   // A tick beside the word "distributed systems" reads as a considered
   // judgement; it is a word that appeared in both documents, and presenting it
   // as the former is how a lead ends up looking like it was assessed when it
-  // was counted.
+  // was counted. So keywords get plain neutral chips, never a marker.
   if (!items.length) {
-    if (!fallbackTerms.length) return <div />;
+    if (!fallbackTerms.length) return null;
     return (
       <div>
-        <div className="small muted" style={{ textTransform: 'uppercase', letterSpacing: '.04em' }}>
-          {title === 'Why it fits' ? 'Words in common' : 'Words counting against'}
+        <div className={s.label}>{fallbackTitle}</div>
+        <div className={s.terms}>
+          {fallbackTerms.map((t, i) => (
+            <span key={`${t}-${i}`} className={s.chip}>{t}</span>
+          ))}
         </div>
-        <p className="small muted" style={{ margin: '.35rem 0 0' }}>
-          {fallbackTerms.join(' · ')}
-        </p>
       </div>
     );
   }
   return (
     <div>
-      <div className="small muted" style={{ textTransform: 'uppercase', letterSpacing: '.04em' }}>
-        {title}
-      </div>
-      <ul style={{ listStyle: 'none', padding: 0, margin: '.35rem 0 0' }}>
-        {items.map((t) => (
-          <li key={t} className="small" style={{ padding: '.15rem 0' }}>
-            <span style={{ color: colour, marginRight: '.4rem' }}>{marker}</span>
-            {t}
+      <div className={s.label}>{title}</div>
+      <ul className={s.points}>
+        {items.map((t, i) => (
+          <li key={`${t}-${i}`}>
+            <span className={s.mark} style={{ color: colour }}>{marker}</span>
+            <span>{t}</span>
           </li>
         ))}
       </ul>
@@ -309,240 +357,253 @@ function Points({
   );
 }
 
+/* ---- application ------------------------------------------------------------ */
+
 function ApplicationPanel({ d }: { d: Detail }) {
   const a = d.application;
 
   if (!a) {
     return (
-      <div className="panel">
-        <h2>Application</h2>
-        <p className="sub" style={{ margin: 0 }}>
+      <section className={s.card}>
+        <div className={s.cardHead} style={{ marginBottom: 'var(--space-3)' }}>
+          <h2>Application</h2>
+        </div>
+        <div className={s.empty}>
           Not started.{' '}
           {d.lead?.status === 'REJECTED'
             ? `You turned this one down${d.lead.rejectReason ? `: “${d.lead.rejectReason}”` : '.'}`
             : 'Press Apply above and the filled form will show up here.'}
-        </p>
-      </div>
+        </div>
+      </section>
     );
   }
 
   const f = a.fields;
+  const fieldNote = [
+    f.fromProfile && `${f.fromProfile} from your profile`,
+    f.fromMemory && `${f.fromMemory} from remembered answers`,
+    f.written && `${f.written} written for this employer`,
+    f.inferred && `${f.inferred} inferred`,
+    f.asked && `${f.asked} you answered`,
+    f.skipped && `${f.skipped} skipped`,
+    f.failed && `${f.failed} failed to fill`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   return (
-    <div className="panel">
-      <div className="spread">
-        <h2 style={{ margin: 0 }}>Application</h2>
+    <section className={s.card}>
+      <div className={s.cardHead}>
+        <h2>Application</h2>
         <span className={`pill ${a.status}`}>{a.status.replace(/_/g, ' ').toLowerCase()}</span>
       </div>
 
       {a.blockedReason && (
-        <div className="notice bad" style={{ marginTop: '.6rem' }}>
-          {a.blockedReason}
+        <div className={`${s.callout} ${s.calloutWarn}`} style={{ marginTop: 0, marginBottom: 'var(--space-3)' }}>
+          <span>{a.blockedReason}</span>
         </div>
       )}
 
-      <Line
-        label="Resume"
-        ok={a.resume.tailored}
-        value={
-          a.resume.tailored
-            ? `Tailored — ${a.resume.insertions} addition${a.resume.insertions === 1 ? '' : 's'}, ${a.resume.coverage}% keyword coverage`
-            : 'Base resume, not tailored for this job'
-        }
-        note={
-          a.resume.tailored
-            ? a.resume.unsupported > 0
-              ? `${a.resume.unsupported} keyword${a.resume.unsupported === 1 ? '' : 's'} the job wants could not be grounded in your material, so ${a.resume.unsupported === 1 ? 'it was' : 'they were'} left out`
-              : 'Every addition is backed by something already in your material'
-            : undefined
-        }
-      />
+      <div className={s.list}>
+        <Row
+          name="Resume"
+          tone={a.resume.tailored ? 'good' : 'todo'}
+          status={a.resume.tailored ? 'Tailored' : 'Base resume'}
+          meta={
+            a.resume.tailored
+              ? `${a.resume.insertions} addition${a.resume.insertions === 1 ? '' : 's'}, ${a.resume.coverage}% keyword coverage. ${
+                  a.resume.unsupported > 0
+                    ? `${a.resume.unsupported} keyword${a.resume.unsupported === 1 ? '' : 's'} the job wants could not be grounded in your material, so ${a.resume.unsupported === 1 ? 'it was' : 'they were'} left out.`
+                    : 'Every addition is backed by something already in your material.'
+                }`
+              : 'Not tailored for this job'
+          }
+        />
+        <Row
+          name="Cover letter"
+          tone={a.coverLetter.present ? 'good' : 'todo'}
+          status={a.coverLetter.present ? `${a.coverLetter.words} words` : 'None'}
+          meta={a.coverLetter.present ? 'Generated for this job' : 'None generated'}
+        />
+        <Row
+          name="Questions"
+          tone={f.needsYou > 0 ? 'warn' : f.total ? 'good' : 'todo'}
+          status={
+            f.needsYou > 0
+              ? `${f.needsYou} need${f.needsYou === 1 ? 's' : ''} you`
+              : f.total
+                ? `${f.total} filled`
+                : 'Not read'
+          }
+          meta={f.total ? fieldNote || `${f.total} field${f.total === 1 ? '' : 's'} filled` : 'The form has not been read yet'}
+        />
+      </div>
 
-      <Line
-        label="Cover letter"
-        ok={a.coverLetter.present}
-        value={a.coverLetter.present ? `Generated — ${a.coverLetter.words} words` : 'None generated'}
-      />
-
-      <Line
-        label="Questions"
-        ok={f.needsYou === 0}
-        value={
-          f.total
-            ? `${f.total} field${f.total === 1 ? '' : 's'} filled`
-            : 'The form has not been read yet'
-        }
-        note={
-          f.total
-            ? [
-                f.fromProfile && `${f.fromProfile} from your profile`,
-                f.fromMemory && `${f.fromMemory} from remembered answers`,
-                f.written && `${f.written} written for this employer`,
-                f.inferred && `${f.inferred} inferred`,
-                f.asked && `${f.asked} you answered`,
-                f.skipped && `${f.skipped} skipped`,
-                f.failed && `${f.failed} failed to fill`,
-              ]
-                .filter(Boolean)
-                .join(' · ')
-            : undefined
-        }
-        warn={f.needsYou > 0 ? `${f.needsYou} still needs you` : undefined}
-      />
-
-      <div className="row" style={{ marginTop: '.8rem', gap: '.5rem' }}>
+      <div className={s.actions}>
         <a href={`/applications/${a.id}`}>
-          <button className={f.needsYou > 0 || a.status === 'REVIEW' ? 'primary' : undefined}>
+          <button className={`${s.pill} ${f.needsYou > 0 || a.status === 'REVIEW' ? 'primary' : ''}`}>
             {a.status === 'REVIEW' ? 'Review and submit' : 'Open the run'}
           </button>
         </a>
         <a href="/resume">
-          <button>{a.resume.tailored ? 'Re-tailor resume' : 'Tailor resume'}</button>
+          <button className={s.pill}>{a.resume.tailored ? 'Re-tailor resume' : 'Tailor resume'}</button>
         </a>
       </div>
+    </section>
+  );
+}
+
+type Tone = 'good' | 'warn' | 'bad' | 'todo';
+
+const dotFor: Record<Tone, string | undefined> = { good: s.dotGood, warn: s.dotWarn, bad: s.dotBad, todo: '' };
+const statusFor: Record<Tone, string | undefined> = { good: s.statusGood, warn: s.statusWarn, bad: s.statusBad, todo: '' };
+
+function Row({
+  name,
+  tone,
+  status,
+  meta,
+  children,
+}: {
+  name: ReactNode;
+  tone: Tone;
+  status?: string;
+  meta?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className={`${s.row} ${tone === 'warn' ? s.rowWarn : ''}`}>
+      <span className={`${s.dot} ${dotFor[tone]}`} />
+      <div className={s.rowMain}>
+        <div className={s.rowName}>{name}</div>
+        {meta && <div className={s.rowMeta}>{meta}</div>}
+        {children}
+      </div>
+      {status && <span className={`${s.rowStatus} ${statusFor[tone]}`}>{status}</span>}
     </div>
   );
 }
 
-function Line({
-  label,
-  ok,
-  value,
-  note,
-  warn,
-}: {
-  label: string;
-  ok: boolean;
-  value: string;
-  note?: string;
-  warn?: string;
-}) {
-  return (
-    <div style={{ borderTop: '1px solid var(--border)', padding: '.6rem 0' }}>
-      <div className="row" style={{ gap: '.5rem', alignItems: 'baseline' }}>
-        <span style={{ color: ok ? 'var(--good)' : 'var(--muted)' }}>{ok ? '✓' : '○'}</span>
-        <strong className="small">{label}</strong>
-        <span className="small">{value}</span>
-      </div>
-      {note && (
-        <div className="muted small" style={{ marginLeft: '1.4rem' }}>
-          {note}
-        </div>
-      )}
-      {warn && (
-        <div className="small" style={{ marginLeft: '1.4rem', color: 'var(--warn)' }}>
-          ⚠ {warn}
-        </div>
-      )}
-    </div>
-  );
-}
+/* ---- interviews ------------------------------------------------------------- */
+
+const roundTone = (status: string): Tone =>
+  status === 'PASSED' ? 'good' : status === 'FAILED' ? 'bad' : status === 'CANCELLED' ? 'todo' : 'warn';
 
 function InterviewPanel({ d }: { d: Detail }) {
   if (!d.application) return null;
   const rounds = d.rounds;
 
   return (
-    <div className="panel">
-      <div className="spread">
-        <h2 style={{ margin: 0 }}>Interviews</h2>
+    <section className={s.card}>
+      <div className={s.cardHead}>
+        <h2>Interviews</h2>
         <a href="/tracker">
-          <button>{rounds.length ? 'Edit in tracker' : 'Add a round'}</button>
+          <button className={s.pill}>{rounds.length ? 'Edit in tracker' : 'Add a round'}</button>
         </a>
       </div>
 
       {!rounds.length ? (
-        <p className="sub" style={{ margin: '.4rem 0 0' }}>
+        <div className={s.empty}>
           Nothing logged yet. Add rounds as they are scheduled and the questions you were asked —
           the Retrospective page finds the ones several companies keep asking.
-        </p>
+        </div>
       ) : (
-        rounds.map((r) => (
-          <div key={r.id} style={{ borderTop: '1px solid var(--border)', padding: '.6rem 0' }}>
-            <div className="row" style={{ gap: '.5rem' }}>
-              <span style={{ color: dotColour(r.status) }}>{dot(r.status)}</span>
-              <strong className="small">{r.name}</strong>
-              <span className="muted small">{r.status.replace(/_/g, ' ').toLowerCase()}</span>
-              {r.format && <span className="src">{r.format}</span>}
-              {r.scheduledAt && (
-                <span className="muted small">{new Date(r.scheduledAt).toLocaleDateString()}</span>
+        <div className={s.list}>
+          {rounds.map((r) => (
+            <Row
+              key={r.id}
+              name={r.name}
+              tone={roundTone(r.status)}
+              status={r.status.replace(/_/g, ' ').toLowerCase()}
+              meta={[r.format, r.scheduledAt && new Date(r.scheduledAt).toLocaleDateString()].filter(Boolean).join(' · ') || undefined}
+            >
+              {r.questions.length > 0 && (
+                <ul className={s.questions}>
+                  {r.questions.map((q) => (
+                    <li key={q.id}>
+                      {q.question}
+                      {q.selfRating && (
+                        <span className="muted"> — you rated your answer {q.selfRating.toLowerCase()}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               )}
-            </div>
-            {r.questions.length > 0 && (
-              <ul style={{ margin: '.35rem 0 0 1.4rem', padding: 0 }}>
-                {r.questions.map((q) => (
-                  <li key={q.id} className="small" style={{ padding: '.1rem 0' }}>
-                    {q.question}
-                    {q.selfRating && (
-                      <span className="muted"> — you rated your answer {q.selfRating.toLowerCase()}</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        ))
-      )}
-
-      {d.lessons.length > 0 && (
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: '.6rem', marginTop: '.4rem' }}>
-          <div className="small muted" style={{ textTransform: 'uppercase', letterSpacing: '.04em' }}>
-            What you noted afterwards
-          </div>
-          {d.lessons.map((l) => (
-            <div key={l.id} className="small" style={{ padding: '.15rem 0' }}>
-              {l.category && <span className="src">{l.category}</span>} {l.text}
-            </div>
+            </Row>
           ))}
         </div>
       )}
-    </div>
+
+      {d.lessons.length > 0 && (
+        <div style={{ marginTop: 'var(--space-4)' }}>
+          <div className={s.label}>What you noted afterwards</div>
+          <ul className={s.points}>
+            {d.lessons.map((l) => (
+              <li key={l.id}>
+                {l.category && <span className={s.chip}>{l.category}</span>}
+                <span>{l.text}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
   );
 }
 
-const dot = (status: string) =>
-  status === 'PASSED' ? '✓' : status === 'FAILED' ? '✕' : status === 'CANCELLED' ? '–' : '○';
-const dotColour = (status: string) =>
-  status === 'PASSED' ? 'var(--good)' : status === 'FAILED' ? 'var(--bad)' : 'var(--muted)';
+/* ---- outcome ---------------------------------------------------------------- */
 
 function OutcomePanel({ d }: { d: Detail }) {
   const a = d.application;
   if (!a) return null;
 
   return (
-    <div className="panel">
-      <h2>Outcome</h2>
-      <div className="row" style={{ gap: '2rem', flexWrap: 'wrap' }}>
-        <Fact
-          label="Applied"
-          value={a.submittedAt ? new Date(a.submittedAt).toLocaleDateString() : 'not yet'}
-        />
+    <section className={s.card}>
+      <div className={s.cardHead}>
+        <h2>Outcome</h2>
+      </div>
+      <div className={s.tiles}>
+        <Fact label="Applied" value={a.submittedAt ? new Date(a.submittedAt).toLocaleDateString() : 'Not yet'} />
         <Fact label="Response" value={a.outcome.replace(/_/g, ' ').toLowerCase()} />
-        {a.outcomeAt && <Fact label="Updated" value={new Date(a.outcomeAt).toLocaleDateString()} />}
+        <Fact label="Updated" value={a.outcomeAt ? new Date(a.outcomeAt).toLocaleDateString() : '—'} />
       </div>
       {a.confirmation && (
-        <p className="small muted" style={{ marginTop: '.6rem' }}>
-          Confirmation seen on the page: “{a.confirmation}”
-        </p>
+        <p className={s.note}>Confirmation seen on the page: “{a.confirmation}”</p>
       )}
-      {a.outcomeNote && (
-        <p className="small" style={{ marginTop: '.4rem' }}>
-          {a.outcomeNote}
-        </p>
-      )}
-      {a.notes && (
-        <p className="small muted" style={{ marginTop: '.4rem' }}>
-          {a.notes}
-        </p>
-      )}
-    </div>
+      {a.outcomeNote && <p className={s.note}>{a.outcomeNote}</p>}
+      {a.notes && <p className={s.note} style={{ color: 'var(--muted)' }}>{a.notes}</p>}
+    </section>
   );
 }
 
 function Fact({ label, value }: { label: string; value: string }) {
   return (
-    <div>
-      <div style={{ fontWeight: 600 }}>{value}</div>
-      <div className="muted small">{label}</div>
+    <div className={s.tile}>
+      <div className={s.tileValue}>{value}</div>
+      <div className={s.tileLabel}>{label}</div>
     </div>
+  );
+}
+
+/* ---- the posting ------------------------------------------------------------ */
+
+function PostingPanel({ d }: { d: Detail }) {
+  const [open, setOpen] = useState(false);
+  const text = d.job.descriptionText?.trim();
+  if (!text) return null;
+  const long = text.length > 600;
+
+  return (
+    <section className={s.card}>
+      <div className={s.cardHead}>
+        <h2>The posting</h2>
+        {long && (
+          <button className={s.pill} onClick={() => setOpen(!open)}>
+            {open ? 'Show less' : 'Read it all'}
+          </button>
+        )}
+      </div>
+      <div className={`${s.description} ${long && !open ? s.clamped : ''}`}>{text}</div>
+    </section>
   );
 }

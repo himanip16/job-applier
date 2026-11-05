@@ -54,6 +54,36 @@ export const EDITABLE_SETTINGS = {
     where: '',
     secret: true,
   },
+  EMAIL_APP_PASSWORD: {
+    label: 'Gmail app password',
+    help: 'Reads the codes job sites email to your profile address, so verification walls clear by themselves.',
+    where: 'myaccount.google.com/apppasswords',
+    secret: true,
+  },
+  APPLE_ID: {
+    label: 'Apple ID',
+    help: 'The Apple Account Apple Careers applications sign in with. Blank uses your profile email.',
+    where: '',
+    secret: false,
+  },
+  APPLE_ID_PASSWORD: {
+    label: 'Apple Account password',
+    help: 'Fills the Apple Account sign-in on jobs.apple.com. The code Apple sends to your devices still waits for you.',
+    where: '',
+    secret: true,
+  },
+  MICROSOFT_ACCOUNT: {
+    label: 'Microsoft account',
+    help: 'The Microsoft account Microsoft Careers applications sign in with. Blank uses your profile email.',
+    where: '',
+    secret: false,
+  },
+  MICROSOFT_ACCOUNT_PASSWORD: {
+    label: 'Microsoft account password',
+    help: 'Fills the Microsoft sign-in on apply.careers.microsoft.com. A code or Authenticator approval still waits for you.',
+    where: '',
+    secret: true,
+  },
   LLM_PROVIDER: {
     label: 'Model provider',
     help: 'Leave blank to use whichever key is set. Gemini wins if both are.',

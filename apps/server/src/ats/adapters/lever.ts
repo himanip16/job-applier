@@ -70,7 +70,40 @@ export const leverAdapter: AtsAdapter = {
 
   async extractForm(page) {
     // Lever is all native controls, so there is no combobox menu to open.
-    return extractFields(page, { harvestComboboxOptions: false });
+    const fields = await extractFields(page, { harvestComboboxOptions: false });
+    // A <label> wraps the whole question, so its text picks up whatever else
+    // sits inside: the location search's hidden "No location found... Loading"
+    // and a question's description ("Community BackgroundSelect all that
+    // apply"). The caption alone is the `.application-label`.
+    const seen = await page
+      .evaluate(
+        (selectors) =>
+          selectors.map((sel) => {
+            const el = document.querySelector(sel);
+            const box = el?.closest('li.application-question')?.querySelector('.application-label');
+            let caption = '';
+            if (box) {
+              const copy = box.cloneNode(true) as HTMLElement;
+              copy.querySelectorAll('.required, .description').forEach((n) => n.remove());
+              caption = (copy.textContent ?? '').replace(/\s+/g, ' ').trim();
+            }
+            return { caption, location: !!el?.classList.contains('location-input') };
+          }),
+        fields.map((f) => f.selector),
+      )
+      .catch(() => fields.map(() => ({ caption: '', location: false })));
+    return fields.map((f, i) => {
+      const { caption, location } = seen[i] ?? { caption: '', location: false };
+      // Only where the caption is the start of what was read: a checkbox
+      // inside a group ("Custom" under Pronouns) keeps its own label.
+      const label = caption && f.label !== caption && f.label.startsWith(caption) ? caption : f.label;
+      // Current location is a search-and-pick: typed words are wiped on blur
+      // unless a result is chosen, which also fills the hidden selectedLocation.
+      if (location) {
+        return { ...f, label, widget: 'react-select' as const, optionContainerSelector: '.dropdown-results', options: undefined };
+      }
+      return { ...f, label };
+    });
   },
 
   fileInputs(fields) {
@@ -92,6 +125,7 @@ export const leverAdapter: AtsAdapter = {
   notes: [
     'Native HTML form throughout - the most reliable board to automate.',
     'hCaptcha is wired up on current postings and will need you at submit time.',
+    'Current location is a search-and-pick: the city is typed and the matching result picked.',
     'Custom questions are cards[<uuid>][fieldN]; their labels vary per company, so the answer bank carries them.',
   ],
 };

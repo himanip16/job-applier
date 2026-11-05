@@ -31,6 +31,7 @@ const { titleMatchesPlan, buildSearchPlan } = await import(
   '../src/discovery/searchQueries.js'
 );
 const { findJobs, canonicalUrl } = await import('../src/discovery/findJobs.js');
+const { crawlKey } = await import('../src/discovery/crawlTracker.js');
 const { firecrawlSearch, FirecrawlError } = await import('../src/discovery/firecrawl.js');
 const { setSetting, clearSetting, loadSettings } = await import('../src/lib/secrets.js');
 
@@ -344,7 +345,6 @@ describe('a full search run', () => {
       handle: 'acme',
       tier: 'bigtech',
       sde2_ctc_lpa: '70-150',
-      india_locations: 'Bangalore',
     },
   ];
 
@@ -440,19 +440,69 @@ describe('a full search run', () => {
     expect(report.boards.map((b) => b.company)).toEqual(['A', 'B']);
   });
 
-  it('requests all 100 companies by default and reports unset sources separately from failures', async () => {
+  it('requests all companies by default and reports unset sources separately from failures', async () => {
     const companies = vi.fn(() => [
       acmeOnly()[0]!,
       { ...acmeOnly()[0]!, company: 'Unset Co', source: 'careers-page', handle: 'unset.example.com' },
     ]);
     const fetchCompany = vi.fn(acmeBoard);
     const report = await findJobs(profileId, { deepScoreTop: 0, deps: { plan, companies, fetchCompany } });
-    expect(companies).toHaveBeenCalledWith(100);
+    expect(companies).toHaveBeenCalledWith(Infinity);
     expect(fetchCompany).toHaveBeenCalledTimes(1);
     expect(report.noSource).toEqual(['Unset Co']);
     expect(report.boards.map((b) => b.company)).toEqual(['Acme Corp']);
     expect(report.errors).toEqual([]);
     expect(report.newLeads).toBe(2);
+  });
+
+  it('only reads companies past their cooldown unless full refresh is selected', async () => {
+    const companies = () => [
+      { ...acmeOnly()[0]!, company: 'Recently Read', handle: 'recent' },
+      { ...acmeOnly()[0]!, company: 'Cooldown Expired', handle: 'expired' },
+    ];
+    const recentlyRead = new Map([[crawlKey('greenhouse', 'recent'), new Date()]]);
+    const read: string[] = [];
+    const deps = {
+      plan,
+      companies,
+      fetchCompany: async (company: { company: string }) => {
+        read.push(company.company);
+        return [];
+      },
+      recentCrawls: async () => recentlyRead,
+    };
+
+    const incremental = await findJobs(profileId, { deepScoreTop: 0, deps });
+    expect(read).toEqual(['Cooldown Expired']);
+    expect(incremental.recentlyCrawled.map(({ company }) => company)).toEqual(['Recently Read']);
+
+    read.length = 0;
+    const full = await findJobs(profileId, { deepScoreTop: 0, mode: 'full', deps });
+    expect(read).toEqual(['Recently Read', 'Cooldown Expired']);
+    expect(full.recentlyCrawled).toEqual([]);
+    expect(full.notes.join(' ')).toMatch(/full refresh/i);
+  });
+
+  it('paces company reads during a full refresh', async () => {
+    const companies = () =>
+      ['A', 'B'].map((company) => ({ ...acmeOnly()[0]!, company, handle: company.toLowerCase() }));
+    const startedAt: number[] = [];
+
+    await findJobs(profileId, {
+      deepScoreTop: 0,
+      mode: 'full',
+      deps: {
+        plan,
+        companies,
+        fetchCompany: async () => {
+          startedAt.push(Date.now());
+          return [];
+        },
+      },
+    });
+
+    expect(startedAt).toHaveLength(2);
+    expect(startedAt[1]! - startedAt[0]!).toBeGreaterThanOrEqual(450);
   });
 
   it('shows the company by its name from the target list, not the board slug', async () => {

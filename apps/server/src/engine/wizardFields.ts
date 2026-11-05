@@ -1,13 +1,14 @@
 import type { Page } from 'playwright';
 import { normalizeLabel, type FormField, type ResolvedAnswer } from '@ja/shared';
 import type { AtsAdapter } from '../ats/types.js';
-import { assertOpen } from '../browser/session.js';
+import { assertOpen, PageClosedError } from '../browser/session.js';
 import {
   fillField, verifyFilled, inspectControl, alreadyHolds, FillError, type ControlState,
 } from '../browser/fill.js';
 import { bus } from '../lib/events.js';
 import { entry, type FieldPlanEntry } from './fieldPlan.js';
 import { truncate } from './runLog.js';
+import { degreeLevel } from './repeatableSections.js';
 
 interface FillStepContext {
   applicationId: string;
@@ -55,7 +56,10 @@ async function fillPlannedField(planned: FormField, context: FillStepContext): P
   if (state.locked) return recordLockedField(context, field, answer, state);
   if (afterHumanPause && (await preserveHumanValue(context, field, answer))) return false;
 
-  const { check, failure } = await fillWithRecovery(applicationId, page, adapter, field, wanted);
+  const { check, failure, seen } = await fillWithRecovery(applicationId, page, adapter, field, wanted);
+  if (!check && /Could not find option/.test(failure)) {
+    if (await fillListFallback(context, field, answer, wanted, seen)) return false;
+  }
   if (check) {
     plan.push({
       ...entry(field, answer, true),
@@ -75,6 +79,84 @@ async function fillPlannedField(planned: FormField, context: FillStepContext): P
   plan.push({ ...entry(field, answer, false), error: failure });
   await bus.emitEvent(applicationId, 'WARNING', `Could not fill "${field.label}": ${failure}`);
   return field.required;
+}
+
+/**
+ * What else to look for when a dropdown has no option for the answer as
+ * saved. Each is the same fact in the list's own words, never a guess:
+ *
+ * - School: a board's school list leaves out many colleges. IMC's Greenhouse
+ *   list has no Haldia Institute of Technology at all, and a required School
+ *   stopped the run. The list's "Other" is what a person would pick.
+ * - Degree: "Bachelor of Technology" is listed as "Bachelor's Degree" or
+ *   "Bachelors". Walmart's Workday degree list stopped on it. A list that
+ *   words it some other way (PayPal's stopped on it too) is read for the
+ *   one option at that level; with two or more ("Bachelor of Science",
+ *   "Bachelor of Engineering") which one is yours is a question, not a pick.
+ */
+function listFallbacks(
+  field: FormField,
+  wanted: string | string[],
+  seen: string[] = [],
+): { values: string[]; why: string }[] {
+  if (Array.isArray(wanted)) return [];
+  const out: { values: string[]; why: string }[] = [];
+  if (/degree|qualification/i.test(field.label) && !/field of study|discipline|major/i.test(field.label)) {
+    const level = degreeLevel(wanted);
+    if (level) {
+      const word = level.replace(/'s\b.*$/, '');
+      // The bare word only when the list has it on its own: otherwise
+      // "Bachelor" matches "Bachelor of Arts" by prefix, a different degree.
+      const bare = field.options?.some((o) => normalizeLabel(o.label) === normalizeLabel(word));
+      out.push({ values: [level, `${word}s`, ...(bare ? [word] : [])], why: `listed as the degree level` });
+      const same = [...new Set(seen)].filter((o) => degreeLevel(o) === level);
+      if (same.length === 1) out.push({ values: same, why: 'the only option at that degree level' });
+    }
+  }
+  if (/school|university|college|institution/i.test(field.label)) {
+    out.push({ values: ['Other'], why: 'not in this form\'s school list, so "Other" was chosen' });
+  }
+  // How did you hear about us: the saved "Job Board / Job Portal" is not on
+  // PUMA's Workday list, which names each site ("Job Site - Google Jobs",
+  // "Job Site - Dice"); a required source stopped the run. Which site is not
+  // known, so no site is picked for you: the same source as this list words
+  // it, its one generic job-board option, or "Other".
+  if (/hear about|how did you (find|learn)|referral source|^source$/i.test(field.label)) {
+    const pool = [...new Set([...seen, ...(field.options ?? []).map((o) => o.label)])];
+    const w = normalizeLabel(wanted);
+    if (w.length >= 4) {
+      const named = pool.filter((o) => normalizeLabel(o).includes(w));
+      if (named.length === 1) out.push({ values: named, why: 'the same source as this list words it' });
+    }
+    if (/job\s*(board|portal|site)|online/i.test(wanted)) {
+      const generic = pool.filter((o) =>
+        /^((online|internet)\s+)?(job\s*(board|portal|site|search)s?|internet|online)(\s*\/\s*job\s*(board|portal|site)s?)?$/i.test(o.trim()),
+      );
+      if (generic.length === 1) out.push({ values: generic, why: "this list's job board option" });
+    }
+    out.push({ values: ['Other'], why: 'not in this form\'s list of sources, so "Other" was chosen' });
+  }
+  return out;
+}
+
+async function fillListFallback(
+  { applicationId, page, adapter, plan }: FillStepContext,
+  field: FormField,
+  answer: ResolvedAnswer,
+  wanted: string | string[],
+  seen: string[] = [],
+): Promise<boolean> {
+  for (const { values, why } of listFallbacks(field, wanted, seen)) {
+    for (const value of values) {
+      const { check } = await fillWithRecovery(applicationId, page, adapter, field, value);
+      if (!check?.ok) continue;
+      const said = `"${truncate(String(wanted))}" is ${why} ("${value}").`;
+      plan.push({ ...entry(field, answer, true), value, rationale: said, verified: check.actual });
+      await bus.emitEvent(applicationId, 'LOG', `${field.label}: ${said}`);
+      return true;
+    }
+  }
+  return false;
 }
 
 const GENERATED_ID = /^(input|select|react-select|downshift|mui|headlessui|radix)[-_:]?[\w-]*\d+(-input)?$|^:r\w+:$/i;
@@ -188,7 +270,7 @@ async function preserveHumanValue(
   const wanted = answer.value as string | string[];
   const now = await verifyFilled(page, field, wanted);
   const shown = now.actual.trim();
-  const blank = !shown || /^(select\b|not ticked$|verification failed)/i.test(shown);
+  const blank = !shown || /^(select\b|not ticked$|verification failed|(expanded |collapsed )?0 items? selected)/i.test(shown);
   if (now.ok || !blank) {
     plan.push({
       ...entry(field, answer, true),
@@ -211,7 +293,7 @@ async function fillWithRecovery(
   adapter: AtsAdapter,
   field: FormField,
   wanted: string | string[],
-): Promise<{ check: Awaited<ReturnType<typeof verifyFilled>> | null; failure: string }> {
+): Promise<{ check: Awaited<ReturnType<typeof verifyFilled>> | null; failure: string; seen: string[] }> {
   const attempt = async (target: FormField) => {
     await fillField(page, target, wanted);
     return verifyFilled(page, target, wanted);
@@ -219,10 +301,19 @@ async function fillWithRecovery(
 
   let check: Awaited<ReturnType<typeof verifyFilled>> | null = null;
   let failure = '';
+  let seen: string[] = [];
   try {
     check = await attempt(field);
   } catch (err) {
     failure = err instanceof FillError ? err.message : (err as Error).message;
+    if (err instanceof FillError) seen = err.seen;
+    if (page.isClosed()) throw new PageClosedError('while the form was being filled');
+
+    // The control was there; its list just has no such option. Re-reading the
+    // form opens every dropdown on it and cannot add one. On IMC's 52-field
+    // Greenhouse form that kept the browser on School for two minutes, and the
+    // tab was closed before the "Other" fallback ever ran.
+    if (/Could not find option/.test(failure)) return { check, failure, seen };
 
     // Filling one control routinely re-renders its neighbours — a phone
     // country picker rebuilds the number input beside it — and the
@@ -244,7 +335,7 @@ async function fillWithRecovery(
       }
     }
   }
-  return { check, failure };
+  return { check, failure, seen };
 }
 
 /**
